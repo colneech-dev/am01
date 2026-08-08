@@ -32,5 +32,12 @@ Our reference HLS implementations:
 * [gr0estl algo](https://github.com/atomminer/Gr0estl-Miner)
 * [nist5 algo](https://github.com/atomminer/Nist5-hls)
 
+## Experimental: FPGA+ARM (Zynq) variant
+
+[`hardware/zynq/`](hardware/zynq/) sketches a proposed AM01 variant built
+around a Xilinx Zynq-7000 SoC (FPGA fabric + on-die ARM Cortex-A9 cores)
+in place of the current Artix-7 XC7A200T + Cypress FX3 pair. This is a
+design proposal, not a shipped or verified hardware revision.
+
 
 
