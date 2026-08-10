@@ -1,0 +1,423 @@
+//////////////////////////////////////////////////////////////////////////////////
+/*
+ *  AtomMiner AM01 -- QMTECH Kintex-7 + Raspberry Pi CM4 variant, design proposal
+ *
+ *  Copyright 2015-2022 AtomMiner <atom@atomminer.com>
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation; either version 3 of the License, or (at your option)
+ * any later version. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+//////////////////////////////////////////////////////////////////////////////////
+//
+// odocrypt_gpio_wrapper
+//
+// Replacement for exmaples/odocrypt/fpga/src/hdl/usb3_interface.v +
+// usb3_sm_v3.v on the QMTECH XC7K325T + Raspberry Pi CM4 variant (see
+// ../README.md). A Raspberry Pi CM4 plugged into the QMTECH board's CM4
+// socket drives header/target words and reads the golden nonce over 24
+// general-purpose GPIO lines using a simple 4-phase parallel bus, instead
+// of the FX3's DQ-bus/USB link or the Zynq variant's on-chip AXI4-Lite.
+// odo_block_data, host_break_sm and miner_top (and everything below
+// them) are reused completely unmodified from exmaples/odocrypt/fpga/src/hdl/.
+//
+// STATUS: reference skeleton for a hardware proposal, not verified/timed
+// silicon-ready RTL. See "What's still needed before this is real
+// hardware" in ../README.md -- in particular gpio_wr_n/gpio_rd_n/
+// gpio_addr/gpio_data are asynchronous inputs from the CM4 (no shared
+// clock), synchronized here with plain multi-flop synchronizers that
+// still need ASYNC_REG + timing-exception signoff before tape-out.
+//
+// Register map (see ../README.md): 16-bit-per-beat, ADDR-selected.
+//
+`timescale 1ns / 1ps
+
+module odocrypt_gpio_wrapper (
+    // ---------------------------------------------------------------
+    // Bus clock domain -- the board's onboard 50MHz crystal
+    // (sys_clk_50m in the .xdc), or an MMCM-derived clock from it.
+    // ---------------------------------------------------------------
+    input  wire        bus_clk,
+    input  wire        bus_rst_n,
+
+    // ---------------------------------------------------------------
+    // GPIO parallel bus to the CM4 socket. Asynchronous to bus_clk --
+    // driven either by bit-banged GPIO or the BCM2711 SMI peripheral.
+    // ---------------------------------------------------------------
+    inout  wire [15:0] gpio_data,
+    input  wire [3:0]  gpio_addr,
+    input  wire        gpio_wr_n,   // active low
+    input  wire        gpio_rd_n,   // active low
+    output reg          gpio_ready,
+    output wire        gpio_irq,    // level, asserted while a nonce is pending
+
+    // ---------------------------------------------------------------
+    // Hash-core clock domain. clk_h is whatever feeds miner_top today
+    // (an MMCM output derived from the 50MHz crystal, same role
+    // artix200_v3_clocking plays on the stock AM01).
+    // ---------------------------------------------------------------
+    input  wire        clk_h
+);
+
+    // -----------------------------------------------------------------
+    // Register map
+    // -----------------------------------------------------------------
+    localparam [3:0] ADDR_VERSION    = 4'h0;
+    localparam [3:0] ADDR_CTRL       = 4'h1;
+    localparam [3:0] ADDR_STATUS     = 4'h2;
+    localparam [3:0] ADDR_NONCE_LO   = 4'h3;
+    localparam [3:0] ADDR_NONCE_HI   = 4'h4;
+    localparam [3:0] ADDR_HEADER_LO  = 4'h5;
+    localparam [3:0] ADDR_HEADER_HI  = 4'h6;
+    localparam [3:0] ADDR_TARGET_LO  = 4'h7;
+    localparam [3:0] ADDR_TARGET_HI  = 4'h8;
+
+    localparam [15:0] VERSION = 16'h0100; // v1.0 of this register interface
+
+    // Request opcodes carried across the bus_clk -> clk_h handshake.
+    localparam [1:0] OP_HEADER_WORD = 2'b00;
+    localparam [1:0] OP_TARGET_WORD = 2'b01;
+    localparam [1:0] OP_HOST_BREAK  = 2'b10;
+    localparam [1:0] OP_SOFT_RESET  = 2'b11;
+
+    // =====================================================================
+    // Synchronize the async CM4-driven bus into bus_clk. ADDR/DATA are
+    // sampled only once WR_N/RD_N has been seen low for two consecutive
+    // bus_clk cycles, so they're required to be stable before the strobe
+    // asserts -- standard practice for a source-synchronous-ish bus with
+    // no shared clock.
+    // =====================================================================
+    reg [2:0] wr_n_sync, rd_n_sync;
+    reg [3:0] addr_sync0, addr_sync1;
+    reg [15:0] data_in_sync0, data_in_sync1;
+
+    always @(posedge bus_clk or negedge bus_rst_n) begin
+        if (!bus_rst_n) begin
+            wr_n_sync <= 3'b111;
+            rd_n_sync <= 3'b111;
+        end else begin
+            wr_n_sync <= {wr_n_sync[1:0], gpio_wr_n};
+            rd_n_sync <= {rd_n_sync[1:0], gpio_rd_n};
+        end
+    end
+
+    always @(posedge bus_clk) begin
+        addr_sync0 <= gpio_addr;
+        addr_sync1 <= addr_sync0;
+        data_in_sync0 <= gpio_data;
+        data_in_sync1 <= data_in_sync0;
+    end
+
+    wire wr_active = ~wr_n_sync[2] & ~wr_n_sync[1]; // debounced active-low write request
+    wire rd_active = ~rd_n_sync[2] & ~rd_n_sync[1]; // debounced active-low read request
+
+    // =====================================================================
+    // bus_clk -> clk_h request/ack handshake (same two-phase toggle
+    // synchronizer pattern as hardware/zynq/hdl/odocrypt_axi_wrapper.v).
+    // req_toggle_bus only flips once the previous request has been
+    // ack'd, enforced below by holding the bus state machine (and thus
+    // GPIO_READY) until ack_pulse_bus arrives, so req_op/req_data are
+    // guaranteed stable for the whole round trip.
+    // =====================================================================
+    reg        req_toggle_bus;
+    reg [1:0]  req_op_bus;
+    reg [31:0] req_data_bus;
+
+    reg req_sync1_h, req_sync2_h, req_sync3_h;
+    reg ack_toggle_h;
+    reg ack_sync1_bus, ack_sync2_bus, ack_sync3_bus;
+
+    wire req_pulse_h   = req_sync2_h ^ req_sync3_h;
+    wire ack_pulse_bus = ack_sync2_bus ^ ack_sync3_bus;
+
+    always @(posedge clk_h) begin
+        req_sync1_h <= req_toggle_bus;
+        req_sync2_h <= req_sync1_h;
+        req_sync3_h <= req_sync2_h;
+        if (req_pulse_h)
+            ack_toggle_h <= ~ack_toggle_h;
+    end
+
+    always @(posedge bus_clk) begin
+        ack_sync1_bus <= ack_toggle_h;
+        ack_sync2_bus <= ack_sync1_bus;
+        ack_sync3_bus <= ack_sync2_bus;
+    end
+
+    // =====================================================================
+    // Bus-side state machine: 4-phase interlocked handshake, one
+    // register access at a time.
+    // =====================================================================
+    localparam S_IDLE  = 2'd0,
+               S_WRITE = 2'd1,
+               S_READ  = 2'd2;
+
+    reg [1:0]  bus_state;
+    reg [3:0]  addr_latched;
+    reg [15:0] wdata_latched;
+    reg [15:0] header_lo_stage, target_lo_stage;
+    reg        request_issued;
+    reg [15:0] rdata_reg;
+    reg        gpio_data_oe;
+
+    // Status/nonce values, already synchronized into bus_clk further down.
+    wire        hash_active_bus;
+    wire        nonce_valid_bus;
+    wire [31:0] golden_nonce_bus;
+    reg         nonce_valid_clear_pulse;
+
+    always @(posedge bus_clk or negedge bus_rst_n) begin
+        if (!bus_rst_n) begin
+            bus_state       <= S_IDLE;
+            gpio_ready      <= 1'b0;
+            gpio_data_oe    <= 1'b0;
+            request_issued  <= 1'b0;
+            req_toggle_bus  <= 1'b0;
+            header_lo_stage <= 16'h0;
+            target_lo_stage <= 16'h0;
+            nonce_valid_clear_pulse <= 1'b0;
+        end else begin
+            nonce_valid_clear_pulse <= 1'b0;
+
+            case (bus_state)
+                S_IDLE: begin
+                    gpio_ready   <= 1'b0;
+                    gpio_data_oe <= 1'b0;
+                    request_issued <= 1'b0;
+                    if (wr_active) begin
+                        addr_latched  <= addr_sync1;
+                        wdata_latched <= data_in_sync1;
+                        bus_state     <= S_WRITE;
+                    end else if (rd_active) begin
+                        addr_latched <= addr_sync1;
+                        bus_state    <= S_READ;
+                    end
+                end
+
+                S_WRITE: begin
+                    case (addr_latched)
+                        ADDR_CTRL: begin
+                            if (!request_issued) begin
+                                req_op_bus     <= wdata_latched[1] ? OP_HOST_BREAK : OP_SOFT_RESET;
+                                req_data_bus   <= {16'h0, wdata_latched};
+                                req_toggle_bus <= ~req_toggle_bus;
+                                request_issued <= 1'b1;
+                            end else if (ack_pulse_bus) begin
+                                gpio_ready <= 1'b1;
+                            end
+                        end
+                        ADDR_HEADER_LO: begin
+                            header_lo_stage <= wdata_latched;
+                            gpio_ready      <= 1'b1; // staging only, no clk_h side effect
+                        end
+                        ADDR_HEADER_HI: begin
+                            if (!request_issued) begin
+                                req_op_bus     <= OP_HEADER_WORD;
+                                req_data_bus   <= {wdata_latched, header_lo_stage};
+                                req_toggle_bus <= ~req_toggle_bus;
+                                request_issued <= 1'b1;
+                            end else if (ack_pulse_bus) begin
+                                gpio_ready <= 1'b1;
+                            end
+                        end
+                        ADDR_TARGET_LO: begin
+                            target_lo_stage <= wdata_latched;
+                            gpio_ready      <= 1'b1; // staging only
+                        end
+                        ADDR_TARGET_HI: begin
+                            if (!request_issued) begin
+                                req_op_bus     <= OP_TARGET_WORD;
+                                req_data_bus   <= {wdata_latched, target_lo_stage};
+                                req_toggle_bus <= ~req_toggle_bus;
+                                request_issued <= 1'b1;
+                            end else if (ack_pulse_bus) begin
+                                gpio_ready <= 1'b1;
+                            end
+                        end
+                        default: begin
+                            // Write to a read-only/unmapped address: ack, no effect.
+                            gpio_ready <= 1'b1;
+                        end
+                    endcase
+
+                    if (gpio_ready && wr_n_sync[2]) begin
+                        // CM4 released WR_N after seeing READY.
+                        gpio_ready <= 1'b0;
+                        bus_state  <= S_IDLE;
+                    end
+                end
+
+                S_READ: begin
+                    case (addr_latched)
+                        ADDR_VERSION:  rdata_reg <= VERSION;
+                        ADDR_STATUS:   rdata_reg <= {14'h0, nonce_valid_bus, hash_active_bus};
+                        ADDR_NONCE_LO: rdata_reg <= golden_nonce_bus[15:0];
+                        ADDR_NONCE_HI: begin
+                            rdata_reg <= golden_nonce_bus[31:16];
+                            nonce_valid_clear_pulse <= 1'b1; // clears NONCE_VALID / irq
+                        end
+                        default: rdata_reg <= 16'h0;
+                    endcase
+                    gpio_data_oe <= 1'b1;
+                    gpio_ready   <= 1'b1;
+
+                    if (gpio_ready && rd_n_sync[2]) begin
+                        // CM4 released RD_N after seeing READY.
+                        gpio_ready   <= 1'b0;
+                        gpio_data_oe <= 1'b0;
+                        bus_state    <= S_IDLE;
+                    end
+                end
+
+                default: bus_state <= S_IDLE;
+            endcase
+        end
+    end
+
+    assign gpio_data = gpio_data_oe ? rdata_reg : 16'bz;
+
+    // =====================================================================
+    // Hash-core (clk_h) domain: decode the request into the same pulses
+    // odo_block_data / host_break_sm expect, and drive miner_top exactly
+    // like exmaples/odocrypt/fpga/src/hdl/atomminer_odocrypt.v did. This
+    // section mirrors hardware/zynq/hdl/odocrypt_axi_wrapper.v verbatim.
+    // =====================================================================
+    reg [31:0] data_from_host_h;
+    reg        get_block_pulse_h;
+    reg        get_target_pulse_h;
+    reg        host_break_pulse_h;
+
+    reg [4:0]  header_word_cnt_h; // 0..18, 19 words total
+    reg [3:0]  target_word_cnt_h; // 0..7,  8 words total
+    reg        start_hash_h;
+
+    always @(posedge clk_h) begin
+        get_block_pulse_h  <= 1'b0;
+        get_target_pulse_h <= 1'b0;
+        host_break_pulse_h <= 1'b0;
+
+        if (req_pulse_h) begin
+            data_from_host_h <= req_data_bus;
+            case (req_op_bus)
+                OP_HEADER_WORD: begin
+                    get_block_pulse_h <= 1'b1;
+                    header_word_cnt_h <= header_word_cnt_h + 1'b1;
+                end
+                OP_TARGET_WORD: begin
+                    get_target_pulse_h <= 1'b1;
+                    target_word_cnt_h  <= target_word_cnt_h + 1'b1;
+                    if (target_word_cnt_h == 4'd7)
+                        start_hash_h <= 1'b1; // 8th (last) target word arms the core
+                end
+                OP_HOST_BREAK: begin
+                    host_break_pulse_h <= 1'b1;
+                end
+                OP_SOFT_RESET: begin
+                    header_word_cnt_h <= 5'h0;
+                    target_word_cnt_h <= 4'h0;
+                    start_hash_h      <= 1'b0;
+                end
+            endcase
+        end
+
+        if (host_break_debounced)
+            start_hash_h <= 1'b0;
+    end
+
+    wire [607:0] header;
+    wire [255:0] target;
+    wire         host_break_debounced; // = host_break_sm's sha_host_break output
+    wire         ticket2moon;
+    wire [31:0]  golden_nonce_h;
+
+    odo_block_data odo_block_data_inst (
+        .clk_h            (clk_h),
+        .data_from_host_in(data_from_host_h),
+        .get_midstate_in  (1'b0), // GPIO side collapses midstate/block into one FIFO
+        .get_block_in     (get_block_pulse_h),
+        .get_target_in    (get_target_pulse_h),
+        .header           (header),
+        .target           (target)
+    );
+
+    host_break_sm host_break_sm_inst (
+        .clk_h         (clk_h),
+        .host_break    (host_break_pulse_h),
+        .ticket2moon   (ticket2moon),
+        .hash_cmplt    (1'b0),
+        .sha_host_break(host_break_debounced)
+    );
+
+    miner_top miner_top_inst (
+        .osc_clk    (clk_h),
+        .header     (header),
+        .target     (target),
+        .start_hash (start_hash_h),
+        .ticket2moon(ticket2moon),
+        .nonce      (golden_nonce_h)
+    );
+
+    // -----------------------------------------------------------------
+    // Result latch + clk_h -> bus_clk status/nonce synchronization.
+    // Same "accepted race on a status/telemetry register" simplification
+    // as the Zynq wrapper -- see its comments for the rationale.
+    // -----------------------------------------------------------------
+    reg        nonce_toggle_h;
+    reg [31:0] golden_nonce_latch_h;
+
+    always @(posedge clk_h) begin
+        if (ticket2moon) begin
+            golden_nonce_latch_h <= golden_nonce_h;
+            nonce_toggle_h       <= ~nonce_toggle_h;
+        end
+    end
+
+    reg nonce_sync1_bus, nonce_sync2_bus, nonce_sync3_bus;
+    reg hash_active_sync1_bus, hash_active_sync2_bus;
+    reg [31:0] golden_nonce_reg;
+    reg        nonce_valid_reg;
+
+    wire nonce_new_pulse_bus = nonce_sync2_bus ^ nonce_sync3_bus;
+
+    always @(posedge bus_clk or negedge bus_rst_n) begin
+        if (!bus_rst_n) begin
+            nonce_sync1_bus <= 1'b0;
+            nonce_sync2_bus <= 1'b0;
+            nonce_sync3_bus <= 1'b0;
+            hash_active_sync1_bus <= 1'b0;
+            hash_active_sync2_bus <= 1'b0;
+            nonce_valid_reg <= 1'b0;
+            golden_nonce_reg <= 32'h0;
+        end else begin
+            nonce_sync1_bus <= nonce_toggle_h;
+            nonce_sync2_bus <= nonce_sync1_bus;
+            nonce_sync3_bus <= nonce_sync2_bus;
+
+            hash_active_sync1_bus <= start_hash_h;
+            hash_active_sync2_bus <= hash_active_sync1_bus;
+
+            if (nonce_new_pulse_bus) begin
+                golden_nonce_reg <= golden_nonce_latch_h;
+                nonce_valid_reg  <= 1'b1;
+            end else if (nonce_valid_clear_pulse) begin
+                nonce_valid_reg  <= 1'b0;
+            end
+        end
+    end
+
+    assign hash_active_bus  = hash_active_sync2_bus;
+    assign nonce_valid_bus  = nonce_valid_reg;
+    assign golden_nonce_bus = golden_nonce_reg;
+    assign gpio_irq         = nonce_valid_reg;
+
+endmodule

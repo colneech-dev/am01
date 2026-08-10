@@ -39,5 +39,11 @@ around a Xilinx Zynq-7000 SoC (FPGA fabric + on-die ARM Cortex-A9 cores)
 in place of the current Artix-7 XC7A200T + Cypress FX3 pair. This is a
 design proposal, not a shipped or verified hardware revision.
 
+[`hardware/qmtech-kintex7/`](hardware/qmtech-kintex7/) sketches a second
+variant built from off-the-shelf parts: a QMTECH Kintex-7 (XC7K325T) dev
+board plus a Raspberry Pi Compute Module 4 plugged into its onboard CM4
+socket, talking to the FPGA over GPIO instead of on-chip AXI. Also a
+design proposal, not verified hardware.
+
 
 
