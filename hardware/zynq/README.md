@@ -22,6 +22,18 @@ the whole FX3 + DQ-bus handshake goes away. The ARM side can run
 firmware or embedded Linux, do USB/Ethernet/host communication itself,
 and load work into the hash core with ordinary memory-mapped writes.
 
+## Related prior art
+
+[colneech-dev/odo-miner-cyclonev](https://github.com/colneech-dev/odo-miner-cyclonev)
+is a **deployed, hardware-verified** version of this same idea — HPS
+(ARM Cortex-A9) fused with FPGA fabric on a Cyclone V SoC (Intel/Altera's
+equivalent of Zynq), running the OdoCrypt pool client entirely on-chip,
+mining on mainnet (485+ blocks). It isn't Xilinx/Zynq and isn't AM01's
+odocrypt core, but it's the same architecture shape and the same class of
+CDC/register-map problems this doc's wrapper has to solve, worked through
+on real silicon. `docs/register-map.md` and `docs/uio-miner-io-scope.md`
+there are worth reading before implementing the pieces sketched below.
+
 ## Chip selection
 
 The existing `atomminer_odocrypt` example (see `exmaples/odocrypt/fpga/utilization.txt`)
@@ -51,6 +63,16 @@ Note this is **not a drop-in chip swap** — Zynq parts have entirely
 different pinout/package/power-rail requirements (PS needs its own DDR3/DDR3L
 memory, dedicated PS power rails, a boot flash/SD card, etc.). This is a new
 board/schematic, not a BOM substitution on the existing AM01 PCB.
+
+**Expected per-instance hashrate, cross-referenced not guessed:** `miner.v`
+here is the upstream `THROUGHPUT 4` pipelined `odo_encrypt` core
+(MentalCollatz) that odo-miner-cyclonev (above) benchmarked in Quartus on
+comparable-class fabric at **Fmax = 162.1MHz**, and runs deployed at
+156.25MHz on real hardware. The upstream reference point for this exact
+core is **150MHz → 37.5MH/s per instance**. Xilinx 7-series -1 speed grade
+should have at least as much headroom as that Cyclone V part, but that's
+a cross-vendor estimate, not Vivado STA for a Zynq PL fabric — verify once
+this is actually synthesized.
 
 ## Architecture
 
@@ -101,6 +123,13 @@ USB 3.0.
 
 ## Register interface (`hdl/odocrypt_axi_wrapper.v`)
 
+> **Single source of truth.** Any change to the table below MUST be
+> matched in `hdl/odocrypt_axi_wrapper.v` in the same commit.
+> odo-miner-cyclonev's register-map doc calls this exact kind of drift
+> **"the #1 bring-up failure mode"** for an HPS/PS-driven FPGA miner —
+> take that as a warning from a project that actually hit it, not
+> boilerplate.
+
 The old protocol serialized 27 words (19 header + 8 target dwords) across
 the DQ bus, sequenced by `usb3_sm_v3`'s hand-timed delay chains
 (`delreg_varbits_vardel`, 6/7/10-cycle waits) because the FX3 link only
@@ -150,3 +179,18 @@ silicon-ready code. Before treating it as production:
 4. **Firmware**: something has to run on the ARM cores (bare-metal or
    embedded Linux) to drive the register interface and do host
    communication — not included here.
+5. **Nonce delivery is a single-register latch, not a FIFO** — `GOLDEN_NONCE`
+   holds only the most recent find; if two land back-to-back faster than
+   firmware drains it, the earlier one is silently overwritten (see the
+   wrapper's `golden_nonce_axi`/`nonce_valid_axi`). Real gap, not
+   theoretical: odo-miner-cyclonev hit this and fixed it with a **depth-8
+   dual-clock async FIFO (Gray-code pointers) + a sticky overflow bit** —
+   see their `docs/register-map.md` §4 for the exact pattern.
+6. **Toolchain**: this doc assumes Vivado (needed regardless for the PS
+   configuration/boot files a real Zynq bring-up requires — FSBL, boot.bin,
+   the PS7/PS8 IP wizard). **[openXC7](https://github.com/openXC7)** (a
+   free Yosys + nextpnr-xilinx flow) lists Zynq-7 among its supported
+   families, but that most likely covers PL-fabric synthesis only, not
+   Zynq's PS bring-up — not evaluated here, and probably a much smaller
+   win for this variant than for the plain-FPGA `hardware/qmtech-kintex7/`
+   one.

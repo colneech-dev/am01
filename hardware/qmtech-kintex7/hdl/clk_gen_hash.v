@@ -29,20 +29,26 @@
 // scaffolded from the command line (see ../vivado/build.tcl) without
 // needing to click through IP Integrator.
 //
-// STATUS / TODO: CLKFBOUT_MULT / CLKOUT0_DIVIDE below are a *placeholder*
-// (50MHz x 20 / 8 = 125MHz). This repo does not have AM01's original
-// clk_h frequency on record (artix200_v3_clocking's .xci settings aren't
-// human-readable source), so 125MHz is a starting guess, not a validated
-// number. Re-tune CLKOUT0_DIVIDE (or add a CLKFBOUT_MULT/CLKOUT0_DIVIDE
-// parameter override at instantiation) based on post-synthesis static
-// timing analysis of miner_top's actual critical path on this part.
+// STATUS / TODO: CLKFBOUT_MULT / CLKOUT0_DIVIDE below target 150MHz (50MHz
+// x 15 / 5), not the earlier arbitrary 125MHz guess. 150MHz is grounded in
+// a real cross-reference: exmaples/odocrypt/fpga/src/hdl/miner.v is the
+// same upstream `THROUGHPUT 4` pipelined odo_encrypt core (MentalCollatz)
+// that colneech-dev/odo-miner-cyclonev benchmarked on comparable-class
+// fabric (QMTECH Cyclone V SoC, ~110K LE) -- Quartus reported Fmax =
+// 162.1MHz @ Slow/85C for that exact core, and it's deployed at 156.25MHz
+// on that board. 150MHz is the upstream reference clock (37.5MH/s at
+// THROUGHPUT=4). Xilinx 7-series (-1 speed grade) should have at least as
+// much headroom as that Cyclone V part, but this is still a cross-vendor,
+// cross-part estimate, not a Vivado STA result for THIS wrapper on THIS
+// XC7K325T-1FFG676C -- re-verify from post-synthesis timing and retune if
+// it doesn't close.
 //
 `timescale 1ns / 1ps
 
 module clk_gen_hash #(
     parameter CLKIN_PERIOD_NS = 20.000, // 50MHz input
-    parameter CLKFBOUT_MULT   = 20,     // VCO = 50MHz * 20 = 1000MHz (7-series -1: 600-1200MHz range)
-    parameter CLKOUT0_DIVIDE  = 8       // clk_h = 1000MHz / 8 = 125MHz -- PLACEHOLDER, see note above
+    parameter CLKFBOUT_MULT   = 15,     // VCO = 50MHz * 15 = 750MHz (7-series -1: 600-1200MHz range)
+    parameter CLKOUT0_DIVIDE  = 5       // clk_h = 750MHz / 5 = 150MHz -- see note above
 )
 (
     input  wire clk_in,     // from sys_clk_50m (via IBUF upstream)

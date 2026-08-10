@@ -16,6 +16,20 @@ over 28 general-purpose GPIO lines** instead of on-chip AXI. Cheaper and
 buildable from parts you can order today; slower/lower-level link than a
 true Zynq PS↔PL fabric connection.
 
+## Related prior art
+
+[colneech-dev/odo-miner-cyclonev](https://github.com/colneech-dev/odo-miner-cyclonev)
+is a **deployed, hardware-verified** instance of this exact pattern — a
+QMTECH board (Cyclone V SoC, so Intel/Altera HPS+FPGA instead of a
+CM4+Kintex-7 pair) autonomously mining OdoCrypt with the pool client
+running on the on-board ARM cores. It's mined 485+ blocks on mainnet.
+Several numbers and lessons below (clock target, the register-map-drift
+warning, the nonce-delivery CDC gap) are pulled directly from that
+project's docs, since it's real-world validation this repo doesn't have
+yet. Its `docs/register-map.md` and `docs/uio-miner-io-scope.md` are
+worth reading in full if you're implementing the pieces this repo only
+sketches.
+
 ## Why this board
 
 From the QMTECH user manual (`QMTECH XC7K325T DEV BOARD USER MANUAL V01`):
@@ -33,6 +47,22 @@ port over unmodified — same conclusion as the Zynq doc. BRAM is the
 binding resource for parallel hash-core instances (211 tiles/instance per
 `exmaples/odocrypt/fpga/utilization.txt`), so this chip fits **~2
 instances (~2x hashrate)** vs. today's single instance on the AM01.
+
+**A real cross-referenced hashrate number, not a guess:** `miner.v` here
+*is* the upstream `THROUGHPUT 4` pipelined `odo_encrypt` core (MentalCollatz,
+the same design [colneech-dev/odo-miner-cyclonev](https://github.com/colneech-dev/odo-miner-cyclonev)
+ported to a QMTECH Cyclone V SoC board). That project's Quartus build of
+this exact core hit **Fmax = 162.1MHz** on comparable-class fabric (~110K
+LE) and is deployed on real hardware at **156.25MHz → 26.0 MH/s**
+(`THROUGHPUT` was later raised to 6 there for a co-fit tradeoff; the
+upstream reference point is 150MHz/`THROUGHPUT=4` → **37.5 MH/s per
+instance**). `clk_gen_hash.v` targets that 150MHz reference clock — Xilinx
+7-series -1 speed grade should have at least as much timing headroom as
+that Cyclone V part, but this is still a cross-vendor estimate, not a
+Vivado STA result for this wrapper on this XC7K325T. At 2 instances (BRAM-
+bound, per above) that's a ballpark **~75MH/s**, *if* someone builds the
+multi-instance arbitration `odocrypt_gpio_wrapper.v` doesn't have yet (it
+drives one `miner_top`) — treat this as a target to verify, not a promise.
 
 Board specifics that matter for this design (from the manual):
 - On-board 50MHz crystal, `SYS_CLK_F22` (ball **F22** by the schematic's
@@ -99,6 +129,14 @@ not which bank each CM4 GPIO ball sits in).
 
 ## Protocol / register map
 
+> **Single source of truth.** Any change to the table below MUST be
+> matched in `hdl/odocrypt_gpio_wrapper.v` and `cm4-firmware/am01_gpio_bus.c`
+> in the same commit. This isn't a formality: odo-miner-cyclonev's own
+> register-map doc calls register-map/wrapper drift **"the #1 bring-up
+> failure mode"** for this exact kind of project, and their firmware and
+> RTL don't have automated drift protection — that's on the "still needed"
+> list below, not something to assume is covered.
+
 A simple 4-phase (fully interlocked) parallel bus, safe regardless of how
 fast/slow the CM4 side drives it — whether that's bit-banged GPIO in
 software or the BCM2711's SMI (Secondary Memory Interface) peripheral,
@@ -162,8 +200,11 @@ verification against real parts, not more design work:
    TODO, worth doing only if the bit-banged path turns out too slow.
 2. **CDC and timing signoff** — the synchronizers on `WR_N`/`RD_N`/`ADDR`/
    `DATA` need `ASYNC_REG` constraints and proper timing exceptions, same
-   caveat as the Zynq wrapper. `clk_gen_hash.v`'s `CLKOUT0_DIVIDE` is also
-   an untuned placeholder (125MHz) — re-tune from post-synthesis STA.
+   caveat as the Zynq wrapper. `clk_gen_hash.v`'s `CLKOUT0_DIVIDE` now
+   targets 150MHz (cross-referenced from odo-miner-cyclonev's Quartus
+   build of the same `miner.v` core, see above) rather than an arbitrary
+   guess, but it's still not a Vivado STA result for this exact wrapper —
+   re-verify and retune once you can synthesize it.
 3. **Verify the GPIO bank/voltage** for the 28 CM4-linked balls against
    the QMTECH schematic before flashing. One IOSTANDARD bug already
    caught and fixed this way: the manual's schematic shows `SW2`/`SW3`
@@ -174,7 +215,16 @@ verification against real parts, not more design work:
 4. ~~New Vivado project~~ — done: `vivado/build.tcl` scaffolds it from the
    command line (no IP Integrator block design; clocking is hand-written
    MMCME2_BASE in `hdl/clk_gen_hash.v`). Not run against real Vivado as
-   part of this repo, so treat it as unverified until someone runs it.
+   part of this repo (no license/install in this environment), so treat
+   it as unverified until someone runs it. **[openXC7](https://github.com/openXC7)**
+   is worth a look as a free/open alternative to Vivado for this part —
+   it's a Yosys + nextpnr-xilinx toolchain that explicitly lists Kintex-7
+   (including the 325T) among its supported families, which would let
+   this whole variant be built without a Vivado license at all. Not
+   evaluated here; the `.xdc`/RTL in this repo were written assuming
+   Vivado's constraint syntax and 7-series primitive names (`MMCME2_BASE`,
+   `IBUF`, `BUFG`), which should be broadly compatible but hasn't been
+   tried against openXC7's flow specifically.
 5. **Physical assembly**: seat the CM4 module, confirm `JP6` jumper state
    per the manual (open when a CM4 is installed, since pins 86/88 are
    power outputs from the module), and power the board from a 6V/2A+
@@ -182,3 +232,14 @@ verification against real parts, not more design work:
 6. **A real pool/stratum client** on the CM4 side to feed
    `am01_bus_submit_work()` real work instead of `am01_bus_test.c`'s
    all-zero dummy — not attempted here, see `cm4-firmware/README.md`.
+7. **Nonce delivery is a single-register latch, not a FIFO** — if two
+   nonces are found back-to-back faster than the CM4 drains `NONCE_HI`,
+   the second overwrites the first before it's read (see
+   `odocrypt_gpio_wrapper.v`'s `golden_nonce_reg`/`nonce_valid_reg`).
+   At `miner_top`'s actual expected solve rate for real pool difficulty
+   this is unlikely to bite in practice, but it's a real gap, not a
+   theoretical one: odo-miner-cyclonev hit exactly this class of problem
+   and fixed it with a **depth-8 dual-clock async FIFO (Gray-code
+   pointers) plus a sticky overflow bit** in `STATUS` — see their
+   `docs/register-map.md` §4 for the pattern if this needs closing before
+   going into real use.
