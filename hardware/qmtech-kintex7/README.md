@@ -188,6 +188,9 @@ across the clock-domain crossing without needing a heavier CDC FIFO.
 - `cm4-firmware/` — bit-banged GPIO driver (libgpiod) for the CM4 side:
   `am01_gpio_bus.[ch]` (the library) + `am01_bus_test.c` (bring-up CLI) +
   `Makefile`. See its own README for build/run instructions.
+- `case/` — a parametric OpenSCAD 3D-printable case for the QMTECH board
+  itself (open-top tray with connector cutouts). See its own README for
+  the design assumptions and print notes.
 
 ## What's still needed before this is real hardware
 
