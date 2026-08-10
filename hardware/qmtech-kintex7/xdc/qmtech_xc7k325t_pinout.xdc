@@ -88,8 +88,10 @@ set_property IOSTANDARD LVCMOS33 [get_ports {status_led[*]}]
 
 set_property PACKAGE_PIN V26 [get_ports user_key_sw2]
 set_property PACKAGE_PIN U26 [get_ports user_key_sw3]
-set_property IOSTANDARD LVCMOS33 [get_ports user_key_sw2]
-set_property IOSTANDARD LVCMOS33 [get_ports user_key_sw3]
+# NOTE: SW2/SW3 pull-ups (R17/R18) go to 1V8, not 3V3 (see manual section
+# 2.2.7) -- these two are on a 1.8V bank, unlike PROGRAM_B and the LEDs.
+set_property IOSTANDARD LVCMOS18 [get_ports user_key_sw2]
+set_property IOSTANDARD LVCMOS18 [get_ports user_key_sw3]
 
 # JTAG (TCK/TDO/TDI/TMS) and PROGRAM_B/DONE/INIT_B are dedicated
 # configuration pins on this device/package -- Vivado handles them

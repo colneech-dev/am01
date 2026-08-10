@@ -138,25 +138,47 @@ clock domain via the same toggle/ack synchronizer pattern used in
 completes at a time, so the request/data lines are guaranteed stable
 across the clock-domain crossing without needing a heavier CDC FIFO.
 
+## Repo layout
+
+- `xdc/qmtech_xc7k325t_pinout.xdc` — pin constraints (bus, clock, LEDs, keys).
+- `hdl/odocrypt_gpio_wrapper.v` — the parallel-bus front end + CDC bridge.
+- `hdl/clk_gen_hash.v` — hash-core clock (MMCME2_BASE off the 50MHz crystal).
+- `hdl/am01_qmtech_top.v` — top level wiring the above together, plus
+  bring-up status LEDs (MMCM-locked, clk_h heartbeat).
+- `vivado/build.tcl` — non-interactive Vivado project generator
+  (`vivado -mode batch -source build.tcl`); no IP Integrator needed.
+- `cm4-firmware/` — bit-banged GPIO driver (libgpiod) for the CM4 side:
+  `am01_gpio_bus.[ch]` (the library) + `am01_bus_test.c` (bring-up CLI) +
+  `Makefile`. See its own README for build/run instructions.
+
 ## What's still needed before this is real hardware
 
-Same category of gaps as the Zynq proposal:
+Design/RTL and a first-cut CM4 driver exist now (above); what's left is
+verification against real parts, not more design work:
 
-1. **CM4-side software** to drive the bus — either bit-banged GPIO
-   (simplest, slowest, fine for this workload's tiny data volume) or the
-   BCM2711 SMI peripheral (faster, more setup: device-tree overlay +
-   `/dev/smi` or a small kernel driver). Not included here.
+1. ~~CM4-side software~~ — done as a first cut: `cm4-firmware/` implements
+   the bit-banged path. The BCM2711 SMI peripheral (faster, more setup:
+   device-tree overlay + `/dev/smi` or a small kernel driver) is still a
+   TODO, worth doing only if the bit-banged path turns out too slow.
 2. **CDC and timing signoff** — the synchronizers on `WR_N`/`RD_N`/`ADDR`/
    `DATA` need `ASYNC_REG` constraints and proper timing exceptions, same
-   caveat as the Zynq wrapper.
+   caveat as the Zynq wrapper. `clk_gen_hash.v`'s `CLKOUT0_DIVIDE` is also
+   an untuned placeholder (125MHz) — re-tune from post-synthesis STA.
 3. **Verify the GPIO bank/voltage** for the 28 CM4-linked balls against
-   the QMTECH schematic before flashing — this doc assumes the manual's
-   stated global 3.3V default, but that should be confirmed pin-by-pin.
-4. **New Vivado project** targeting XC7K325T-1FFG676C: regenerate a
-   clocking wizard IP off the 50MHz `SYS_CLK_F22` crystal (replacing
-   `artix200_v3_clocking`), and skip the DDR3/MIG IP entirely — nothing
-   in this design needs external DRAM.
+   the QMTECH schematic before flashing. One IOSTANDARD bug already
+   caught and fixed this way: the manual's schematic shows `SW2`/`SW3`
+   pulled up to **1.8V**, not the board's global 3.3V default — the .xdc
+   now uses `LVCMOS18` for those two. The `DATA`/`ADDR`/control lines
+   still assume the stated 3.3V default and haven't been checked against
+   a per-ball bank table.
+4. ~~New Vivado project~~ — done: `vivado/build.tcl` scaffolds it from the
+   command line (no IP Integrator block design; clocking is hand-written
+   MMCME2_BASE in `hdl/clk_gen_hash.v`). Not run against real Vivado as
+   part of this repo, so treat it as unverified until someone runs it.
 5. **Physical assembly**: seat the CM4 module, confirm `JP6` jumper state
    per the manual (open when a CM4 is installed, since pins 86/88 are
    power outputs from the module), and power the board from a 6V/2A+
    supply.
+6. **A real pool/stratum client** on the CM4 side to feed
+   `am01_bus_submit_work()` real work instead of `am01_bus_test.c`'s
+   all-zero dummy — not attempted here, see `cm4-firmware/README.md`.
