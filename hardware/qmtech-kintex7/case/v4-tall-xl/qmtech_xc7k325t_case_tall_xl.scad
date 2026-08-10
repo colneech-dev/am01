@@ -1,19 +1,31 @@
 // QMTECH XC7K325T Dev Board -- two-part case (base tray + lid)
 // Parametric OpenSCAD, 3D-print friendly (FDM, no supports needed).
-// v3: real heatsink part number sizes a raised chimney over the FPGA
-// only (not a uniformly tall case); CM4 cutout REMOVED -- it's a
-// low-profile mezzanine module, not something needing panel access.
+// v4: FULLY ENCLOSED. v3's open-top vented chimney is gone -- the whole
+// box is now uniformly tall enough to close over the heatsink, no
+// opening above it. This file is a shared template with two variant
+// knobs (VARIANT_WALL_HEIGHT, VARIANT_VENTED) near the top; see
+// ../README.md for the three generated variants (sealed / vented /
+// tall-xl) and why each exists. CM4 cutout stays REMOVED (v3 finding:
+// it's a low-profile mezzanine module, not something needing panel
+// access).
 //
 // Sources:
 // - "QMTECH XC7K325T DEV BOARD USER MANUAL V01" Figure 2-1 (board
 //   outline: 160x90mm) and the manual's cover-page top-view photo
 //   (connector layout).
+// - ChinaQMTECH/QMTECH_Kintex-7_Development_Board's
+//   hardware/Dimension(Board_Top_View).pdf -- the vendor's own real
+//   Allegro ECAD dimension export, used to refine the FPGA position and
+//   cross-check the header/DC-jack layout.
 // - colneech-dev/odo-miner-cyclonev's docs/DISPLAY_WIRING.md (display
 //   module part number) and docs/FAN_SENSOR_WIRING.md (thermal sensor)
 //   -- a real, hardware-verified reference build for the same class of
 //   "FPGA dev board + status display + thermal sensor" appliance.
 // - Ohmite/Arcol BGAH270-175E datasheet (27x27x17.5mm BGA heatsink,
 //   sized for the exact 27x27mm body of this chip's FFG676 package).
+//   Not available on AliExpress (distributor-only part -- RS/Digikey/
+//   Mouser/Farnell/Enrgtech); see ../README.md for AliExpress
+//   alternatives of the same class/size.
 // - Raspberry Pi CM4 datasheet: two 100-pin B2B connector options,
 //   1.5mm or 3.0mm mated stack height; module itself is 55x40x4.7mm.
 //   Total height above the carrier board is ~6.2-7.7mm either way.
@@ -27,56 +39,65 @@
 //    cluster. The lid seats on a friction skirt and is secured with
 //    4 corner screws into full-height bosses (separate from the
 //    shorter under-board standoffs).
-// 2. NO CM4 CUTOUT. v2 had one; it was wrong. The CM4 mates via two
-//    100-pin board-to-board connectors at 1.5-3.0mm stack height, and
-//    the module itself is only 4.7mm thick -- total ~6.2-7.7mm above
-//    the carrier board (Raspberry Pi CM4 datasheet). That's a fully
-//    internal, low-profile mezzanine, not something needing external
-//    access: its HDMI/USB/Ethernet/etc. are already broken out to
-//    *this* board's own edge connectors (the ones left_edge_cutouts()
-//    already handles). general_clearance_mm below covers it with
-//    margin to spare, no panel opening required.
-// 3. SHORT EVERYWHERE EXCEPT OVER THE FPGA. general_clearance_mm (11mm)
-//    replaces v2's uniform 28mm -- realistic for the CM4 stack (up to
-//    7.7mm) plus modest wiring room, not a heatsink-driven guess. A
-//    raised, open-top, vented "chimney" (lid_fpga_chimney_*() modules)
-//    sits only over the FPGA/heatsink footprint, reaching the extra
-//    height the heatsink actually needs -- see chimney_protrusion_mm's
-//    derivation below, traceable to the BGAH270-175E's real 17.5mm.
-// 4. HOLE POSITIONS ARE STILL ESTIMATES. The header/DC-jack/micro-USB/
-//    switch positions, and the FPGA's location under the chimney, are
-//    read proportionally off the manual's cover photo, not measured --
-//    none of it is in the manual's dimensioned drawing. Every cutout is
-//    deliberately oversized (cutout_margin) to absorb that. Nudge the
-//    position tables below once you have the board.
-// 5. DISPLAY: sized for the **KMRTM28028-SPI** (2.8" 240x320 ILI9341 +
+// 2. NO CM4 CUTOUT. The CM4 mates via two 100-pin board-to-board
+//    connectors at 1.5-3.0mm stack height, and the module itself is
+//    only 4.7mm thick -- total ~6.2-7.7mm above the carrier board
+//    (Raspberry Pi CM4 datasheet). That's a fully internal, low-profile
+//    mezzanine, not something needing external access: its HDMI/USB/
+//    Ethernet/etc. are already broken out to *this* board's own edge
+//    connectors (the ones left_edge_cutouts() already handles).
+// 3. FULLY ENCLOSED, UNIFORM HEIGHT. wall_height is set directly (not
+//    derived from a chimney calculation) to fully contain the real
+//    heatsink (Ohmite/Arcol BGAH270-175E, 17.5mm) everywhere in the
+//    case, not just over the FPGA -- see heatsink_total_clearance_mm's
+//    derivation below, still traceable to the real part, just applied
+//    uniformly instead of as a stepped chimney. VARIANT_WALL_HEIGHT
+//    (set near the top) picks which of the 3 generated variants this
+//    file becomes when exported.
+// 4. VENTING IS OPTIONAL, NEVER AN OPEN HOLE ABOVE THE HEATSINK.
+//    VARIANT_VENTED, if true, adds a grid of small (3mm) drilled vent
+//    holes through the solid lid over the FPGA -- a perforated panel,
+//    not a bore-through opening like v3's chimney. If false, that
+//    region of the lid is completely solid: zero venting anywhere.
+// 5. HOLE POSITIONS ARE STILL ESTIMATES. The header/DC-jack/micro-USB/
+//    switch positions, and the FPGA's location, are read proportionally
+//    off the manual's cover photo and cross-checked against the
+//    vendor's real dimension PDF, not measured to exact coordinates.
+//    Every cutout is deliberately oversized (cutout_margin) to absorb
+//    that. Nudge the position tables below once you have the board.
+// 6. DISPLAY: sized for the **KMRTM28028-SPI** (2.8" 240x320 ILI9341 +
 //    XPT2242 touch, 14-pin header) -- the exact module
 //    colneech-dev/odo-miner-cyclonev verified on real hardware for this
-//    class of build. Repositioned (from v2) to the lid's left-of-
-//    chimney area, the only region with enough free space once the
-//    header/DC-jack cluster and the chimney footprint are laid out --
-//    verified by explicit numeric range-checking this time, not just
-//    eyeballing a render (see v2's collision bug, fixed then re-broken
-//    then fixed again -- this file's history is a lesson in checking
-//    the numbers, not just the picture). This board's manual doesn't
-//    mention a display; wiring it needs the board's 50-pin extension
-//    header (JP5) or spare CM4 GPIO lines -- SPI needs more signal
-//    lines (CS/DC/RST/SCLK/MOSI/MISO + touch CS/IRQ) than the 4 spare
-//    CM4 lines (GPIO24-27, unused by ../hdl/odocrypt_gpio_wrapper.v)
+//    class of build. Mounted portrait (rotated 90 deg from its natural
+//    orientation) in the lid's left region, the only area with enough
+//    free space once the header/DC-jack cluster and the FPGA vent zone
+//    are laid out -- verified by explicit numeric range-checking, not
+//    eyeballing a render. This board's manual doesn't mention a
+//    display; wiring it needs the board's 50-pin extension header
+//    (JP5) or spare CM4 GPIO lines -- SPI needs more signal lines
+//    (CS/DC/RST/SCLK/MOSI/MISO + touch CS/IRQ) than the 4 spare CM4
+//    lines (GPIO24-27, unused by ../hdl/odocrypt_gpio_wrapper.v)
 //    provide, so JP5 is the realistic path. RTL/driver for this is NOT
 //    implemented anywhere in this repo yet -- this file only adds the
 //    physical mounting provision.
-// 6. THERMAL SENSOR: a DS18B20 (TO-92, 3-wire: VDD/GND/DATA), the same
+// 7. THERMAL SENSOR: a DS18B20 (TO-92, 3-wire: VDD/GND/DATA), the same
 //    part odo-miner-cyclonev uses, verified there tracking real load
 //    (34-49 deg C). It mounts against/near the heatsink, not through a
 //    panel cutout of its own size -- this lid just adds a small cable
-//    pass-through hole next to the chimney for its 3 wires to route out
-//    to JP5 or a spare CM4 GPIO.
-// 7. Same square-corners note as v1/v2: `hull()`-based rounding
+//    pass-through hole near the FPGA vent zone for its 3 wires to route
+//    out to JP5 or a spare CM4 GPIO.
+// 8. Same square-corners note as v1-v3: `hull()`-based rounding
 //    previously broke cutout subtraction silently -- confirmed by A/B
 //    vertex-count testing. This file never used rounding to begin with.
-// 8. Print a fit-check first, same as v1/v2 -- these are estimates.
+// 9. Print a fit-check first, same as v1-v3 -- these are estimates.
 // ============================================================
+
+// ============================================================
+// VARIANT KNOBS -- these two lines are all that differ between the
+// three generated files in ../v4-sealed/, ../v4-vented/, ../v4-tall-xl/.
+// ============================================================
+VARIANT_WALL_HEIGHT = 36;   // TALL-XL variant: extra headroom for a bigger heatsink+fan
+VARIANT_VENTED       = true;  // vented, for airflow with a bigger heatsink/fan
 
 // ---- Board ----
 board_length    = 160;   // X, the manual's Figure 2-1 dimension
@@ -93,52 +114,45 @@ wall_thickness  = 2.4;
 floor_thickness = 2.4;
 standoff_clearance = 3.0;   // gap under the board for bottom-side components/solder
 
-// General clearance above the board's top surface, for EVERYTHING except
-// the FPGA/heatsink (which gets its own chimney below): the CM4 mezzanine
-// stack (max ~7.7mm: 4.7mm module + 3.0mm connector, Raspberry Pi CM4
-// datasheet) plus a few mm for wire dressing (display/sensor cables).
-// This replaces v2's component_clearance_mm, which sized the WHOLE case
-// to the heatsink -- wrong, since the CM4 doesn't need anywhere near
-// that height and most of the board shouldn't pay for it.
-general_clearance_mm = 11;
-wall_height = general_clearance_mm + 3; // = 14mm, a little buffer above the CM4 stack
-
-// ---- Lid thickness (defined here, ahead of its normal section below,
-// because chimney_protrusion_mm needs it) ----
+// Case interior height, uniform everywhere (fully enclosed -- see design
+// note 3 above). Set directly by VARIANT_WALL_HEIGHT; also cross-checked
+// below against the real heatsink dimensions so you can see the margin
+// (or shortfall) rather than trust a bare constant.
+wall_height = VARIANT_WALL_HEIGHT;
 lid_thickness = 2.4;
 
-// ---- FPGA heatsink chimney -------------------------------------------
-// Sized from a real part: Ohmite/Arcol BGAH270-175E, 27x27x17.5mm --
-// dimensioned for exactly this chip's FFG676 package body (27x27mm).
-// The chimney is a raised, open-top, vented parapet on the LID directly
-// over the FPGA, not a uniformly taller case -- see lid_fpga_chimney_*()
-// below. Position is read off hardware/Dimension(Board_Top_View).pdf in
-// ChinaQMTECH/QMTECH_Kintex-7_Development_Board (the vendor's own real
-// ECAD dimension export) -- the BGA footprint sits at roughly the board's
-// horizontal-center, ~half way down -- still an estimate (no exact
-// leader-line coordinate for the die center is given), but a materially
-// better one than v2's photo-proportional guess.
+// ---- FPGA/heatsink clearance check (informational + drives the vent
+// hole footprint below) ----------------------------------------------
+// Ohmite/Arcol BGAH270-175E, 27x27x17.5mm -- dimensioned for exactly
+// this chip's FFG676 package body (27x27mm). Not on AliExpress
+// (distributor-only part); see ../README.md for same-class alternatives
+// actually sold there. Position estimated from
+// hardware/Dimension(Board_Top_View).pdf in
+// ChinaQMTECH/QMTECH_Kintex-7_Development_Board (vendor's own ECAD
+// dimension export) -- the BGA sits roughly at the board's horizontal
+// center, about half way down; still not an exact leader-line
+// coordinate, but materially better than a photo-proportional guess.
 heatsink_lwh_mm       = [27, 27, 17.5]; // BGAH270-175E, L x W x H
 heatsink_center_mm    = [100, 50];      // FPGA package center, board-local XY
-chimney_xy_margin_mm  = 8;              // clearance around the heatsink body,
+heatsink_xy_margin_mm = 8;              // clearance around the heatsink body,
                                          // each side (position uncertainty +
                                          // the heatsink's own mounting clips)
-chimney_wall_t        = 2.0;
-vent_slot_w            = 3;   // chimney wall vent slots (see lid_fpga_chimney_vents())
-vent_slot_gap          = 3;
 fpga_chip_and_pad_mm  = 2.0;  // BGA body + thermal pad, above the PCB surface
 heatsink_assembly_margin_mm = 3.0; // safety margin (adhesive squeeze-out, tolerance)
-
-chimney_footprint_mm = [heatsink_lwh_mm[0] + 2*chimney_xy_margin_mm,
-                          heatsink_lwh_mm[1] + 2*chimney_xy_margin_mm]; // = [43,43]
 heatsink_total_clearance_mm = heatsink_lwh_mm[2] + fpga_chip_and_pad_mm
                                + heatsink_assembly_margin_mm; // = 22.5mm, PCB to top of stack
-// How far the chimney has to stick up ABOVE the general lid surface to
-// give the heatsink its 22.5mm, given the general case (wall_height +
-// lid_thickness) only provides 14+2.4=16.4mm on its own:
-chimney_protrusion_mm = max(1, heatsink_total_clearance_mm - (wall_height + lid_thickness));
+case_interior_clearance_mm  = wall_height + lid_thickness; // what this variant actually provides
+heatsink_margin_mm = case_interior_clearance_mm - heatsink_total_clearance_mm; // sanity check;
+                      // should be comfortably positive -- echoed at the bottom of this file
 
-// ---- Lid (lid_thickness is defined earlier -- see above) ----
+// Footprint the vent-hole grid (if VARIANT_VENTED) is centered on --
+// oversized around the heatsink body the same way the old chimney was.
+vent_zone_mm = [heatsink_lwh_mm[0] + 2*heatsink_xy_margin_mm,
+                 heatsink_lwh_mm[1] + 2*heatsink_xy_margin_mm]; // = [43,43]
+vent_hole_d       = 3;
+vent_hole_pitch   = 7; // center-to-center spacing
+
+// ---- Lid ----
 lid_skirt_depth = 3.0;   // how far the lid's alignment skirt reaches down inside the tray
 lid_fit_clearance = 0.3; // per-side gap between skirt and tray inner wall
 
@@ -186,16 +200,14 @@ lid_top_cutouts_mm = [
 dc_jack_center_mm = [158, 20]; // round hole, DC barrel jack
 dc_jack_diameter  = 12;
 
-// Ventilation is now cut into the chimney's own side walls (see
-// lid_fpga_chimney_vents() below) rather than a separate flat grille --
-// makes more physical sense for airflow over the actual heatsink, and
-// there's no longer a free flat area to put one anyway once the CM4
-// cutout is gone and the display needs the remaining room (checked
-// below with real numbers, not eyeballed -- see the v2 changelog note
-// about a collision bug caught that way).
+// Ventilation, if VARIANT_VENTED, is a grid of small drilled holes
+// straight through the solid lid over the FPGA (see
+// lid_fpga_vent_holes() below) -- a perforated panel, not an open
+// chimney: the box stays fully enclosed either way, this variant knob
+// only decides whether that one region is solid or perforated.
 
 // DS18B20 sensor cable pass-through, tucked into the gap between the
-// display and the chimney (checked clear of both below).
+// display and the FPGA vent zone (checked clear of both below).
 sensor_hole_center_mm = [70, 50];
 sensor_hole_d = 5;
 
@@ -382,54 +394,25 @@ module lid_dc_jack_hole() {
         cylinder(h = lid_thickness + 2, d = dc_jack_diameter + 2*cutout_margin/2, $fn = 32);
 }
 
-// ---- FPGA heatsink chimney: a raised, open-top, vented parapet on top
-// of the lid directly over the FPGA -- see design note 3 at the top of
-// this file for why this is a step instead of a uniformly taller case,
-// and the "FPGA heatsink chimney" parameter block for the height math.
+// ---- FPGA vent zone: EITHER nothing (fully solid lid, VARIANT_VENTED
+// = false) OR a grid of small drilled holes through the solid lid
+// (VARIANT_VENTED = true) -- see design note 4 at the top of this file.
+// The case is fully enclosed either way: this never opens a hole big
+// enough to expose the heatsink to open air, unlike v3's chimney.
 
-module lid_fpga_chimney_bore() {
-    // Hole straight through the lid panel, connecting the tray's
-    // interior to the chimney above -- this is what actually lets the
-    // heatsink (mounted on the board below) poke up into the chimney.
-    cx = board_origin[0] + heatsink_center_mm[0];
-    cy = board_origin[1] + heatsink_center_mm[1];
-    translate([cx - chimney_footprint_mm[0]/2, cy - chimney_footprint_mm[1]/2, -1])
-        cube([chimney_footprint_mm[0], chimney_footprint_mm[1], lid_thickness + 2]);
-}
-
-module lid_fpga_chimney_walls() {
-    fuse_eps = 0.05; // overlap into lid_panel, same reason as lid_skirt()
-    cx = board_origin[0] + heatsink_center_mm[0];
-    cy = board_origin[1] + heatsink_center_mm[1];
-    ow = chimney_footprint_mm[0];
-    oh = chimney_footprint_mm[1];
-    translate([cx - ow/2, cy - oh/2, lid_thickness - fuse_eps])
-        difference() {
-            linear_extrude(height = chimney_protrusion_mm + fuse_eps)
-                square([ow, oh]);
-            translate([chimney_wall_t, chimney_wall_t, -1])
-                linear_extrude(height = chimney_protrusion_mm + fuse_eps + 2)
-                    square([ow - 2*chimney_wall_t, oh - 2*chimney_wall_t]);
-        }
-}
-
-module lid_fpga_chimney_vents() {
-    // Slots through the two Y-facing chimney walls (front/back) for
-    // passive convection airflow over the heatsink. Kept a couple mm
-    // off the top/bottom edges of the wall for strut strength.
-    cx = board_origin[0] + heatsink_center_mm[0];
-    cy = board_origin[1] + heatsink_center_mm[1];
-    ow = chimney_footprint_mm[0];
-    oh = chimney_footprint_mm[1];
-    slot_margin = 4; // keep slots off the corners
-    n = max(1, floor((ow - 2*chimney_wall_t - 2*slot_margin) / (vent_slot_w + vent_slot_gap)));
-    total_w = n*vent_slot_w + (n-1)*vent_slot_gap;
-    start_x = cx - total_w/2;
-    slot_h = max(1, chimney_protrusion_mm - 4); // clear of top/bottom wall edges
-    for (i = [0:n-1])
-        for (y0 = [cy - oh/2 - 1, cy + oh/2 - chimney_wall_t - 1])
-            translate([start_x + i*(vent_slot_w+vent_slot_gap), y0, lid_thickness + 2])
-                cube([vent_slot_w, chimney_wall_t + 2, slot_h]);
+module lid_fpga_vent_holes() {
+    if (VARIANT_VENTED) {
+        cx = board_origin[0] + heatsink_center_mm[0];
+        cy = board_origin[1] + heatsink_center_mm[1];
+        nx = max(1, floor(vent_zone_mm[0] / vent_hole_pitch));
+        ny = max(1, floor(vent_zone_mm[1] / vent_hole_pitch));
+        x0 = cx - (nx-1)*vent_hole_pitch/2;
+        y0 = cy - (ny-1)*vent_hole_pitch/2;
+        for (i = [0:nx-1])
+            for (j = [0:ny-1])
+                translate([x0 + i*vent_hole_pitch, y0 + j*vent_hole_pitch, -1])
+                    cylinder(h = lid_thickness + 2, d = vent_hole_d, $fn = 16);
+    }
 }
 
 module lid_sensor_passthrough() {
@@ -470,19 +453,20 @@ module lid() {
             lid_screw_clearance_holes();
             lid_top_edge_cutouts();
             lid_dc_jack_hole();
-            lid_fpga_chimney_bore();
+            lid_fpga_vent_holes();
             lid_sensor_passthrough();
             lid_display_cutout();
         }
-        union() {
-            lid_display_standoffs();
-            difference() {
-                lid_fpga_chimney_walls();
-                lid_fpga_chimney_vents();
-            }
-        }
+        lid_display_standoffs();
     }
 }
+
+// Sanity-check echo: confirms (at compile time, in the console/log) how
+// much margin this variant's wall_height leaves over the real heatsink's
+// needs. Should read comfortably positive.
+echo(str("heatsink clearance margin (mm): ", heatsink_margin_mm,
+         " [interior provides ", case_interior_clearance_mm,
+         ", heatsink needs ", heatsink_total_clearance_mm, "]"));
 
 // ============================================================
 // Output: base tray and lid side by side, print-plate friendly.
