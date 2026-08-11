@@ -1,34 +1,62 @@
-# QMTECH XC7K325T dev board -- 3D-printable case (v4, fully enclosed)
+# QMTECH XC7K325T dev board -- 3D-printable case (v4.1, real I/O)
 
 A two-part case (base tray + closed lid) for the
 [QMTECH XC7K325T dev board](../README.md), sized from the vendor's own
 real ECAD dimension export. Parametric OpenSCAD, FDM-print friendly (no
 supports needed).
 
-## v4: complete box, no open-top chimney
+## v4.1: the I/O is now real, not a photo guess
 
-v3 put the FPGA's real heatsink (Ohmite/Arcol BGAH270-175E, 17.5mm) under
-a raised, **open-top** chimney -- short walls everywhere else, tall vented
-stack just over the chip, no roof over it. That's wrong for an enclosure
-that has to actually close: an open top is dust/finger/liquid exposure
-over exposed FPGA pins and a heatsink, not a "case". **v4 replaces it with
-a genuinely closed box**: uniform wall height, sized so the *entire*
-interior clears the heatsink everywhere, roof intact on all sides. Where
-airflow matters, venting is a grid of small drilled holes through the
-still-solid lid -- a perforated panel, never a bore straight through to
-open air.
+v4 made the box fully enclosed (fixed) but still placed every connector
+from **estimates read off the manual's cover photo**. Going back and
+actually reading the vendor's own 5-sheet schematic
+(`QMTECH-XC7K325T-DEVELOPMENT-BOARD_SCHEMATIC_20231120_V01.pdf`) and
+their real ECAD placement export
+(`hardware/Dimension(Board_Top_View).pdf`, rendered at 600dpi and read
+directly, ref-des by ref-des) turned up real errors, not just
+imprecision:
 
-The CM4-cutout fix from v3 stays (it's a low-profile mezzanine, doesn't
-need a panel opening -- see below), and so does the square-corners fix
-from v1 (hull()-rounded corners silently broke CGAL cutout subtraction).
+- **This board has no Ethernet jack.** The schematic includes an
+  Ethernet section (HR911130A RJ45 magjack, wired straight to the CM4's
+  MDI pairs through the B2B connector) -- but no matching footprint
+  exists anywhere in the vendor's own placement drawing. It's an
+  unpopulated reference block. v4's "RJ45" cutout is **removed**.
+- **Four USB-A ports, not two.** J6 and J7 are each a stacked
+  "Dual USB-A" shell (2 ports per connector), fed by a real USB2514QFN36
+  hub chip off the CM4's single USB2 OTG line, plus a separate mini-USB
+  (J14) for OTG/debug. v4 only modeled "USB_1"/"USB_2" + one micro-USB.
+- **The I/O is spread across three walls, not one.** HDMI0/HDMI1 (P3/P4)
+  and the micro-SD slot (J9) are on the **left** wall (roughly right
+  already). But mini-USB + all 4 USB-A ports + a 100-pin GPIO expansion
+  header (JP5) are on the **bottom** wall -- v4 had zero cutouts there.
+  The DC power jack (JP1) is edge-mounted on the **top** wall -- v4 had
+  it as a lid-panel hole 20mm inset, which is wrong for a barrel jack
+  (the cable has to approach from outside the case horizontally, not
+  drop in from above).
+- **Added the JP5 GPIO header cutout.** The doc already pointed at JP5
+  as the realistic path for wiring a display/sensor (see design note 6
+  below) but v4 never actually gave it a case opening to route a cable
+  through. It has one now (`GPIO_HDR_JP5` in
+  `bottom_connector_positions_mm`).
+- **Added SW2/SW3.** Real user push-buttons already referenced in
+  `../xdc/qmtech_xc7k325t_pinout.xdc` (the IOSTANDARD fix mentioned
+  there) -- v4 didn't expose them at all. Small lid holes now.
+- The 3 general-purpose headers (J11/J12/J13, real ref-des now instead
+  of "HEADER_1/2/3") were genuinely right to be lid cutouts (pins point
+  up) -- that part of v4 stood, positions nudged once real coordinates
+  were available. The FPGA's position (`heatsink_center_mm`) was also
+  refined from "roughly the board center" to U11's real BGA footprint.
+
+Everything from v4 that wasn't about I/O positions is unchanged: fully
+enclosed box (no open-top chimney), uniform wall height sized to clear
+the real heatsink everywhere, optional venting via a perforated lid
+panel (never an opening), no CM4 panel cutout (still a low-profile
+mezzanine), square corners (still no `hull()` rounding).
 
 ## Three variants
 
 All three share one template (`VARIANT_WALL_HEIGHT` / `VARIANT_VENTED`
 knobs at the top of each `.scad`) and differ only in those two numbers.
-Pick whichever fits your cooling plan; all three fully enclose the real
-heatsink with positive clearance margin (each file `echo()`s the exact
-number when rendered).
 
 | Variant | Dir | Wall height | Venting | Heatsink margin | Use when |
 |---|---|---|---|---|---|
@@ -43,7 +71,10 @@ number when rendered).
 Each directory is self-contained:
 - `qmtech_xc7k325t_case_<variant>.scad` -- parametric source for that variant
 - `base_tray.stl` / `lid.stl` -- exported meshes, ready to slice separately
-- `preview_isometric.png` -- render showing tray (open, left) + lid (right)
+- `preview_isometric.png` -- render showing tray (open, left) + lid (right).
+  The round hole visible on the tray's near wall in these renders is the
+  DC jack (JP1) -- real evidence the wall cutout is actually being cut,
+  not silently failing (see the `hull()` bug this project hit in v1).
 
 Regenerate any of them:
 ```sh
@@ -56,8 +87,7 @@ dependencies.
 
 To make a 4th variant of your own: copy any of the three `.scad` files,
 change `VARIANT_WALL_HEIGHT`/`VARIANT_VENTED` at the top, re-render. All
-downstream geometry (chimney math is gone; wall height now feeds
-`heatsink_margin_mm` directly) recomputes from those two numbers.
+downstream geometry recomputes from those two numbers.
 
 ## Heatsink: BGAH270-175E on AliExpress
 
@@ -88,25 +118,29 @@ listing.
 
 ## Design decisions (read before printing)
 
-1. **Hole/cutout positions are still estimates.** Sourced from the QMTECH
-   manual's Figure 2-1 (160x90mm board outline) and cover-page photo, plus
-   [ChinaQMTECH/QMTECH_Kintex-7_Development_Board](https://github.com/ChinaQMTECH/QMTECH_Kintex-7_Development_Board)'s
-   real Allegro ECAD dimension export
-   (`hardware/Dimension(Board_Top_View).pdf`) for the FPGA position and
-   general header/DC-jack/switch layout -- not exact vector coordinates
-   for every feature. Every cutout is deliberately oversized
-   (`cutout_margin`) to absorb that. Adjust `lid_top_cutouts_mm`,
-   `dc_jack_center_mm`, `heatsink_center_mm`, `sensor_hole_center_mm`, or
-   `display_center_mm` and re-render if something doesn't line up once
-   you have the board.
+1. **Hole/cutout positions are read off a real, dimensioned vendor
+   drawing now, not a manual cover photo** -- see v4.1 section above for
+   what changed. Every ref-des (P3/P4, J6/J7/J9/J14, JP1/JP5, J11-J13,
+   SW2-SW4, U11) is a real component this board actually has, read off
+   `hardware/Dimension(Board_Top_View).pdf` in
+   [ChinaQMTECH/QMTECH_Kintex-7_Development_Board](https://github.com/ChinaQMTECH/QMTECH_Kintex-7_Development_Board)
+   (600dpi render) and cross-checked against the real schematic's net
+   names. Still not calipers-on-the-real-board precision -- every
+   cutout is deliberately oversized (`cutout_margin`) to absorb that.
+   Adjust `connector_positions_mm`, `bottom_connector_positions_mm`,
+   `dc_jack_x_mm`, `lid_top_cutouts_mm`, `lid_button_positions_mm`,
+   `heatsink_center_mm`, `sensor_hole_center_mm`, or `display_center_mm`
+   and re-render if something doesn't line up once you have the board.
 2. **No CM4 cutout.** The CM4 mates over two low-profile 100-pin
-   board-to-board connectors (1.5mm or 3.0mm stack height per the
-   [Raspberry Pi CM4 datasheet](https://datasheets.raspberrypi.com/cm4/cm4-datasheet.pdf)),
+   board-to-board connectors (JP2/JP3, 1.5mm or 3.0mm stack height per
+   the [Raspberry Pi CM4 datasheet](https://datasheets.raspberrypi.com/cm4/cm4-datasheet.pdf)),
    module itself 4.7mm thick -- **total ~6.2-7.7mm above the carrier
-   board.** Fully internal, low-profile mezzanine; its HDMI/USB/
-   Ethernet/etc. are already broken out to *this* board's own edge
-   connectors (`left_edge_cutouts()` handles those). No panel opening
-   needed.
+   board.** Fully internal, low-profile mezzanine; its HDMI/USB/SD/GPIO
+   signals all route through JP2/JP3 to *this* board's own real
+   connectors (P3/P4/J6/J7/J9/J14/JP5), which the three wall-cutout
+   modules (`left_edge_cutouts()`, `bottom_edge_cutouts()`,
+   `top_edge_cutouts()`/`top_edge_dc_jack()`) handle. No panel opening
+   needed for JP2/JP3 themselves.
 3. **Heatsink math is traceable, not a magic number.**
    `heatsink_total_clearance_mm` is the BGAH270-175E's real 17.5mm height
    plus a chip/thermal-pad allowance and an assembly margin.
@@ -125,40 +159,50 @@ listing.
    uses and verified on real hardware -- a different Cyclone V SoC board,
    not this Kintex-7 one. **No RTL or driver software for either exists
    anywhere in this repo** -- this case only adds the physical mounting.
-   Wiring a display needs more signal lines (CS/DC/RST/SCLK/MOSI/MISO +
-   touch CS/IRQ) than the 4 spare CM4 GPIO lines
-   (`hdl/odocrypt_gpio_wrapper.v` uses GPIO0-23) provide, so the realistic
-   path is the board's 50-pin extension header (JP5) -- not attempted
-   here.
-6. **Board retention and standoffs**: a perimeter lip is the primary
+6. **Display/sensor wiring path: JP5, and it now has a case opening.**
+   Wiring the display needs more signal lines (CS/DC/RST/SCLK/MOSI/MISO
+   + touch CS/IRQ) than the 4 spare CM4 GPIO lines
+   (`hdl/odocrypt_gpio_wrapper.v` uses GPIO0-23) provide, so the
+   realistic path is the board's real 100-pin GPIO expansion header
+   (JP5, on the bottom wall, confirmed to actually exist and be that
+   size from the ECAD drawing) -- `GPIO_HDR_JP5` in
+   `bottom_connector_positions_mm` gives it a real cutout to route a
+   cable through. No RTL/driver exists yet either way.
+7. **Board retention and standoffs**: a perimeter lip is the primary
    retention (works regardless of where the real mounting holes are), 4
    corner standoffs are a secondary generic-default fixation, not
    transcribed with confidence from any dimension drawing.
-7. **Lid attachment**: a friction-fit alignment skirt seats inside the
+8. **Lid attachment**: a friction-fit alignment skirt seats inside the
    tray's top opening, secured by 4 corner screws (M3 self-tap or
    heat-set insert) into full-height bosses, separate from the shorter
    board-support standoffs.
-8. **Square corners.** `hull()`-based rounding previously produced CGAL
+9. **Square corners.** `hull()`-based rounding previously produced CGAL
    boolean geometry where cutout subtraction silently didn't intersect --
    confirmed by A/B vertex-count testing back in v1. These files never
    use rounding.
-9. **Bugs caught and fixed during development** (all verified
-   numerically -- vertex/facet/Volumes counts from `--render -o file.stl`
-   -- not just visually):
-   - v2: a fusion bug (lid skirt / display standoffs touching the lid
-     panel at an exact coincident Z-plane instead of genuinely
-     overlapping) -- fixed with `fuse_eps` overlaps.
-   - v2: a layout bug -- the first draft's flat ventilation grille and
-     sensor hole overlapped the (now-removed) CM4 cutout's footprint.
-   - v3: repositioning the display after removing the CM4 cutout and
-     adding the (now also removed) chimney required re-deriving free
-     space from scratch, done with explicit coordinate range checks.
-   - v4: confirmed the vent-hole grid actually cuts material (Vented
-     variant: 3072 vertices vs Sealed's 1920, i.e. the holes are real
-     geometry, not a no-op) and that `heatsink_margin_mm` stays positive
-     for both wall heights (Sealed/Vented: 3.9mm; Tall-XL: 15.9mm).
-10. **Print a fit-check first** -- these are estimates, better-sourced
-    than v1/v2 but still estimates.
+10. **Bugs caught and fixed during development** (all verified
+    numerically -- vertex/facet/Volumes counts from `--render -o file.stl`
+    -- not just visually):
+    - v2: a fusion bug (lid skirt / display standoffs touching the lid
+      panel at an exact coincident Z-plane instead of genuinely
+      overlapping) -- fixed with `fuse_eps` overlaps.
+    - v2: a layout bug -- the first draft's flat ventilation grille and
+      sensor hole overlapped the (now-removed) CM4 cutout's footprint.
+    - v3: repositioning the display after removing the CM4 cutout and
+      adding the (now also removed) chimney required re-deriving free
+      space from scratch, done with explicit coordinate range checks.
+    - v4: confirmed the vent-hole grid actually cuts material and that
+      `heatsink_margin_mm` stays positive for both wall heights.
+    - v4.1: confirmed with the same A/B vertex-count method that
+      disabling the new bottom-wall cutouts changes the tray's vertex
+      count (1370 -> 1338) -- a real cut, not a silent no-op. Adjacent
+      cutouts (mini-USB + the two dual-USB-A connectors, spaced only a
+      few mm apart with `cutout_margin` on each) merge into one
+      continuous slot rather than three separate windows -- expected
+      given how close J14/J6/J7 sit to each other on the real board, not
+      a bug; some enclosures do this deliberately for a USB cluster.
+11. **Print a fit-check first** -- see design note 1, still not
+    calipers-verified.
 
 ## Print settings
 
@@ -175,7 +219,16 @@ this close to one, especially in the Sealed variant with no venting.
 - **v3**: removed the unnecessary CM4 cutout, replaced the guessed wall
   height with a real heatsink part (BGAH270-175E) driving a short case +
   raised open-top vented chimney over the FPGA.
-- **v4 (current)**: replaced the open-top chimney with a genuinely closed
-  box -- uniform height sized to clear the heatsink everywhere, optional
+- **v4**: replaced the open-top chimney with a genuinely closed box --
+  uniform height sized to clear the heatsink everywhere, optional
   venting via a perforated lid panel instead of an opening. Three
   variants (Sealed / Vented / Tall-XL) instead of one fixed geometry.
+  I/O cutouts were still estimates read off a manual photo, all on one
+  wall.
+- **v4.1 (current)**: replaced the estimated I/O with real positions
+  read from the vendor's own schematic + ECAD placement drawing. Removed
+  a nonexistent RJ45 port, added the 2 missing USB-A ports, split
+  cutouts across the 3 walls the real connectors are actually on, moved
+  the DC jack from a lid hole to an edge-mounted wall hole, and added
+  the JP5 GPIO header window and SW2/SW3 button holes that were missing
+  entirely.
