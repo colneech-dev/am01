@@ -68,6 +68,17 @@
 //      - Added SW2/SW3 (real user push-buttons, already referenced in
 //        ../xdc/qmtech_xc7k325t_pinout.xdc) as small lid holes -- v4
 //        didn't expose these at all.
+//      - WALLS WEREN'T ACTUALLY FULL SIDES. Every wall cutout back to
+//        v1 cut Z-height "wall_height + cutout_margin + 2" -- taller
+//        than the wall itself, so every cutout notched through to the
+//        wall's own top edge instead of being an enclosed window with
+//        solid material above it. Harmless-looking with 1-2 small
+//        cutouts; glaring once the real bottom wall got 4 cutouts,
+//        several merging into one big open notch. Fixed: each cutout
+//        now uses a real connector body height (4th field in the
+//        position tables) and is capped by wall_cutout_h() so it never
+//        eats into the last wall_roof_min_mm of the wall -- every side
+//        keeps a genuinely continuous, full top edge.
 //    Every position below is still oversized by cutout_margin -- these
 //    are read off a dimensioned drawing now, not a photo, but "read off
 //    a drawing" still isn't "measured with calipers on the real board".
@@ -225,11 +236,17 @@ cutout_margin = 3.0;
 
 // LEFT wall (x=0, board_width=90mm long): HDMI0 (P3) and HDMI1 (P4),
 // both Type-A jacks mounted flush to this edge stacked vertically, plus
-// the micro-SD slot (J9) below them. [name, y_center, height]
+// the micro-SD slot (J9) below them. [name, y_center, footprint_len,
+// cutout_height_above_board] -- the 4th field caps how tall the cutout
+// is, so it stays a real enclosed window instead of notching all the
+// way up to the wall's own top edge (that was v1-v4's behavior on every
+// wall cutout: "not full sides" -- fixed here, see design note 0b).
+// Heights are generous-but-realistic connector body heights, not a
+// datasheet measurement.
 connector_positions_mm = [
-    ["HDMI0_P3",    22, 16],
-    ["HDMI1_P4",    41, 16],
-    ["MICRO_SD_J9", 65, 14],
+    ["HDMI0_P3",    22, 16, 13],
+    ["HDMI1_P4",    41, 16, 13],
+    ["MICRO_SD_J9", 65, 14,  5],
 ];
 
 // BOTTOM wall (y=board_width, board_length=160mm long): mini-USB (J14,
@@ -238,12 +255,12 @@ connector_positions_mm = [
 // line) then the 100-pin GPIO expansion header (JP5) -- a real, wide
 // window so a display/sensor cable can actually route out through it
 // (see design note 6). v4 had NONE of this: zero cutouts on this wall.
-// [name, x_center, width]
+// [name, x_center, width, cutout_height_above_board]
 bottom_connector_positions_mm = [
-    ["MINI_USB_J14",  14, 12],
-    ["USB_A_J6",      31, 18],   // 2 stacked USB-A ports
-    ["USB_A_J7",      51, 18],   // 2 more stacked USB-A ports
-    ["GPIO_HDR_JP5", 119, 58],
+    ["MINI_USB_J14",  14, 12,  6],
+    ["USB_A_J6",      31, 18, 17],   // 2 stacked USB-A ports
+    ["USB_A_J7",      51, 18, 17],   // 2 more stacked USB-A ports
+    ["GPIO_HDR_JP5", 119, 58, 12],   // cable pass-through, not a connector body
 ];
 
 // TOP wall (y=0, board_length=160mm long): DC barrel jack (JP1) only --
@@ -356,24 +373,41 @@ module retaining_lip_ridge() {
     }
 }
 
+// Every wall cutout below is capped so it stays a real enclosed window,
+// not a notch cut through to the wall's own top edge (that was v1-v4's
+// behavior on every wall cutout -- "not full sides": walls looked open/
+// notched rather than solid with discrete windows in them, especially
+// once the real bottom-wall connectors got added). z0 starts a little
+// below the board's resting surface (same -cutout_margin allowance as
+// before); the height is the connector's real-ish body height plus
+// margin on both ends, but never allowed to eat into wall_roof_min_mm
+// of solid material below the wall's actual top -- so every wall keeps
+// a full, continuous top edge above its windows.
+wall_roof_min_mm = 3.0;
+function wall_cutout_z0() = lip_z - cutout_margin;
+function wall_cutout_h(body_h) =
+    min(body_h + 2*cutout_margin,
+        (tray_height - wall_roof_min_mm) - wall_cutout_z0());
+
 module left_edge_cutouts() {
     for (c = connector_positions_mm) {
         y_center = board_origin[1] + c[1];
         h = c[2] + 2*cutout_margin;
-        translate([-1, y_center - h/2, lip_z - cutout_margin])
-            cube([wall_thickness + 2, h, wall_height + cutout_margin + 2]);
+        translate([-1, y_center - h/2, wall_cutout_z0()])
+            cube([wall_thickness + 2, h, wall_cutout_h(c[3])]);
     }
 }
 
 // BOTTOM wall (y=outer_width side): mini-USB, 2x dual-USB-A, GPIO
 // expansion header -- see bottom_connector_positions_mm above. Same
-// oversized-rectangle-through-the-wall approach as left_edge_cutouts().
+// oversized-rectangle-through-the-wall approach as left_edge_cutouts(),
+// now also height-capped the same way.
 module bottom_edge_cutouts() {
     for (c = bottom_connector_positions_mm) {
         x_center = board_origin[0] + c[1];
         w = c[2] + 2*cutout_margin;
-        translate([x_center - w/2, outer_width - wall_thickness - 1, lip_z - cutout_margin])
-            cube([w, wall_thickness + 2, wall_height + cutout_margin + 2]);
+        translate([x_center - w/2, outer_width - wall_thickness - 1, wall_cutout_z0()])
+            cube([w, wall_thickness + 2, wall_cutout_h(c[3])]);
     }
 }
 
@@ -385,8 +419,8 @@ module top_edge_cutouts() {
     for (c = top_connector_positions_mm) {
         x_center = board_origin[0] + c[1];
         w = c[2] + 2*cutout_margin;
-        translate([x_center - w/2, -1, lip_z - cutout_margin])
-            cube([w, wall_thickness + 2, wall_height + cutout_margin + 2]);
+        translate([x_center - w/2, -1, wall_cutout_z0()])
+            cube([w, wall_thickness + 2, wall_cutout_h(c[3])]);
     }
 }
 

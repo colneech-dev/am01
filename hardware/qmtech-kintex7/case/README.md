@@ -46,6 +46,20 @@ imprecision:
   up) -- that part of v4 stood, positions nudged once real coordinates
   were available. The FPGA's position (`heatsink_center_mm`) was also
   refined from "roughly the board center" to U11's real BGA footprint.
+- **Walls weren't actually full sides.** Every wall cutout, all the way
+  back to v1, cut a Z-height of `wall_height + cutout_margin + 2` --
+  taller than the wall itself, so every cutout notched through to the
+  wall's own top edge instead of sitting inside a solid, continuous
+  wall. Easy to miss with 1-2 small cutouts on one wall; obvious once
+  the real bottom wall got 4 connectors, several of them merging into
+  one big open notch spanning almost half the wall. **Fixed:** each
+  cutout now uses a real connector body height (a 4th field in the
+  position tables) and is capped by `wall_cutout_h()` so it never eats
+  into the last `wall_roof_min_mm` (3mm) of the wall -- every side now
+  keeps a genuinely continuous, full top edge, confirmed by rendering
+  each wall from directly outside (see `v4-sealed/preview_bottomwall_detail.png`:
+  both bottom-wall windows sit inside solid material on every side, not
+  notched open at the top).
 
 Everything from v4 that wasn't about I/O positions is unchanged: fully
 enclosed box (no open-top chimney), uniform wall height sized to clear
@@ -201,6 +215,13 @@ listing.
       continuous slot rather than three separate windows -- expected
       given how close J14/J6/J7 sit to each other on the real board, not
       a bug; some enclosures do this deliberately for a USB cluster.
+    - v4.1 (2nd pass): every wall cutout back to v1 notched through to
+      the wall's own top edge instead of stopping inside solid material
+      -- "not full sides". Fixed by capping cutout height with
+      `wall_cutout_h()`; confirmed by rendering each wall from directly
+      outside the case (not just the usual isometric angle) --
+      `v4-sealed/preview_bottomwall_detail.png` shows both bottom-wall
+      windows sitting inside solid material on every side.
 11. **Print a fit-check first** -- see design note 1, still not
     calipers-verified.
 
@@ -231,4 +252,9 @@ this close to one, especially in the Sealed variant with no venting.
   cutouts across the 3 walls the real connectors are actually on, moved
   the DC jack from a lid hole to an edge-mounted wall hole, and added
   the JP5 GPIO header window and SW2/SW3 button holes that were missing
-  entirely.
+  entirely. A second pass on the same version fixed a longer-standing
+  bug found while doing this: every wall cutout since v1 notched through
+  to the wall's own top edge instead of stopping inside solid material,
+  so the sides weren't actually full/continuous once there were several
+  cutouts on one wall. Capped now -- every wall keeps solid material
+  above (and around) every window.
