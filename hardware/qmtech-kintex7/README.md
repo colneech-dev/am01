@@ -86,17 +86,53 @@ while the block RAM idles at a fraction of its rating.
 
 So BRAM is nowhere near the limiter; the fabric path is.
 
+**MEASURED (nextpnr STA, post-placement, single instance):**
+
+```
+Max frequency for clock 'bus_clk': 246.00 MHz  (PASS at 150 MHz)
+Max frequency for clock   'clk_h': 135.04 MHz  (FAIL at 150 MHz)
+```
+
+`clk_h` is the hash clock. At `THROUGHPUT=4` that is `135.04 / 4` =
+**33.8 MH/s per instance**:
+
 | Scenario | Fmax | Hashrate |
 |---|---|---|
-| 1 instance @ 150MHz (**today's RTL** — half the BRAM unused) | 150 | 37.5 MH/s |
-| 2 instances @ 150MHz (BRAM filled) | 150 | 75 MH/s |
-| 2 instances, Kintex-7 -1 at ~1.5x Cyclone-V fabric | ~240 | **~120 MH/s** |
-| 6 instances, restructured to UNROLLING=1 | ~300 | **~150 MH/s** |
+| 1 instance @ measured 135 MHz (half the BRAM idle) | 135 | 33.8 MH/s |
+| **2 instances @ measured 135 MHz (BRAM filled)** | **135** | **~67.5 MH/s** |
+| 2 instances if Vivado closes at 200 MHz | 200 | 100 MH/s |
 | Hard BRAM ceiling (bounds the problem; not reachable) | 458 | 229 MH/s |
 
-**Realistic target for this board: ~120-150 MH/s.**
+**Best current estimate for this board: ~67.5 MH/s.**
 
-### Why the old Cyclone-V figure understated this badly
+### The earlier projection here was too optimistic — by about 2x
+
+A previous revision of this section projected 150-300 MHz and
+"~120-150 MH/s", reasoning that a Kintex-7 -1 would clock roughly 1.5x a
+Cyclone V. **Measurement does not support that.** odo-miner-cyclonev
+measured Fmax 162 MHz on this same core; this Kintex-7 -1 measures
+135 MHz. For this design, on this flow, **the Kintex-7 clocks lower than
+the Cyclone V did.**
+
+That is less contradictory than it looks. The Kintex-7 is genuinely the
+bigger part — more BRAM, ~50% more logic cells, block RAM rated to
+458 MHz — but capacity and frequency are different axes. None of that
+extra capacity shortens the critical path, which runs through a BRAM
+S-box lookup plus three unrolled keccak rounds (`UNROLLING=3` at
+`THROUGHPUT=4`). The capacity is what the 2-instance build spends, and
+that is a real 2x; it just does not buy any clock.
+
+Two qualifications on the 135 MHz, in both directions:
+
+- **It is nextpnr's STA, not Vivado's.** Open-source PnR generally has
+  worse QoR than vendor tools, so Vivado on the same silicon could
+  plausibly close higher. Treat it as a floor for this flow, not the
+  part's ceiling. (The 200 MHz row above is illustrative of that, not a
+  measurement.)
+- **It is post-placement.** Routing normally degrades timing, so the
+  final routed figure is likely at or below 135 MHz.
+
+### Why the Cyclone-V anchor was still the wrong method
 
 An earlier revision of this doc derived the number from
 [odo-miner-cyclonev](https://github.com/colneech-dev/odo-miner-cyclonev),
@@ -105,21 +141,27 @@ which runs this same core on real hardware at 156.25MHz / THROUGHPUT 6 =
 that project's measured rate confirms the model). That gave "37.5 MH/s
 per instance, ~75 MH/s for two".
 
-**That anchor was wrong to use.** Cyclone V is Intel's *low-cost* family;
-Kintex-7 is Xilinx's *mid-range performance* family — Kintex-7's peer is
-Arria V, not Cyclone V. Anchoring to it understated this board by roughly
-2x. The figures above are derived from this part's own datasheet limits
-and from synthesis measurements on this chip.
+Cyclone V is Intel's *low-cost* family and Kintex-7 is Xilinx's
+*mid-range performance* family (its peer is Arria V), so reasoning
+"bigger family, therefore faster clock" felt safe. **It wasn't.** The
+method was wrong even though, by luck, the Cyclone-V-derived number
+(75 MH/s for two instances) landed much closer to the measured ~67.5
+MH/s than the "corrected" 120-150 MH/s did.
+
+The lesson worth keeping: family class predicts *capacity*, not the
+critical path of a specific pipeline. Only STA on the actual design
+settles frequency — which is what the numbers above now are.
 
 ### Caveats — read before quoting any of these numbers
 
-1. **No STA has ever run on this chip.** Place-and-route has never
-   completed for this design (see `openxc7/README.md`), so every Fmax
-   above is datasheet-bounded reasoning, not a timing result. Fabric
-   Fmax is the one number with no measurement behind it.
-2. **Multi-instance arbitration does not exist yet.** Until it does the
-   board is stuck at one instance using 47% of its BRAM — i.e. the same
-   ~37.5 MH/s as the stock AM01, with the Kintex-7 buying nothing.
+1. **The Fmax above is nextpnr's STA, not Vivado's, and is
+   post-placement.** Place-and-route now completes (it did not before —
+   the blocker was a fixed upstream bug, see `openxc7/README.md` §2), so
+   this is a real measurement rather than an extrapolation. But
+   open-source PnR generally has worse QoR than vendor tools, and
+   routing typically degrades timing further. Floor, not ceiling.
+2. **Nothing here has run on real silicon.** No bitstream has been
+   flashed to the board.
 3. **THROUGHPUT is not a knob you can just turn.** `encrypt.v` is a
    ~15,000-line *generated* file with `THROUGHPUT = 4` baked in, and it
    is regenerated per OdoCrypt epoch (the algorithm mutates every 10
