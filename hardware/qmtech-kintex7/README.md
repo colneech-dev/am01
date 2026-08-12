@@ -48,21 +48,82 @@ binding resource for parallel hash-core instances (211 tiles/instance per
 `exmaples/odocrypt/fpga/utilization.txt`), so this chip fits **~2
 instances (~2x hashrate)** vs. today's single instance on the AM01.
 
-**A real cross-referenced hashrate number, not a guess:** `miner.v` here
-*is* the upstream `THROUGHPUT 4` pipelined `odo_encrypt` core (MentalCollatz,
-the same design [colneech-dev/odo-miner-cyclonev](https://github.com/colneech-dev/odo-miner-cyclonev)
-ported to a QMTECH Cyclone V SoC board). That project's Quartus build of
-this exact core hit **Fmax = 162.1MHz** on comparable-class fabric (~110K
-LE) and is deployed on real hardware at **156.25MHz → 26.0 MH/s**
-(`THROUGHPUT` was later raised to 6 there for a co-fit tradeoff; the
-upstream reference point is 150MHz/`THROUGHPUT=4` → **37.5 MH/s per
-instance**). `clk_gen_hash.v` targets that 150MHz reference clock — Xilinx
-7-series -1 speed grade should have at least as much timing headroom as
-that Cyclone V part, but this is still a cross-vendor estimate, not a
-Vivado STA result for this wrapper on this XC7K325T. At 2 instances (BRAM-
-bound, per above) that's a ballpark **~75MH/s**, *if* someone builds the
-multi-instance arbitration `odocrypt_gpio_wrapper.v` doesn't have yet (it
-drives one `miner_top`) — treat this as a target to verify, not a promise.
+## Expected hashrate — derived from this part, not extrapolated
+
+**Total hashrate is BRAM-bound, and works out to `≈ 0.5 x Fmax` once the
+chip's block RAM is fully used.** Everything else follows from that.
+
+Where the BRAM goes (measured, `yosys synth_xilinx` targeting this chip,
+not estimated): all 420 RAMB18 of one hash instance are OdoCrypt's large
+S-boxes — `encrypt_4sbox_large0..9`, one BRAM each, x42 encrypt blocks.
+Logic is almost idle by comparison: **30,022 LC = 9% of 326,080**, and
+**zero** of the 840 DSP48s. This design is BRAM-starved and logic-rich.
+
+`keccak800.v` sets `UNROLLING = (12-1)/THROUGHPUT + 1`, and BRAM scales
+with unrolling — measured 420 RAMB18 at UNROLLING=3, i.e. **140 RAMB18
+per unrolled round**. The XC7K325T has **890 RAMB18** (445 x RAMB36):
+
+| THROUGHPUT | UNROLLING | BRAM/inst | Instances that fit | Total rate |
+|---|---|---|---|---|
+| 4 (what `encrypt.v` hardcodes) | 3 | 420 | 2 | 0.50 x Fmax |
+| 6 | 2 | 280 | 3 | 0.50 x Fmax |
+| 12 | 1 | 140 | 6 | 0.50 x Fmax |
+
+Note every row lands on the same total. **Tuning THROUGHPUT alone buys
+nothing** — the BRAM budget fixes the ceiling. The clock is the only
+lever, and the clock is limited by combinational depth, which UNROLLING
+sets. So THROUGHPUT=4 is arguably the *worst* operating point available
+here: it runs the deepest logic path (3 keccak rounds between registers)
+while the block RAM idles at a fraction of its rating.
+
+**What this part is actually rated for** (Kintex-7 datasheet ds182,
+**-1** speed grade — the grade on this board's XC7K325T-1FFG676C):
+
+| | -1 grade limit |
+|---|---|
+| Block RAM `FMAX_BRAM` | **458 MHz** |
+| DSP48E1 `FMAX` (all registers) | 548 MHz |
+
+So BRAM is nowhere near the limiter; the fabric path is.
+
+| Scenario | Fmax | Hashrate |
+|---|---|---|
+| 1 instance @ 150MHz (**today's RTL** — half the BRAM unused) | 150 | 37.5 MH/s |
+| 2 instances @ 150MHz (BRAM filled) | 150 | 75 MH/s |
+| 2 instances, Kintex-7 -1 at ~1.5x Cyclone-V fabric | ~240 | **~120 MH/s** |
+| 6 instances, restructured to UNROLLING=1 | ~300 | **~150 MH/s** |
+| Hard BRAM ceiling (bounds the problem; not reachable) | 458 | 229 MH/s |
+
+**Realistic target for this board: ~120-150 MH/s.**
+
+### Why the old Cyclone-V figure understated this badly
+
+An earlier revision of this doc derived the number from
+[odo-miner-cyclonev](https://github.com/colneech-dev/odo-miner-cyclonev),
+which runs this same core on real hardware at 156.25MHz / THROUGHPUT 6 =
+26.0 MH/s (the arithmetic is exactly `clock / THROUGHPUT`, which is how
+that project's measured rate confirms the model). That gave "37.5 MH/s
+per instance, ~75 MH/s for two".
+
+**That anchor was wrong to use.** Cyclone V is Intel's *low-cost* family;
+Kintex-7 is Xilinx's *mid-range performance* family — Kintex-7's peer is
+Arria V, not Cyclone V. Anchoring to it understated this board by roughly
+2x. The figures above are derived from this part's own datasheet limits
+and from synthesis measurements on this chip.
+
+### Caveats — read before quoting any of these numbers
+
+1. **No STA has ever run on this chip.** Place-and-route has never
+   completed for this design (see `openxc7/README.md`), so every Fmax
+   above is datasheet-bounded reasoning, not a timing result. Fabric
+   Fmax is the one number with no measurement behind it.
+2. **Multi-instance arbitration does not exist yet.** Until it does the
+   board is stuck at one instance using 47% of its BRAM — i.e. the same
+   ~37.5 MH/s as the stock AM01, with the Kintex-7 buying nothing.
+3. **THROUGHPUT is not a knob you can just turn.** `encrypt.v` is a
+   ~15,000-line *generated* file with `THROUGHPUT = 4` baked in, and it
+   is regenerated per OdoCrypt epoch (the algorithm mutates every 10
+   days). Changing it means re-running the upstream generator.
 
 Board specifics that matter for this design (from the manual):
 - On-board 50MHz crystal, `SYS_CLK_F22` (ball **F22** by the schematic's

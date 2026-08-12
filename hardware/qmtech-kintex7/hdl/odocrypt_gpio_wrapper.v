@@ -42,7 +42,14 @@
 //
 `timescale 1ns / 1ps
 
-module odocrypt_gpio_wrapper (
+module odocrypt_gpio_wrapper #(
+    // Number of parallel hash-core instances. BRAM-bound on this chip:
+    // one instance = 420 RAMB18 of the XC7K325T's 890 (measured), so 2
+    // fills the budget at 94% and 3 does not fit. Set to 1 to get the
+    // original single-core behaviour back. See ../README.md
+    // "Expected hashrate" for the derivation.
+    parameter integer NUM_MINERS = 2
+) (
     // ---------------------------------------------------------------
     // Bus clock domain -- the board's onboard 50MHz crystal
     // (sys_clk_50m in the .xdc), or an MMCM-derived clock from it.
@@ -358,14 +365,58 @@ module odocrypt_gpio_wrapper (
         .sha_host_break(host_break_debounced)
     );
 
-    miner_top miner_top_inst (
-        .osc_clk    (clk_h),
-        .header     (header),
-        .target     (target),
-        .start_hash (start_hash_h),
-        .ticket2moon(ticket2moon),
-        .nonce      (golden_nonce_h)
-    );
+    // -----------------------------------------------------------------
+    // Hash-core bank. NUM_MINERS instances share one work item, each
+    // sweeping its own slice of the 32-bit nonce space via NONCE_BASE.
+    //
+    // Why more than one: a single instance uses 420 RAMB18 of this
+    // chip's 890 (measured -- they are OdoCrypt's large S-boxes), i.e.
+    // it leaves nearly half the block RAM idle while using only ~9% of
+    // the logic. Total hashrate here is BRAM-bound at roughly
+    // 0.5 x Fmax, and one instance only reaches half of that. See
+    // ../README.md "Expected hashrate".
+    //
+    // NUM_MINERS=2 fills the BRAM budget (2 x 420 = 840 of 890, 94%).
+    // Do not raise it without re-checking that number -- going over
+    // simply fails to fit.
+    // -----------------------------------------------------------------
+    wire [NUM_MINERS-1:0] t2m_arr;
+    wire [31:0]           nonce_arr [0:NUM_MINERS-1];
+
+    genvar gi;
+    generate
+        for (gi = 0; gi < NUM_MINERS; gi = gi + 1) begin : g_miner
+            miner_top #(
+                // Even split of the nonce space: instance gi sweeps
+                // [gi*span, (gi+1)*span). For NUM_MINERS=2 that is
+                // 0x00000000 and 0x80000000.
+                .NONCE_BASE(gi * ((32'hFFFFFFFF / NUM_MINERS) + 32'h1))
+            ) miner_top_inst (
+                .osc_clk    (clk_h),
+                .header     (header),
+                .target     (target),
+                .start_hash (start_hash_h),
+                .ticket2moon(t2m_arr[gi]),
+                .nonce      (nonce_arr[gi])
+            );
+        end
+    endgenerate
+
+    // Any instance finding a solution raises the shared ticket2moon.
+    assign ticket2moon = |t2m_arr;
+
+    // Pick the winning instance's nonce. If two hit on the same cycle
+    // the lower index wins and the other is lost -- the same
+    // single-latch limitation ../README.md already documents for
+    // back-to-back solves, not a new one introduced by the bank.
+    integer mi;
+    reg [31:0] golden_nonce_mux;
+    always @* begin
+        golden_nonce_mux = nonce_arr[0];
+        for (mi = NUM_MINERS - 1; mi >= 0; mi = mi - 1)
+            if (t2m_arr[mi]) golden_nonce_mux = nonce_arr[mi];
+    end
+    assign golden_nonce_h = golden_nonce_mux;
 
     // -----------------------------------------------------------------
     // ticket2moon qualification -- must match atomminer_odocrypt.v.

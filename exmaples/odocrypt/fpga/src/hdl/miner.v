@@ -72,6 +72,12 @@ module odo_keccak(clk, in, read, target, out, write);
 endmodule
 
 module miner(clk, header, target, start_hash, res, nonce);
+	// NONCE_BASE lets several miner instances share one work item by
+	// each sweeping a different slice of the 32-bit nonce space. Default
+	// 0 reproduces the original single-instance behaviour exactly, so
+	// existing instantiations (atomminer_odocrypt.v) are unaffected.
+	parameter [31:0] NONCE_BASE = 32'h0;
+
 	input clk;
 	input [607:0] header;
 	input [255:0] target;
@@ -79,8 +85,8 @@ module miner(clk, header, target, start_hash, res, nonce);
 	output wire res;
 	output reg [31:0] nonce;
 
-	reg [31:0] nonce_in = 32'h0;
-	reg [31:0] nonce_out = 32'h0;
+	reg [31:0] nonce_in = NONCE_BASE;
+	reg [31:0] nonce_out = NONCE_BASE;
 
 	reg [6:0] counter;
 	reg advance;
@@ -111,11 +117,11 @@ module miner(clk, header, target, start_hash, res, nonce);
 			advance <= 0;
 		end
 		if (~start_hash)
-			nonce_in <= 32'h0;
+			nonce_in <= NONCE_BASE;
 		else if (advance & start_hash)
 			nonce_in <= nonce_in + 1;
 		if (~start_hash)
-			nonce_out <= 32'h0;
+			nonce_out <= NONCE_BASE;
 		else if (has_res & start_hash & nonce_out_go)
 		begin
 			if (res) nonce <= nonce_out;
@@ -134,6 +140,9 @@ always @ (posedge clk)
 endmodule
 
 module miner_top(osc_clk, header, target, start_hash, ticket2moon, nonce);
+	// See miner's NONCE_BASE -- defaulted, so existing users are unchanged.
+	parameter [31:0] NONCE_BASE = 32'h0;
+
 	input osc_clk;
 	input [607:0] header;
 	input [255:0] target;
@@ -146,7 +155,7 @@ module miner_top(osc_clk, header, target, start_hash, ticket2moon, nonce);
 	wire res;
 	assign miner_clk = osc_clk;
 
-	miner miner (miner_clk, header, target, start_hash, res, nonce);
+	miner #(.NONCE_BASE(NONCE_BASE)) miner (miner_clk, header, target, start_hash, res, nonce);
 	
 	assign ticket2moon = res;
 	
