@@ -189,8 +189,16 @@ across the clock-domain crossing without needing a heavier CDC FIFO.
   `am01_gpio_bus.[ch]` (the library) + `am01_bus_test.c` (bring-up CLI) +
   `Makefile`. See its own README for build/run instructions.
 - `case/` — a parametric OpenSCAD 3D-printable case for the QMTECH board
-  itself (open-top tray with connector cutouts). See its own README for
-  the design assumptions and print notes.
+  itself: a fully enclosed two-part box (tray + lid) in three variants
+  (sealed / vented / tall-XL), sized around a real BGA heatsink, with
+  connector cutouts on the three walls the board's I/O actually uses.
+  See its own README for the design assumptions and print notes.
+- `openxc7/` — **Vivado-free build flow, verified to produce a real
+  `.bit` for this board's exact chip.** Scripts to generate the
+  Kintex-7 chipdb (which no toolchain ships prebuilt) and run
+  yosys → nextpnr-xilinx → fasm2frames → xc7frames2bit, plus a smoke-test
+  design. See its README — there are two gotchas that will otherwise cost
+  you a day.
 
 ## What's still needed before this is real hardware
 
@@ -208,26 +216,49 @@ verification against real parts, not more design work:
    build of the same `miner.v` core, see above) rather than an arbitrary
    guess, but it's still not a Vivado STA result for this exact wrapper —
    re-verify and retune once you can synthesize it.
-3. **Verify the GPIO bank/voltage** for the 28 CM4-linked balls against
-   the QMTECH schematic before flashing. One IOSTANDARD bug already
-   caught and fixed this way: the manual's schematic shows `SW2`/`SW3`
-   pulled up to **1.8V**, not the board's global 3.3V default — the .xdc
-   now uses `LVCMOS18` for those two. The `DATA`/`ADDR`/control lines
-   still assume the stated 3.3V default and haven't been checked against
-   a per-ball bank table.
+3. ~~Verify the GPIO bank/voltage for the 28 CM4-linked balls~~ — **done**,
+   against the vendor's own schematic and prjxray-db's package data rather
+   than the manual. Results (details in `xdc/qmtech_xc7k325t_pinout.xdc`'s
+   header):
+   - All 30 `PACKAGE_PIN`s in the .xdc are **real balls** on ffg676,
+     checked against `package_pins.csv` for `xc7k325tffg676-1`.
+   - Bank rails, from schematic sheet 4's `U11Q` VCCO block: banks
+     **0/13/14/15/16 → 3V3**, bank **12 → VCCO_12** (itself tied to 3V3
+     through the 0R links R31/R32), banks **32/33 → 1V8**, bank
+     **34 → 1V5**. The 1V8/1V5 banks are the DDR3 interface, which this
+     variant doesn't use.
+   - Every signal this .xdc constrains lands in banks 12–16, i.e. all on
+     3.3V rails, so **`LVCMOS33` throughout is correct**.
+   - **A previous revision of this repo got this wrong**: it set
+     `SW2`/`SW3` to `LVCMOS18`, claiming their pull-ups went to 1.8V.
+     They actually go to `VCCO_12`, which is 3V3 — and both balls (U26,
+     V26) are in bank 12, whose VCCO *is* that same rail. Wrong on two
+     independent counts; corrected to `LVCMOS33`. (Declaring a 1.8V
+     standard on a 3.3V-powered bank is a Vivado DRC error, and a
+     reliability problem if forced through.)
 4. ~~New Vivado project~~ — done: `vivado/build.tcl` scaffolds it from the
    command line (no IP Integrator block design; clocking is hand-written
    MMCME2_BASE in `hdl/clk_gen_hash.v`). Not run against real Vivado as
    part of this repo (no license/install in this environment), so treat
-   it as unverified until someone runs it. **[openXC7](https://github.com/openXC7)**
-   is worth a look as a free/open alternative to Vivado for this part —
-   it's a Yosys + nextpnr-xilinx toolchain that explicitly lists Kintex-7
-   (including the 325T) among its supported families, which would let
-   this whole variant be built without a Vivado license at all. Not
-   evaluated here; the `.xdc`/RTL in this repo were written assuming
-   Vivado's constraint syntax and 7-series primitive names (`MMCME2_BASE`,
-   `IBUF`, `BUFG`), which should be broadly compatible but hasn't been
-   tried against openXC7's flow specifically.
+   it as unverified until someone runs it.
+
+   **This matters more than it looks, because there is no free Vivado for
+   this chip.** Vivado ML Standard (the free tier, ex-WebPACK) covers
+   Artix-7, Spartan-7, some Zynq-7000 and only the *smaller* Kintex-7
+   parts — the XC7K325T needs a paid licence (~$4,395 node-locked at last
+   check; AMD moved to new tiered pricing in 2026.1). The stock AM01's
+   XC7A200T is free to build; this board's chip is not.
+
+   ~~openXC7 is worth a look~~ — **evaluated, and it works**: a fully
+   open-source flow now takes Verilog to a valid `.bit` for
+   `xc7k325tffg676-1`. See **[`openxc7/`](openxc7/)** for the scripts and
+   the two non-obvious gotchas (no prebuilt Kintex-7 chipdb exists — you
+   generate it; and a from-source `nextpnr-xilinx` 0.9.2 build fails to
+   route, so use apio's prebuilt binary). The `.xdc`/RTL here were
+   written for Vivado's constraint syntax and 7-series primitives
+   (`MMCME2_BASE`, `IBUF`, `BUFG`); the .xdc subset used by the smoke
+   test parsed fine under nextpnr, but **the real `am01_qmtech_top` has
+   not yet been through the openXC7 flow** — only a trivial counter has.
 5. **Physical assembly**: seat the CM4 module, confirm `JP6` jumper state
    per the manual (open when a CM4 is installed, since pins 86/88 are
    power outputs from the module), and power the board from a 6V/2A+

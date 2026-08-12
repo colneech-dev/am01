@@ -9,10 +9,35 @@
 # XC7K325T-1FFG676C), transcribed from "QMTECH XC7K325T DEV BOARD USER
 # MANUAL V01". See ../README.md for the bus protocol these pins carry.
 #
-# STATUS: not verified against real hardware. In particular the
-# IOSTANDARD below assumes the manual's stated default 3.3V bank supply
-# -- confirm against the QMTECH schematic for these specific balls
-# before flashing.
+# STATUS: not verified on real hardware (nobody has flashed this board
+# yet), BUT every ball name and every bank voltage below has now been
+# checked against authoritative machine-readable sources rather than a
+# manual transcription:
+#
+#  1. BALL NAMES: all 30 PACKAGE_PINs in this file were checked to exist
+#     on this exact package, using prjxray-db's package_pins.csv for
+#     xc7k325tffg676-1 (openXC7's fork, which is generated from the
+#     vendor tooling's own part data). All 30 resolve to real IOB sites.
+#     A ball that doesn't exist on the package is a hard error in both
+#     Vivado and nextpnr-xilinx ("device does not have a pin named X"),
+#     so this check is worth re-running after any edit:
+#       awk -F',' 'NR>1{print $1","$2}' package_pins.csv
+#
+#  2. BANK VOLTAGES: read off the vendor's own schematic
+#     (QMTECH-XC7K325T-DEVELOPMENT-BOARD_SCHEMATIC_20231120_V01.pdf,
+#     sheet 4, the U11Q VCCO block) instead of assuming the manual's
+#     "default 3.3V":
+#       banks 0, 13, 14, 15, 16 -> 3V3      (one shared 3V3 rail)
+#       bank  12                -> VCCO_12, itself tied to 3V3 via the
+#                                  0R links R31/R32 (sheet 4 power)
+#       banks 32, 33            -> 1V8
+#       bank  34                -> 1V5
+#     The CM4 GPIO bus balls below all land in banks 15 and 16, and the
+#     LEDs/keys in banks 12 and 13 -- i.e. every signal this file
+#     constrains is on a 3.3V bank, so LVCMOS33 throughout is correct.
+#     (This resolves the "verify the GPIO bank/voltage" item that
+#     ../README.md lists under "what's still needed".) 1V8/1V5 banks 32,
+#     33 and 34 carry the DDR3 interface, which this file doesn't touch.
 
 set_property CONFIG_VOLTAGE 3.3 [current_design]
 set_property CFGBVS VCCO [current_design]
@@ -88,10 +113,23 @@ set_property IOSTANDARD LVCMOS33 [get_ports {status_led[*]}]
 
 set_property PACKAGE_PIN V26 [get_ports user_key_sw2]
 set_property PACKAGE_PIN U26 [get_ports user_key_sw3]
-# NOTE: SW2/SW3 pull-ups (R17/R18) go to 1V8, not 3V3 (see manual section
-# 2.2.7) -- these two are on a 1.8V bank, unlike PROGRAM_B and the LEDs.
-set_property IOSTANDARD LVCMOS18 [get_ports user_key_sw2]
-set_property IOSTANDARD LVCMOS18 [get_ports user_key_sw3]
+# SW2/SW3 are 3.3V, verified against the vendor's own schematic
+# (QMTECH-XC7K325T-DEVELOPMENT-BOARD_SCHEMATIC_20231120_V01.pdf in
+# ChinaQMTECH/QMTECH_Kintex-7_Development_Board), NOT a manual excerpt:
+#   - Sheet 2: SW2/SW3 pull-ups R17/R18 (4.7K) go to the **VCCO_12** net.
+#   - Sheet 4 (power): VCCO_12 is tied to the **3V3** rail through R31 and
+#     R32, two parallel 0R links off the TPS563201 buck's L4 output.
+#   - Both balls are in **bank 12** (per prjxray-db's package_pins.csv for
+#     xc7k325tffg676-1: U26 = IOB_X0Y42, V26 = IOB_X0Y41, bank 12), and
+#     bank 12's VCCO *is* that VCCO_12 rail.
+# So the bank supply and the pull-up rail are the same 3.3V net -- both
+# reasons independently rule out LVCMOS18. An earlier revision of this
+# file set these to LVCMOS18 based on a misreading of the manual; that
+# was wrong and is corrected here. (A 1.8V standard declared on a
+# 3.3V-powered bank is a DRC error in Vivado, and a reliability problem
+# if forced through.)
+set_property IOSTANDARD LVCMOS33 [get_ports user_key_sw2]
+set_property IOSTANDARD LVCMOS33 [get_ports user_key_sw3]
 
 # JTAG (TCK/TDO/TDI/TMS) and PROGRAM_B/DONE/INIT_B are dedicated
 # configuration pins on this device/package -- Vivado handles them
