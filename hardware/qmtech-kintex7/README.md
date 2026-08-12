@@ -152,6 +152,55 @@ The lesson worth keeping: family class predicts *capacity*, not the
 critical path of a specific pipeline. Only STA on the actual design
 settles frequency — which is what the numbers above now are.
 
+### Can the idle logic buy a 3rd instance? No — measured
+
+The chip looks underused: 2 instances take **840/890 BRAM (94%)** but only
+**79,830/203,800 LUT (39%)**, and **0 of 840 DSP48s**. The obvious idea is
+to spend that idle logic on more hash cores by building S-boxes out of
+LUTs instead of BRAM. It does not work, and the margin is not close.
+
+Budget after 2 instances: **123,970 LUT and 50 BRAM free**. A 3rd
+instance needs its 39,915 base LUTs plus LUT-built S-boxes for 370 of its
+420 (the leftover 50 BRAMs cover the rest), so it fits only if
+
+```
+39,915 + 370 x cost <= 123,970   ->   cost <= 227 LUT per S-box
+```
+
+Measured, by synthesising one `encrypt_4sbox_large0` with
+`synth_xilinx -nobram`:
+
+```
+LUT6 352   LUT1-5 54   -> LUT total 406
+MUXF7 190  MUXF8   70
+```
+
+**406 LUT per S-box, against a 227 threshold — 1.8x over.** A 3rd
+instance would need `39,915 + 370 x 406 = 190,135 LUT` versus 123,970
+available: over by 66,165 (1.5x).
+
+This is a hard limit, not a tooling artifact. A `1024x10` ROM holds
+10,240 bits; a LUT6 holds 64. That is a floor of **160 LUT6 per read
+port, 320 for the two ports** this S-box has, before any address-mux
+overhead — and the measured 406 sits just above that floor, so yosys is
+not being wasteful. One RAMB18 stores 18,432 bits and serves both ports,
+making BRAM roughly **40x denser** for this job. That density is the
+entire reason the S-boxes are in block RAM.
+
+Two related non-starters, for completeness:
+
+- **"Add more read ports."** A Xilinx block RAM is hard silicon with
+  exactly two ports. `sbox_large` already uses both (`a_in`/`b_in`).
+  Three instances would need 1,260 RAMB18 against 890 regardless.
+- **Packing two S-boxes per BRAM.** Each needs both ports, so two would
+  need four. Capacity would allow it (2 x 10,240 < 18,432 bits); ports
+  do not.
+
+So **2 instances is the ceiling**, and the only remaining use for the
+idle 61% of LUTs is raising Fmax (retiming, register replication to cut
+fanout on the paths that pin `clk_h` at 135 MHz while the bulk of the
+design has slack for ~270 MHz).
+
 ### Caveats — read before quoting any of these numbers
 
 1. **The Fmax above is nextpnr's STA, not Vivado's, and is
