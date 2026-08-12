@@ -376,9 +376,11 @@ module odocrypt_gpio_wrapper #(
     // 0.5 x Fmax, and one instance only reaches half of that. See
     // ../README.md "Expected hashrate".
     //
-    // NUM_MINERS=2 fills the BRAM budget (2 x 420 = 840 of 890, 94%).
-    // Do not raise it without re-checking that number -- going over
-    // simply fails to fit.
+    // NUM_MINERS=2 fills the BRAM budget. MEASURED by walking the
+    // synthesised hierarchy (not estimated): 1 instance = 420 RAMB18
+    // (47.2% of the XC7K325T's 890), 2 instances = 840 (94.4%) -- fits,
+    // with 50 RAMB18 spare. 3 would need 1260 and cannot fit. Do not
+    // raise this without re-measuring.
     // -----------------------------------------------------------------
     wire [NUM_MINERS-1:0] t2m_arr;
     wire [31:0]           nonce_arr [0:NUM_MINERS-1];
