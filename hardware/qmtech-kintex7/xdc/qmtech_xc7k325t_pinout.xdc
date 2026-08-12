@@ -91,14 +91,55 @@ set_property PACKAGE_PIN A14 [get_ports gpio_irq]
 # GPIO26 -> C9
 # GPIO27 -> D15
 
-set_property IOSTANDARD LVCMOS33 [get_ports {gpio_data[*]}]
-set_property IOSTANDARD LVCMOS33 [get_ports {gpio_addr[*]}]
+# NOTE: bus bits are written out one per line rather than with a
+# `[get_ports {foo[*]}]` wildcard. Vivado expands that wildcard fine, but
+# **nextpnr-xilinx's XDC parser does not** -- it silently matches nothing,
+# and the run then dies much later with the misleading
+#   ERROR: port gpio_addr[0] of type PAD has no IOSTANDARD property
+# Explicit per-bit lines work identically in Vivado and keep the
+# openXC7 flow (see ../openxc7/) working. Same reason for status_led
+# below. Don't "tidy" these back into wildcards.
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_data[0]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_data[1]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_data[2]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_data[3]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_data[4]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_data[5]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_data[6]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_data[7]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_data[8]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_data[9]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_data[10]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_data[11]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_data[12]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_data[13]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_data[14]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_data[15]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_addr[0]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_addr[1]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_addr[2]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_addr[3]}]
 set_property IOSTANDARD LVCMOS33 [get_ports gpio_wr_n]
 set_property IOSTANDARD LVCMOS33 [get_ports gpio_rd_n]
 set_property IOSTANDARD LVCMOS33 [get_ports gpio_ready]
 set_property IOSTANDARD LVCMOS33 [get_ports gpio_irq]
 
-set_property SLEW SLOW [get_ports {gpio_data[*]}]
+set_property SLEW SLOW [get_ports {gpio_data[0]}]
+set_property SLEW SLOW [get_ports {gpio_data[1]}]
+set_property SLEW SLOW [get_ports {gpio_data[2]}]
+set_property SLEW SLOW [get_ports {gpio_data[3]}]
+set_property SLEW SLOW [get_ports {gpio_data[4]}]
+set_property SLEW SLOW [get_ports {gpio_data[5]}]
+set_property SLEW SLOW [get_ports {gpio_data[6]}]
+set_property SLEW SLOW [get_ports {gpio_data[7]}]
+set_property SLEW SLOW [get_ports {gpio_data[8]}]
+set_property SLEW SLOW [get_ports {gpio_data[9]}]
+set_property SLEW SLOW [get_ports {gpio_data[10]}]
+set_property SLEW SLOW [get_ports {gpio_data[11]}]
+set_property SLEW SLOW [get_ports {gpio_data[12]}]
+set_property SLEW SLOW [get_ports {gpio_data[13]}]
+set_property SLEW SLOW [get_ports {gpio_data[14]}]
+set_property SLEW SLOW [get_ports {gpio_data[15]}]
 set_property SLEW SLOW [get_ports gpio_ready]
 set_property SLEW SLOW [get_ports gpio_irq]
 
@@ -109,7 +150,9 @@ set_property SLEW SLOW [get_ports gpio_irq]
 set_property PACKAGE_PIN R26 [get_ports {status_led[0]}]
 set_property PACKAGE_PIN P26 [get_ports {status_led[1]}]
 set_property PACKAGE_PIN N26 [get_ports {status_led[2]}]
-set_property IOSTANDARD LVCMOS33 [get_ports {status_led[*]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {status_led[0]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {status_led[1]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {status_led[2]}]
 
 set_property PACKAGE_PIN V26 [get_ports user_key_sw2]
 set_property PACKAGE_PIN U26 [get_ports user_key_sw3]
