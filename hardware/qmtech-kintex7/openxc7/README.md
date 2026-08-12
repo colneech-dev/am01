@@ -24,9 +24,10 @@ tiered pricing in 2026.1). The flow below costs nothing.
 >    board with it. "Produces a valid bitstream" and "works on silicon"
 >    are separate claims; only the first is proven here.
 > 2. **This was a small design.** The full miner (`am01_qmtech_top`) does
->    *not* currently get through placement — see "Status vs. the real
->    design" at the bottom. Don't read the success above as "the miner
->    builds with open tools"; it doesn't, yet.
+>    *not* currently get through placement — **both** placers were tried
+>    and both fail, one by hanging and one by rejecting its own output.
+>    See "Status vs. the real design" at the bottom. Don't read the
+>    bitstream above as "the miner builds with open tools"; it doesn't.
 
 ## The flow
 
@@ -210,21 +211,43 @@ yosys:   30,022 LCs  (~9% of the XC7K325T's 326,080)  -- comfortable fit
 nextpnr: 42,717 cells, IO constrained OK, enters analytical placer
 ```
 
-and then **stops making visible progress**. Measured here: over **one
-hour** of 100%-CPU wall time inside "Running main analytical placer" with
-no further log output, on 4 cores. For scale, the 9-LC smoke test on the
-same chipdb and binary placed in **0.4 s** and routed in 37 s.
+and then fails in the placer. **Both** available placers were tried, and
+they fail differently — worth knowing before you burn hours on either:
 
-An earlier attempt (XC7A200T stand-in, on the broken from-source binary)
-behaved the same way for 7+ hours, so this is not the binary bug from
-§2 — it reproduces on the known-good binary too. nextpnr-xilinx's HeAP
-placer simply appears not to scale to a design of this size in practical
-time on this hardware.
+**Default HeAP placer (`--placer heap`, the default):** hangs. Over **one
+hour** of 100%-CPU wall time inside `Running main analytical placer` with
+no further log output at all, on 4 cores, then killed. An earlier attempt
+(XC7A200T stand-in, on the broken from-source binary) behaved the same
+way for 7+ hours, so this is not the §2 binary bug — it reproduces on
+apio's known-good binary.
+
+**Simulated-annealing placer (`--placer sa`):** gets much further and
+then dies on an internal consistency check:
+
+```
+Info:   at iteration #289: temp = 0.000000, timing cost = 11238, wirelen = 9362967
+Info: SA placement time 1722.03s
+ERROR: post-placement validity check failed for Bel 'SLICE_X36Y317/A5FF' (no cell)
+ERROR: Placing design failed.
+```
+
+SA *completes* — 69,366 cells through initial placement, 289 annealing
+iterations, 28.7 min of placement time, wirelen converging 20.7M → 9.36M
+— and then nextpnr's own post-placement validity check rejects the
+result it just produced. That is a **nextpnr-xilinx internal failure, not
+a problem with the design, the chipdb or the constraints**: the tool
+disagrees with itself about the contents of a Bel. Nothing to fix on our
+side; it needs an upstream fix or a different nextpnr revision.
+
+For scale, the 9-LC smoke test on the same chipdb and binary placed in
+**0.4 s** and routed in 37 s.
 
 **So: for small/medium designs this flow is real and produces working
-bitstreams. For the full miner it is unproven, and the placer is the
-blocker — not the chipdb, not the constraints, not synthesis.** If you
-need `am01_qmtech_top` on silicon soon, a paid Vivado licence is still
-the dependable route. Things worth trying before concluding otherwise:
-`--placer sa` instead of the default heap, splitting the design, or a
-machine with substantially more single-core throughput and RAM.
+bitstreams. For the full miner it does not work today — the blocker is
+the placer, not the chipdb, the constraints or synthesis, and it is not
+a scaling problem you can wait out (SA finishes, and is then thrown
+away).** If you need `am01_qmtech_top` on silicon, a paid Vivado licence
+is the dependable route today. Worth trying before concluding otherwise:
+a different/newer nextpnr-xilinx revision (this is `fedc910` from apio),
+reporting the `A5FF (no cell)` check failure upstream, or splitting the
+design so each piece stays in the size range that already works.
