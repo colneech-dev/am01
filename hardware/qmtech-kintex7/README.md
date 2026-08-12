@@ -269,22 +269,30 @@ verification against real parts, not more design work:
 7. **Nonce delivery is a single-register latch, not a FIFO.** Two
    distinct problems lived here; one is now fixed, one is not.
 
-   *Fixed:* the wrapper consumed `miner_top`'s `ticket2moon` **raw**, in
-   two places, despite comments claiming it mirrored
-   `atomminer_odocrypt.v`. That signal is the bare combinational
-   "hash meets target" comparator (`miner.v`: `assign ticket2moon = res`)
-   — not warm-up-gated, and a level rather than a pulse. The reference
-   never uses it raw; it feeds `ticket2moon & nonce_out_go_top` to both
-   consumers. Using it raw meant a spurious pre-warm-up assertion could
-   latch a nonce that `miner.v` hadn't validly captured yet, *and* reach
-   `host_break_sm` — which decides when to stop hashing, so it could
-   stall the miner rather than just corrupt a result. Because the signal
-   is a level, it could also flip the CDC toggle on every cycle it stayed
-   high, letting `golden_nonce_latch_h` move while the bus side was
-   sampling it (a **torn** nonce, worse than a lost one). Now gated
-   exactly as the reference does, plus a one-shot edge detect for this
-   wrapper's toggle-based CDC. Verified by synthesis, **not** simulated
-   against the real core or run on hardware.
+   *Changed (reference fidelity, not a proven bug fix):* the wrapper
+   consumed `miner_top`'s `ticket2moon` **raw**, in two places, despite
+   comments claiming it mirrored `atomminer_odocrypt.v`. That signal is
+   the bare combinational "hash meets target" comparator (`miner.v`:
+   `assign ticket2moon = res`), and the reference never uses it raw — it
+   feeds `ticket2moon & nonce_out_go_top` to both consumers. The wrapper
+   now does the same, plus a one-shot edge detect for its toggle-based
+   CDC (which the reference doesn't need, shipping results over FX3).
+
+   **Be clear about the evidence.** Two hazards were hypothesised for the
+   raw signal — a spurious assertion during pipeline warm-up (which also
+   reaches `host_break_sm`, and so could stall hashing), and a
+   multi-cycle level tearing the nonce mid-CDC. **Neither reproduced in
+   simulation.** With `target` all-ones from reset, iverilog measured
+   `ticket2moon` as a definite `0` for all 206 warm-up cycles (0 cycles
+   at `1`, 0 at `X`), then exactly one 1-cycle assertion per
+   `THROUGHPUT`-4 result slot, never 2+ consecutive. So the raw signal
+   already behaved as a clean, warm-up-respecting one-shot and this
+   change is a measured **no-op** in that test. It is kept because the
+   reference does it and this file claims to mirror the reference, and
+   because it provably cannot lose a solution (the gate opens at 205
+   cycles; `miner.v` doesn't validly capture a nonce until its own 204).
+   Reverting it would also be reasonable. Verified by synthesis; not run
+   on hardware.
 
    *Still open:* even with clean delivery, this is one register, not a
    queue — if two nonces arrive faster than the CM4 drains `NONCE_HI`,

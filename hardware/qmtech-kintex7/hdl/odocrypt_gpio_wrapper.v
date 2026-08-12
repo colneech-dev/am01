@@ -372,35 +372,51 @@ module odocrypt_gpio_wrapper (
     //
     // miner_top's `ticket2moon` is the RAW combinational "hash meets
     // target" comparator coming out of odo_keccak (miner.v ends with
-    // `assign ticket2moon = res;`). It is not a qualified one-shot:
-    //
-    //   * Not gated by pipeline warm-up. It can assert while the keccak
-    //     pipeline still holds start-up garbage -- and during that window
-    //     miner.v's own `nonce` output is stale, because miner.v only
-    //     captures nonce under `has_res & start_hash & nonce_out_go`.
-    //     So the raw signal can be true at moments when `nonce` is
-    //     meaningless.
-    //   * It is a level, not a pulse, so it can stay high across several
-    //     consecutive clk_h cycles.
-    //
-    // The reference top level never consumes it raw. It builds a gated,
-    // registered copy and feeds *that* to both host_break_sm and its
-    // result path (atomminer_odocrypt.v, lines ~158 / ~176 / ~221):
+    // `assign ticket2moon = res;`), and miner.v captures its own `nonce`
+    // only under `has_res & start_hash & nonce_out_go`. The reference top
+    // level never consumes that raw signal: it builds a gated, registered
+    // copy and feeds *that* to both host_break_sm and its result path
+    // (atomminer_odocrypt.v, lines ~158 / ~176 / ~221):
     //
     //     always @ (posedge clk_h)
     //         ticket2moon_i <= ticket2moon & nonce_out_go_top;
     //
     // An earlier revision of this wrapper used the raw signal in both
-    // places, while its own comments claimed to mirror that file. That
-    // mattered twice over: a spurious pre-warm-up assertion would latch a
-    // meaningless nonce AND reach host_break_sm, which decides when to
-    // stop hashing -- i.e. it could stall the miner, not merely corrupt a
-    // result. Restored to the reference behaviour here.
+    // places while claiming in comments to mirror that file. This restores
+    // the reference's behaviour.
+    //
+    // HONESTY NOTE ON WHY: this is reference fidelity / defence in depth,
+    // NOT a demonstrated bug fix. Two failure modes were hypothesised for
+    // the raw signal -- a spurious assertion during pipeline warm-up, and
+    // a multi-cycle level breaking the CDC toggle below. **Neither
+    // reproduced in simulation.** Driving miner_top with target=all-ones
+    // (so every hash "wins") from reset, iverilog measured:
+    //
+    //     during warm-up (206 cycles): ticket2moon === 1'b0 for all of
+    //         them; 0 cycles at 1, and 0 cycles at X (so the 0 is a real
+    //         0, not an X that `if (ticket2moon)` silently read as false)
+    //     after warm-up: 48 assertions over ~200 cycles -- one per
+    //         THROUGHPUT(4)-cycle result slot -- each exactly 1 cycle
+    //         long, never 2+ consecutive
+    //
+    // i.e. in that test the raw signal already behaved as a clean, warm-up
+    // -respecting one-shot, and this gating is a measured no-op. It is
+    // kept because the reference authors put it there and this file claims
+    // to mirror them, and because it is provably unable to do harm (see
+    // the 205-vs-204 note below). Reverting it would also be defensible;
+    // what is NOT defensible is leaving the earlier commit message's
+    // claim that it "could stall the miner" standing, since the evidence
+    // does not support that.
     //
     // cou_deltanonce_top counts every clk_h cycle up to 8'hcd (205), which
     // is the same warm-up interval miner.v expresses internally as 6'h33
     // (51) counts of `advance` (51 x THROUGHPUT(4) = 204). Kept byte-for-
     // byte identical to the reference rather than re-derived.
+    //
+    // That 205-vs-204 relationship is why this gate cannot lose a real
+    // solution: miner.v does not validly capture a nonce until its own
+    // 204-cycle qualifier is met, so a nonce suppressed by opening this
+    // gate one cycle later was never a nonce miner.v would have reported.
     // -----------------------------------------------------------------
     reg [7:0] cou_deltanonce_top = 8'h0;
     reg       nonce_out_go_top   = 1'b0;
@@ -419,13 +435,15 @@ module odocrypt_gpio_wrapper (
 
     // One-shot on top of the reference's gating. This wrapper -- unlike
     // the reference, which ships results over FX3 -- hands the nonce
-    // across a clock domain using the two-phase toggle below. Because
-    // ticket2moon_i is a level, flipping the toggle on the level would
-    // flip it on *every* cycle the signal stays high; the bus-side 2-flop
-    // synchroniser would then be sampling a signal changing faster than
-    // it can track, and golden_nonce_latch_h would be moving while being
-    // captured -- a torn nonce, which is worse than a lost one. Flip
-    // exactly once per assertion instead.
+    // across a clock domain using the two-phase toggle below. If
+    // ticket2moon_i were ever high for 2+ consecutive cycles, flipping the
+    // toggle on the level would flip it once per cycle, and the bus-side
+    // 2-flop synchroniser would be sampling a signal changing faster than
+    // it can track (golden_nonce_latch_h moving while captured = a torn
+    // nonce). Measured longest run in simulation was exactly 1 cycle, so
+    // today this is equivalent to the level-triggered version -- it makes
+    // the one-shot assumption explicit and enforced rather than relying on
+    // odo_keccak's comparator continuing to behave that way.
     reg  ticket2moon_i_d = 1'b0;
     always @(posedge clk_h) ticket2moon_i_d <= ticket2moon_i;
     wire ticket2moon_rise = ticket2moon_i & ~ticket2moon_i_d;
