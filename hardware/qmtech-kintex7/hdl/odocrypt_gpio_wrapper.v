@@ -353,7 +353,7 @@ module odocrypt_gpio_wrapper (
     host_break_sm host_break_sm_inst (
         .clk_h         (clk_h),
         .host_break    (host_break_pulse_h),
-        .ticket2moon   (ticket2moon),
+        .ticket2moon   (ticket2moon_i),   // gated -- see below, NOT raw
         .hash_cmplt    (1'b0),
         .sha_host_break(host_break_debounced)
     );
@@ -368,6 +368,69 @@ module odocrypt_gpio_wrapper (
     );
 
     // -----------------------------------------------------------------
+    // ticket2moon qualification -- must match atomminer_odocrypt.v.
+    //
+    // miner_top's `ticket2moon` is the RAW combinational "hash meets
+    // target" comparator coming out of odo_keccak (miner.v ends with
+    // `assign ticket2moon = res;`). It is not a qualified one-shot:
+    //
+    //   * Not gated by pipeline warm-up. It can assert while the keccak
+    //     pipeline still holds start-up garbage -- and during that window
+    //     miner.v's own `nonce` output is stale, because miner.v only
+    //     captures nonce under `has_res & start_hash & nonce_out_go`.
+    //     So the raw signal can be true at moments when `nonce` is
+    //     meaningless.
+    //   * It is a level, not a pulse, so it can stay high across several
+    //     consecutive clk_h cycles.
+    //
+    // The reference top level never consumes it raw. It builds a gated,
+    // registered copy and feeds *that* to both host_break_sm and its
+    // result path (atomminer_odocrypt.v, lines ~158 / ~176 / ~221):
+    //
+    //     always @ (posedge clk_h)
+    //         ticket2moon_i <= ticket2moon & nonce_out_go_top;
+    //
+    // An earlier revision of this wrapper used the raw signal in both
+    // places, while its own comments claimed to mirror that file. That
+    // mattered twice over: a spurious pre-warm-up assertion would latch a
+    // meaningless nonce AND reach host_break_sm, which decides when to
+    // stop hashing -- i.e. it could stall the miner, not merely corrupt a
+    // result. Restored to the reference behaviour here.
+    //
+    // cou_deltanonce_top counts every clk_h cycle up to 8'hcd (205), which
+    // is the same warm-up interval miner.v expresses internally as 6'h33
+    // (51) counts of `advance` (51 x THROUGHPUT(4) = 204). Kept byte-for-
+    // byte identical to the reference rather than re-derived.
+    // -----------------------------------------------------------------
+    reg [7:0] cou_deltanonce_top = 8'h0;
+    reg       nonce_out_go_top   = 1'b0;
+    reg       ticket2moon_i      = 1'b0;
+
+    always @(posedge clk_h)
+        if (~start_hash_h) cou_deltanonce_top <= 8'h0;
+        else               cou_deltanonce_top <= cou_deltanonce_top + 1'b1;
+
+    always @(posedge clk_h)
+        if (~start_hash_h)                    nonce_out_go_top <= 1'b0;
+        else if (cou_deltanonce_top == 8'hcd) nonce_out_go_top <= 1'b1;
+
+    always @(posedge clk_h)
+        ticket2moon_i <= ticket2moon & nonce_out_go_top;
+
+    // One-shot on top of the reference's gating. This wrapper -- unlike
+    // the reference, which ships results over FX3 -- hands the nonce
+    // across a clock domain using the two-phase toggle below. Because
+    // ticket2moon_i is a level, flipping the toggle on the level would
+    // flip it on *every* cycle the signal stays high; the bus-side 2-flop
+    // synchroniser would then be sampling a signal changing faster than
+    // it can track, and golden_nonce_latch_h would be moving while being
+    // captured -- a torn nonce, which is worse than a lost one. Flip
+    // exactly once per assertion instead.
+    reg  ticket2moon_i_d = 1'b0;
+    always @(posedge clk_h) ticket2moon_i_d <= ticket2moon_i;
+    wire ticket2moon_rise = ticket2moon_i & ~ticket2moon_i_d;
+
+    // -----------------------------------------------------------------
     // Result latch + clk_h -> bus_clk status/nonce synchronization.
     // Same "accepted race on a status/telemetry register" simplification
     // as the Zynq wrapper -- see its comments for the rationale.
@@ -376,7 +439,7 @@ module odocrypt_gpio_wrapper (
     reg [31:0] golden_nonce_latch_h;
 
     always @(posedge clk_h) begin
-        if (ticket2moon) begin
+        if (ticket2moon_rise) begin
             golden_nonce_latch_h <= golden_nonce_h;
             nonce_toggle_h       <= ~nonce_toggle_h;
         end
