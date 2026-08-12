@@ -18,10 +18,15 @@ some Zynq-7000 and only the *smaller* Kintex-7 parts; the 325T needs a
 paid licence (~$4,395 node-locked at last check, and AMD moved to new
 tiered pricing in 2026.1). The flow below costs nothing.
 
-> **Not yet flashed to real hardware.** The bitstream is structurally
-> valid and the flow completes cleanly, but nobody has programmed the
-> board with it yet. Treat "produces a valid bitstream" and "works on
-> silicon" as separate claims — only the first is proven here.
+> **Two limits, stated up front.**
+> 1. **Not yet flashed to real hardware.** The bitstream is structurally
+>    valid and the flow completes cleanly, but nobody has programmed the
+>    board with it. "Produces a valid bitstream" and "works on silicon"
+>    are separate claims; only the first is proven here.
+> 2. **This was a small design.** The full miner (`am01_qmtech_top`) does
+>    *not* currently get through placement — see "Status vs. the real
+>    design" at the bottom. Don't read the success above as "the miner
+>    builds with open tools"; it doesn't, yet.
 
 ## The flow
 
@@ -190,12 +195,36 @@ implicated. Under apio's binary the plain counter routes; the CE variant
 has not been re-tested. If you hit a CE-related routing failure, that's
 the first thing to re-check.
 
-## Status vs. the real design
+## Status vs. the real design — the placer does not scale (yet)
 
-This proves the *toolchain* works for this chip. It does **not** yet mean
-`../hdl/am01_qmtech_top.v` builds — that design is ~41k cells and has an
-MMCM, and has never been through a completed place-and-route. An earlier
-attempt to run it (against an XC7A200T stand-in, on the from-source
-binary) sat in nextpnr's analytical placer for 7+ hours without
-finishing. Re-running the real design through *this* verified flow is the
-obvious next step and is not done yet.
+This proves the *toolchain* works for this chip. It does **not** mean
+`../hdl/am01_qmtech_top.v` builds. That was tried, through this exact
+verified flow, and the result is the honest caveat on everything above.
+
+The real design gets **further than it ever has** — it now synthesises,
+parses the .xdc, maps all 30 ports (including the 16 bidirectional
+IOBUFs) to real sites, and enters placement:
+
+```
+yosys:   30,022 LCs  (~9% of the XC7K325T's 326,080)  -- comfortable fit
+nextpnr: 42,717 cells, IO constrained OK, enters analytical placer
+```
+
+and then **stops making visible progress**. Measured here: over **one
+hour** of 100%-CPU wall time inside "Running main analytical placer" with
+no further log output, on 4 cores. For scale, the 9-LC smoke test on the
+same chipdb and binary placed in **0.4 s** and routed in 37 s.
+
+An earlier attempt (XC7A200T stand-in, on the broken from-source binary)
+behaved the same way for 7+ hours, so this is not the binary bug from
+§2 — it reproduces on the known-good binary too. nextpnr-xilinx's HeAP
+placer simply appears not to scale to a design of this size in practical
+time on this hardware.
+
+**So: for small/medium designs this flow is real and produces working
+bitstreams. For the full miner it is unproven, and the placer is the
+blocker — not the chipdb, not the constraints, not synthesis.** If you
+need `am01_qmtech_top` on silicon soon, a paid Vivado licence is still
+the dependable route. Things worth trying before concluding otherwise:
+`--placer sa` instead of the default heap, splitting the design, or a
+machine with substantially more single-core throughput and RAM.
