@@ -56,8 +56,12 @@ chip's block RAM is fully used.** Everything else follows from that.
 Where the BRAM goes (measured, `yosys synth_xilinx` targeting this chip,
 not estimated): all 420 RAMB18 of one hash instance are OdoCrypt's large
 S-boxes — `encrypt_4sbox_large0..9`, one BRAM each, x42 encrypt blocks.
-Logic is almost idle by comparison: **30,022 LC = 9% of 326,080**, and
-**zero** of the 840 DSP48s. This design is BRAM-starved and logic-rich.
+Logic is far less pressed: **39,915 LUT = 19.6% of 203,800** per
+instance (yosys's "30,022 LC" estimate understates it; the real LUT count
+is what matters), and **zero** of the 840 DSP48s. This design is
+BRAM-starved and logic-rich — see "Can the idle logic buy a 3rd
+instance?" below for why that headroom still cannot be spent on more
+cores.
 
 `keccak800.v` sets `UNROLLING = (12-1)/THROUGHPUT + 1`, and BRAM scales
 with unrolling — measured 420 RAMB18 at UNROLLING=3, i.e. **140 RAMB18
