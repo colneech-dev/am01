@@ -14,6 +14,13 @@
 #   FREQ       target MHz for timing analysis (default: 50)
 #   NEXTPNR    nextpnr-xilinx binary -- SEE THE WARNING IN README.md, use
 #              apio's prebuilt one, not a from-source 0.9.2 build.
+#   FLATTEN    1 (default) passes -flatten to synth_xilinx. Needed for any
+#              design whose tristate drivers sit in a submodule rather than
+#              at the top level -- see README.md "Tristates across a
+#              hierarchy boundary". Costs time and RAM on big designs
+#              (am01_qmtech_top: ~90s/1GB unflattened vs ~14min/11GB
+#              flattened), so set FLATTEN=0 if your tristates are already
+#              at the top level, or if you have none.
 set -euo pipefail
 
 TOP="${1:?usage: build.sh <top> <outdir> <src.v> [...]}"
@@ -38,8 +45,11 @@ done
 
 mkdir -p "$OUT"
 
-echo "==> [1/4] synthesis (yosys)"
-"$YOSYS" -p "synth_xilinx -top $TOP -family xc7 -json $OUT/$TOP.json" "${SRCS[@]}"
+FLATTEN="${FLATTEN:-1}"
+[ "$FLATTEN" = "1" ] && FLATTEN_ARG="-flatten" || FLATTEN_ARG=""
+
+echo "==> [1/4] synthesis (yosys)${FLATTEN_ARG:+ , flattened}"
+"$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG -json $OUT/$TOP.json" "${SRCS[@]}"
 
 echo "==> [2/4] place & route (nextpnr-xilinx)"
 "$NEXTPNR" --chipdb "$CHIPDB" \

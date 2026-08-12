@@ -101,6 +101,31 @@ If you don't have apio: `pip install apio && apio install system` gets
 you `~/.apio/packages/openxc7/bin/nextpnr-xilinx` plus `fasm2frames` and
 `xc7frames2bit`.
 
+### 3. Tristates across a hierarchy boundary need `-flatten`
+
+If a bidirectional bus is driven from inside a submodule (as
+`odocrypt_gpio_wrapper` drives `gpio_data`), an unflattened
+`synth_xilinx` maps the *top-level pad* to `IOBUF` but leaves the
+submodule's driver as a generic `$_TBUF_` that nextpnr cannot place:
+
+```
+ERROR: Unable to place cell '...simplemap_tribuf$53081',
+       no Bels remaining of type '$_TBUF_'
+```
+
+Confirmed by counting cell types in the netlist:
+
+```
+am01_qmtech_top      | IOBUF:   16     <- pads, fine
+odocrypt_gpio_wrapper| $_TBUF_: 16     <- stranded, unplaceable
+```
+
+`synth_xilinx -flatten` resolves the driver into the pad buffer
+(`build.sh` does this by default, `FLATTEN=0` to opt out). Note the cost
+on a design this size: ~90s/1GB unflattened vs **~14 min and 11GB peak
+RAM** flattened. Vivado infers this across hierarchy without flattening,
+so it is another openXC7-vs-Vivado difference rather than an RTL bug.
+
 ### The `--test` red herring
 
 `nextpnr-xilinx --chipdb X.bin --test` fails on generated chipdbs:
