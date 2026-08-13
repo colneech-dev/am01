@@ -1,6 +1,7 @@
 # Generated toolchain artifacts -- large, machine-specific, reproducible
 # via ./build-chipdb.sh and ./build.sh. Never commit these.
 chipdb/
+chipdb-*/
 .openxc7-src/
 out/
 *.bit
