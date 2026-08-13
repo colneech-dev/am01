@@ -13,10 +13,15 @@
 #
 # On a design that is 420 block RAMs per hash instance, that makes the
 # reported Fmax simply the worst LUT-to-LUT path: wrong, and optimistic.
-# It is also detectable -- inserting a register into a BRAM-fed path, which
-# can only ever shorten each path, made the reported frequency RISE from
-# 197 MHz to 840 MHz. See README.md, "nextpnr's STA does not see block RAM
-# paths".
+#
+# It is detectable this way: take a harness of BRAM -> 6-LUT-deep XOR fold
+# -> flop, and insert a fabric register between the BRAM and the fold.
+# Pipelining a long path should RAISE Fmax. Instead the reported figure
+# collapsed, 840 MHz -> 197 MHz, because the register did not shorten
+# anything -- it created a fabric-to-fabric path the tool could actually
+# see, where the BRAM-fed path had been invisible. The 840 MHz was never
+# the fold at all; it was the short address path, the only thing being
+# timed.
 #
 # Note this is NOT fixable by supplying better timing data. prjxray-db has
 # no kintex7 timing at all, and no family characterises RAMB18E1 (only the
