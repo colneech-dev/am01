@@ -1,0 +1,83 @@
+diff --git a/xilinx/arch.cc b/xilinx/arch.cc
+index e774bb8..4ec3674 100644
+--- a/xilinx/arch.cc
++++ b/xilinx/arch.cc
+@@ -2481,6 +2481,34 @@ TimingPortClass Arch::getPortTimingClass(const CellInfo *cell, IdString port, in
+         if (dsp48e1CombInputDelayNS(base) > 0.0)
+             return TMG_COMB_INPUT;
+         return TMG_IGNORE; // CLK / CE* / RST* / config pins
++    } else if (cell->type == id_RAMB18E1_RAMB18E1 || cell->type == id_RAMB36E1_RAMB36E1) {
++        // Block RAM used to be absent from this function entirely, so every
++        // RAMB port fell through to TMG_IGNORE below. That silently removed
++        // block RAM from timing analysis: a BRAM output was not a start
++        // point, its address inputs were not endpoints, and any critical
++        // path through a memory was invisible. On a BRAM-heavy design the
++        // reported Fmax was then just the worst LUT-to-LUT path, which is
++        // both wrong and optimistic -- and it inverted under a register
++        // insertion that could only ever shorten paths. See
++        // ../../../README.md "nextpnr's STA does not see block RAM paths".
++        const std::string p = port.str(this);
++        if (p == "CLKARDCLK" || p == "CLKBWRCLK")
++            return TMG_CLOCK_INPUT;
++        // Synchronous reads: DO*/DOP* are driven off the read clock.
++        if (boost::starts_with(p, "DOADO") || boost::starts_with(p, "DOBDO") ||
++            boost::starts_with(p, "DOPADOP") || boost::starts_with(p, "DOPBDOP")) {
++            clockInfoCount = 1;
++            return TMG_REGISTER_OUTPUT;
++        }
++        // Everything else that carries data is sampled on a clock edge.
++        if (boost::starts_with(p, "ADDR") || boost::starts_with(p, "DIADI") ||
++            boost::starts_with(p, "DIBDI") || boost::starts_with(p, "DIPADIP") ||
++            boost::starts_with(p, "DIPBDIP") || boost::starts_with(p, "WE") ||
++            boost::starts_with(p, "EN") || boost::starts_with(p, "REGCE")) {
++            clockInfoCount = 1;
++            return TMG_REGISTER_INPUT;
++        }
++        return TMG_IGNORE; // RST*, cascade and config pins
+     }
+     return TMG_IGNORE;
+ }
+@@ -2493,6 +2521,43 @@ TimingClockingInfo Arch::getPortClockingInfo(const CellInfo *cell, IdString port
+     info.clockToQ = getDelayFromNS(0.1);
+     info.clock_port = xc7 ? id_CK : id_CLK;
+     info.edge = RISING_EDGE;
++
++    if (cell->type == id_RAMB18E1_RAMB18E1 || cell->type == id_RAMB36E1_RAMB36E1) {
++        // Block RAM numbers, in ns. prjxray-db carries NO timing data at all
++        // for kintex7 (artix7/zynq7/spartan7 have it; kintex7 and virtex7 do
++        // not), and none of the families characterise RAMB18E1 -- only the
++        // RAMBFIFO36E1 site. These values are the slow-corner maxima from
++        // artix7's BRAM_L.sdf, which is the closest real 7-series data
++        // available:
++        //
++        //   (IOPATH CLKARDCLKU DOADOU (0.585::1.098)(1.353::2.454))  DO_REG=0
++        //   (IOPATH REGCLKBU   DOBDOU (0.204::0.327)(0.468::0.882))  DO_REG=1
++        //   (SETUP  ADDRAU (posedge CLKARDCLKU) (-0.360::0.566))
++        //   (HOLD   ADDRAU (posedge CLKARDCLKU) (-0.566::0.360))
++        //
++        // Two caveats, both pointing the same way. Artix-7 is the
++        // lower-performance member of the family, so for Kintex-7 these are
++        // pessimistic -- which is the safe direction, and far better than
++        // the previous behaviour of excluding block RAM from timing
++        // entirely. And they are per-family constants, not per-tile fuzzed
++        // data, so this is engineering guidance rather than sign-off.
++        const std::string p = port.str(this);
++        const bool b_side = boost::starts_with(p, "DOBDO") || boost::starts_with(p, "DOPBDOP") ||
++                            boost::starts_with(p, "ADDRBWRADDR") || boost::starts_with(p, "DIBDI") ||
++                            boost::starts_with(p, "DIPBDIP") || boost::starts_with(p, "WEBWE") ||
++                            boost::starts_with(p, "ENBWREN") || boost::starts_with(p, "REGCEB");
++        info.clock_port = b_side ? id("CLKBWRCLK") : id("CLKARDCLK");
++
++        // The optional output register is what the 458MHz FMAX_BRAM rating
++        // assumes. Without it (DO_REG=0, which is what a plain
++        // `q <= mem[addr]` infers) the read comes off the latch and is
++        // roughly 2.8x slower.
++        const bool reg_out = b_side ? bool_or_default(cell->params, id("DOB_REG"), false)
++                                    : bool_or_default(cell->params, id("DOA_REG"), false);
++        info.clockToQ = getDelayFromNS(reg_out ? 0.882 : 2.454);
++        info.setup = getDelayFromNS(0.566);
++        info.hold = getDelayFromNS(0.360);
++    }
+     return info;
+ }
+ 
