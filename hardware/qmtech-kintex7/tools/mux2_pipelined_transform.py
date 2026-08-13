@@ -54,7 +54,33 @@ EVERYTHING THAT HAS TO MOVE WITH IT
 Usage:
     mux2_pipelined_transform.py <in encrypt.v> <out encrypt_mux2p.v>
 
-Verify with ../sim/run_encrypt_equiv.sh before believing any of it --
+STATUS: FAILED ON BOTH COUNTS. Do not use. Kept for the reasoning only.
+
+  1. SLOWER, not faster. Place-and-route of the real pipelined miner gives
+     clk_2x = 88.80 MHz against the unpipelined 103.72 -- a 14% REGRESSION.
+     The premise was wrong: registering the address does not buy it a full
+     clk_h, because the BRAM still samples that address on clk_2x. Launch
+     point moved, constraint did not. Every path INTO a time-multiplexed
+     memory is capped at one clk_2x period no matter how it is registered,
+     and that is inherent to multiplexing rather than fixable in RTL.
+
+  2. NOT EQUIVALENT. sim/tb_encrypt_equiv_seq.v reports 140/140 mismatches
+     with the muxed output all-X -- it never produces defined data at all.
+     Structure inspects as correct (small S-boxes at 3 stages, state
+     pipeline intact, data reaching next[20] at t+339 against write at
+     t+340, mirroring the original's t+171/t+172), so the fault was not
+     found. It was not chased further because (1) makes the design
+     unusable regardless.
+
+     Note the negative control emitted byte-identical output to the
+     intended run, so that session could not have told good hardware from
+     bad. A pass would have meant nothing either.
+
+The gcd analysis below is the part worth keeping: it shows a +1-cycle
+variant would have synthesised, fitted, met timing and silently hashed
+wrong.
+
+Verify with ../sim/run_encrypt_equiv_seq.v before believing any of it --
 this changes pipeline depth, which is exactly the kind of change that
 still synthesises and fits while computing the wrong hash.
 """
