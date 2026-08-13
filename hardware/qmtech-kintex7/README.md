@@ -86,11 +86,16 @@ lever.
 > UNROLLING does set *keccak's* depth. It does not follow that keccak owns
 > the critical path, and measurement says it does not:
 >
-> | measured, post-route | Fmax |
-> |---|---|
-> | keccak alone, UNROLLING=3 (THROUGHPUT=4) | 227.69 MHz |
-> | keccak alone, UNROLLING=1 (THROUGHPUT=12) | 293.94 MHz |
-> | **whole miner (encrypt + keccak)** | **86.52 MHz** |
+> | measured | Fmax | stage |
+> |---|---|---|
+> | keccak alone, UNROLLING=3 (THROUGHPUT=4) | 227.69 MHz | post-route |
+> | keccak alone, UNROLLING=1 (THROUGHPUT=12) | 293.94 MHz | post-route |
+> | **whole miner (encrypt + keccak)** | **86.52 MHz** | post-placement |
+>
+> The miner figure is post-placement because that run died in the router
+> on the SRLC32E bug (see [openxc7/](openxc7/)); the keccak figures are
+> routed. The gap is far too wide for that to matter — keccak would have
+> to lose 62% of its clock in routing to become the limiter.
 >
 > Keccak has ~2.6x headroom over the clock the design actually reaches, so
 > shortening its path raises a ceiling that was never touching the floor.
