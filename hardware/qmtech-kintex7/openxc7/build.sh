@@ -14,6 +14,9 @@
 #   FREQ       target MHz for timing analysis (default: 50)
 #   NEXTPNR    nextpnr-xilinx binary -- SEE THE WARNING IN README.md, use
 #              apio's prebuilt one, not a from-source 0.9.2 build.
+#   SRL        0 (default) passes -nosrl to synth_xilinx, because nextpnr
+#              cannot route SRLC32E (see the note at the synthesis step).
+#              Set SRL=1 only on a nextpnr that handles them.
 #   FLATTEN    1 (default) passes -flatten to synth_xilinx. Needed for any
 #              design whose tristate drivers sit in a submodule rather than
 #              at the top level -- see README.md "Tristates across a
@@ -66,8 +69,24 @@ mkdir -p "$OUT"
 FLATTEN="${FLATTEN:-1}"
 [ "$FLATTEN" = "1" ] && FLATTEN_ARG="-flatten" || FLATTEN_ARG=""
 
-echo "==> [1/4] synthesis (yosys)${FLATTEN_ARG:+ , flattened}"
-"$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG -json $OUT/$TOP.json" "${SRCS[@]}"
+# -nosrl: keep yosys from inferring SRL16/SRLC32E shift-register LUTs.
+# nextpnr cannot map SRLC32E's cascade output and dies in the router with
+#   ERROR: No wire found for port Q31 on source cell ... fpga_srl_0
+# AFTER placement has already succeeded, so it looks like a routing
+# problem rather than a mapping one. Any design with a shift register
+# deeper than 16 hits it -- encrypt.v has two (progress, 172 deep, and
+# period, 43), so the miner triggers it every time. The blinky smoke test
+# does not, which is why this stayed hidden.
+#
+# The replacement is ordinary flip-flops: a few hundred FFs out of
+# 407,600, with LUT and block RAM counts unchanged.
+#
+# Set SRL=1 on a nextpnr that has learned to route them.
+SRL="${SRL:-0}"
+[ "$SRL" = "1" ] && SRL_ARG="" || SRL_ARG="-nosrl"
+
+echo "==> [1/4] synthesis (yosys)${FLATTEN_ARG:+ , flattened}${SRL_ARG:+ , no SRLs}"
+"$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG $SRL_ARG -json $OUT/$TOP.json" "${SRCS[@]}"
 
 echo "==> [2/4] place & route (nextpnr-xilinx)"
 "$NEXTPNR" --chipdb "$CHIPDB" \
