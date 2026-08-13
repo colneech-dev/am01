@@ -107,11 +107,30 @@ Max frequency for clock   'clk_h': 135.04 MHz  (FAIL at 150 MHz)
 | 2 instances if Vivado closes at 200 MHz | 200 | 100 MH/s |
 | Hard BRAM ceiling (bounds the problem; not reachable) | 458 | 229 MH/s |
 
-**Best current estimate for this board: ~67.5 MH/s — and this should be
-read as an upper bound, not a conservative one.** The 135 MHz it rests on
-came from a timing analysis that does not appear to time block-RAM paths
-at all, in a design that is 420 block RAMs per instance. See the third
-qualification below.
+**Best current estimate for this board: ~42 MH/s.**
+
+The ~67.5 MH/s figure above is superseded and was optimistic by about
+1.6x. It rests on 135.04 MHz, which came from a static timing analysis
+that does not time block-RAM paths at all — in a design that is 420 block
+RAMs per hash instance. With block RAM timing added to nextpnr (see
+[openxc7/](openxc7/)), the same single hash instance measures:
+
+| nextpnr | `clk_h`, one instance, post-placement |
+|---|---|
+| stock (block RAM paths untimed) | 146.20 MHz |
+| **with block RAM timing** | **84.90 MHz** |
+
+Timing the memory paths costs 42% of the clock. At `THROUGHPUT=4` that is
+21.2 MH/s per instance, so **~42.5 MH/s for the 2-instance build**.
+
+Caveats, all pointing the same way — down:
+
+- Post-placement, like the 135.04 MHz it replaces. Routing normally
+  degrades timing further.
+- The block RAM numbers are Artix-7-derived (prjxray has none for
+  Kintex-7), so they are pessimistic — but the *direction* of the
+  correction is not in doubt, only its size.
+- Neither run routed to completion in the measurement harness.
 
 ### The earlier projection here was too optimistic — by about 2x
 
