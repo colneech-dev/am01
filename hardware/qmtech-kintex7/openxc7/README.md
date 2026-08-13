@@ -297,9 +297,78 @@ an upper bound on the real Fmax rather than a floor, and **~67.5 MH/s is
 optimistic, not conservative**.
 
 Qualification 1 above still stands on its own (Vivado may route better),
-but it no longer makes 135 MHz safe to treat as a floor. Settling this
-needs a tool that times BRAM arcs — Vivado's STA, or a nextpnr/chipdb
-combination shown to model them.
+but it no longer makes 135 MHz safe to treat as a floor.
+
+#### Root cause: prjxray-db ships no Kintex-7 timing data
+
+It is not that nextpnr cannot time block RAM. It is that for this family
+there is nothing to time it *with*:
+
+| family | timing files in `prjxray-db/<family>/timings/` |
+|---|---|
+| artix7 | 50 |
+| zynq7 | 45 |
+| spartan7 | 44 |
+| **kintex7** | **0** |
+| virtex7 | 0 |
+
+`xilinx_device.py` only attaches cell timing if
+`<prjxray_root>/timings/<TILETYPE>.sdf` exists; with the directory
+absent, `cell_timing` stays `None` and the chipdb is built with **no
+cell delays at all** — no LUT delay, no flip-flop setup, no BRAM
+clock-to-out. On top of that, every intra-site arc gets a hardcoded
+placeholder in `nextpnr_structs.py`:
+
+```python
+# FIXME get from SDF
+timing_class = self.timing.get_pip_class(
+    is_buffered=True, min_delay=10, max_delay=10, r=0, c=0)
+```
+
+A flat 10 ps for any arc through a LUT or a BRAM. Only routing delays are
+real, which is exactly why reported Fmax tracks logic *depth* (more hops)
+while being blind to what the cells themselves cost. **So `clk_h` =
+135.04 MHz is routing delay plus placeholder constants, not a timing
+measurement of this part.**
+
+#### Grafting Artix-7 timing onto Kintex-7: tried, does not fix it
+
+Artix-7 and Kintex-7 are both 28 nm 7-series and share 29 tile types by
+name, including `BRAM_L/R`, `CLBLL_L/R`, `CLBLM_L/R` and `DSP_L/R`. The
+Artix-7 SDF has precisely the missing arcs, e.g.
+`(IOPATH REGCLKBU DOBDOU (0.204::0.327)(0.468::0.882))`. Copying those 29
+files into `kintex7/timings/` and rebuilding does load: the chipdb grows
+by ~96 KB and the numbers move.
+
+But it does **not** fix the defect:
+
+| probe | no timing data | artix7 timing grafted |
+|---|---|---|
+| stock (BRAM -> fold) | 840.34 MHz | 754.72 MHz |
+| stock + fabric register | 197.43 MHz | 191.86 MHz |
+| shared-BRAM S-boxes | 172.12 MHz | 172.29 MHz |
+
+Inserting a register still makes the reported frequency rise ~4x. Adding
+cell delays improved their accuracy but did not make a block RAM output
+into a timed start point, so BRAM-originating paths remain invisible.
+Worth knowing this was tried; not worth carrying the graft.
+
+#### So what would actually answer the question
+
+- **Vivado STA.** The only sign-off-quality option, and this part needs a
+  paid licence (see above).
+- **Generating real Kintex-7 timing data** with prjxray's timing fuzzers
+  requires Vivado to extract it — circular.
+- **OpenSTA** needs Liberty models for 7-series primitives, which do not
+  exist publicly and would also have to be derived from Vivado — equally
+  circular.
+- **A cut-down design on a free-tier Kintex-7 part.** This is the one
+  free route that works. Whether the S-box address mux closes at
+  266.67 MHz is a *local* path question — it does not depend on the
+  325T's utilisation. Building a handful of shared S-boxes (see
+  `../sim/` and the probe approach) for one of the smaller Kintex-7
+  devices Vivado's free tier does cover would give a genuine 7-series STA
+  answer for that path at no cost.
 
 This also means the shared-BRAM S-box work in ../hdl/sbox_large_mux2.v
 **cannot be timing-validated with this flow**: whether its address mux
