@@ -33,9 +33,18 @@
 //    here because it is still worth knowing the design tolerates either
 //    phase alignment -- but as an observation, not as a control.
 //
-// Usage: see run_encrypt_equiv.sh, which regenerates the muxed core and
-// runs both polarities. ~2.7 s per simulated cycle here, so a 600-cycle
-// run is roughly half an hour.
+// RUNTIME -- BUDGET HOURS, NOT MINUTES
+// -----------------------------------
+// Simulation cost per cycle is NOT constant, and timing a short run badly
+// underestimates the total. While the 172-stage pipeline is still filling,
+// every signal is X and therefore *static*: an event-driven simulator has
+// almost nothing to do, and cycles cost ~2.7 s here. Once real data fills
+// the pipeline, 640 bits per stage toggle across two cores and the event
+// count per cycle explodes -- an order of magnitude slower.
+//
+// A 600-cycle run took over 70 minutes of CPU per polarity on a 4-core
+// box running several at once. Budget accordingly, and watch the progress
+// line below rather than guessing.
 //
 module tb;
     localparam N           = 600;  // clk_h cycles of stimulus
@@ -91,6 +100,15 @@ module tb;
 
             @(posedge clk_h);
             #1;                    // let the NBA region settle before sampling
+
+            // Progress. Without this a multi-hour run is indistinguishable
+            // from a hung one. $fflush because stdout to a file is block
+            // buffered, and a killed run would otherwise leave nothing.
+            if (i % 20 == 0) begin
+                $display("  progress: cycle %0d/%0d, defined so far %0d, mismatches %0d",
+                         i, N, n_cmp, n_bad);
+                $fflush();
+            end
 
             if (write_ref !== write_mux) begin
                 n_wbad = n_wbad + 1;
