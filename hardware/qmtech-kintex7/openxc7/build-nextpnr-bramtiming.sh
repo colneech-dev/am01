@@ -106,6 +106,13 @@ echo "==> done: $REPO/build/nextpnr-xilinx"
 echo
 echo "Use it with:  NEXTPNR=$REPO/build/nextpnr-xilinx ./build.sh ..."
 echo
-echo "SANITY CHECK before trusting any number it prints: inserting a"
-echo "register into a BRAM-fed path must NOT raise the reported Fmax."
-echo "That inversion is the signature of the bug this patch fixes."
+echo "SANITY CHECK before trusting any number it prints. Insert a register"
+echo "between a block RAM output and the logic it feeds. Pipelining a long"
+echo "path SPLITS it, so the reported Fmax must RISE (or hold)."
+echo
+echo "  broken (BRAM paths untimed):  840.34 -> 197.43 MHz   Fmax FELL"
+echo "  fixed  (this patch):          106.56 -> 162.50 MHz   Fmax rose"
+echo
+echo "A fall is the bug's signature: the register did not slow anything"
+echo "down, it exposed a fabric-to-fabric path the tool could actually see,"
+echo "where the BRAM-fed path had been invisible."

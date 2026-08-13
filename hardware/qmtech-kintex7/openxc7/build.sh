@@ -42,8 +42,11 @@ FREQ="${FREQ:-50}"
 # can report which tool is missing.
 YOSYS="${YOSYS:-$(command -v yosys || true)}"
 NEXTPNR="${NEXTPNR:-$(command -v nextpnr-xilinx || true)}"
+FASM2FRAMES="${FASM2FRAMES:-$(command -v fasm2frames || true)}"
+XC7FRAMES2BIT="${XC7FRAMES2BIT:-$(command -v xc7frames2bit || true)}"
 
-for t in YOSYS:"$YOSYS" NEXTPNR:"$NEXTPNR"; do
+for t in YOSYS:"$YOSYS" NEXTPNR:"$NEXTPNR" \
+         FASM2FRAMES:"$FASM2FRAMES" XC7FRAMES2BIT:"$XC7FRAMES2BIT"; do
     name=${t%%:*}; path=${t#*:}
     [ -n "$path" ] && [ -x "$path" ] || {
         echo "ERROR: $name not found or not executable (${path:-<unset>})."
@@ -73,11 +76,22 @@ echo "==> [2/4] place & route (nextpnr-xilinx)"
     --log "$OUT/$TOP.pnr.log"
 
 echo "==> [3/4] fasm -> frames"
-fasm2frames --part "$PART" --db-root "$PRJXRAY_DB/kintex7" \
+"$FASM2FRAMES" --part "$PART" --db-root "$PRJXRAY_DB/kintex7" \
     "$OUT/$TOP.fasm" > "$OUT/$TOP.frames"
 
+# A 0-byte frames file still produces a bitstream that file(1) reports as
+# "Xilinx BIT data ... for xc7k325tffg676-1", within 4 bytes of the size of
+# a real one. So file(1) proves the toolchain RAN, not that the design is
+# in the bitstream. Check the frames instead.
+if [ ! -s "$OUT/$TOP.frames" ]; then
+    echo "ERROR: $OUT/$TOP.frames is empty -- fasm2frames produced nothing."
+    echo "       Do NOT trust the .bit that would come out of this: an empty"
+    echo "       frames file still yields a file(1)-valid bitstream."
+    exit 1
+fi
+
 echo "==> [4/4] frames -> bitstream"
-xc7frames2bit --part_file "$PRJXRAY_DB/kintex7/$PART/part.yaml" \
+"$XC7FRAMES2BIT" --part_file "$PRJXRAY_DB/kintex7/$PART/part.yaml" \
     --part_name "$PART" \
     --frm_file "$OUT/$TOP.frames" \
     --output_file "$OUT/$TOP.bit"
