@@ -6,11 +6,24 @@
 #
 #   ./run_encrypt_equiv.sh [workdir]
 #
-# Runs BOTH interleave polarities. +pinv=0 is the intended one and must
-# PASS; +pinv=1 is a control and must FAIL -- if the control passes, the
-# testbench is not sensitive to the interleave and the pass is worthless.
+# Runs three configurations concurrently:
 #
-# Budget ~30 min per polarity (they run concurrently): the OdoCrypt core
+#   +pinv=0             intended interleave        -- must PASS
+#   +pstuck=1           phase held constant        -- must FAIL
+#   +pinv=1             phase inverted             -- expected to pass
+#
+# The middle one is the negative control: holding phase constant means
+# slot 1 is never serviced, i.e. genuinely broken hardware. If that run
+# passes, the testbench cannot detect a broken interleave and the first
+# run's PASS is worthless.
+#
+# +pinv=1 is NOT a control -- inverting the phase is a benign relabelling
+# (both slots are still serviced once per clk_h; only the sub-clk_h moment
+# each output register updates changes, and both settle before the next
+# clk_h sampling edge). It is run to confirm the design tolerates either
+# alignment, which is useful to know but proves nothing about sensitivity.
+#
+# Budget ~35-45 min (they run concurrently and contend): the OdoCrypt core
 # simulates at roughly 2.7 s per clock cycle here, and the pipeline is
 # 172 stages deep before any output is even defined.
 set -uo pipefail
@@ -40,25 +53,35 @@ iverilog -g2005 -o "$WORK/sim_equiv" \
     "$WORK/encrypt_mux2_renamed.v" \
     "$ODO/encrypt.v" || exit 1
 
-echo "==> [4/4] simulating both polarities (this takes ~30 min)"
-"$WORK/sim_equiv" +pinv=0 > "$WORK/equiv0.log" 2>&1 &
+echo "==> [4/4] simulating (this takes ~35-45 min)"
+"$WORK/sim_equiv" +pinv=0   > "$WORK/equiv_intended.log" 2>&1 &
 p0=$!
-"$WORK/sim_equiv" +pinv=1 > "$WORK/equiv1.log" 2>&1 &
+"$WORK/sim_equiv" +pstuck=1 > "$WORK/equiv_stuck.log"    2>&1 &
 p1=$!
-wait $p0; wait $p1
+"$WORK/sim_equiv" +pinv=1   > "$WORK/equiv_inverted.log" 2>&1 &
+p2=$!
+wait $p0; wait $p1; wait $p2
 
 echo
-echo "--- intended polarity (must PASS) ---"
-cat "$WORK/equiv0.log"
-echo "--- control polarity (must FAIL) ---"
-cat "$WORK/equiv1.log"
+echo "--- intended interleave (must PASS) ---"
+cat "$WORK/equiv_intended.log"
+echo "--- NEGATIVE CONTROL, phase held constant (must FAIL) ---"
+cat "$WORK/equiv_stuck.log"
+echo "--- phase inverted (expected to pass; not a control) ---"
+cat "$WORK/equiv_inverted.log"
 
-ok0=$(grep -c "RESULT: PASS" "$WORK/equiv0.log")
-bad1=$(grep -cE "RESULT: (FAIL|INCONCLUSIVE)" "$WORK/equiv1.log")
+ok=$(grep -c "RESULT: PASS" "$WORK/equiv_intended.log")
+ctl=$(grep -c "RESULT: FAIL" "$WORK/equiv_stuck.log")
 echo
-if [ "$ok0" -eq 1 ] && [ "$bad1" -eq 1 ]; then
-    echo "OVERALL: PASS -- equivalent, and the test is sensitive to the interleave"
+if [ "$ok" -eq 1 ] && [ "$ctl" -eq 1 ]; then
+    echo "OVERALL: PASS -- equivalent, and the test provably detects a broken interleave"
     exit 0
 fi
-echo "OVERALL: NOT PROVEN (intended_pass=$ok0 control_failed=$bad1)"
+if [ "$ok" -eq 1 ] && [ "$ctl" -ne 1 ]; then
+    echo "OVERALL: NOT PROVEN -- the intended run passed, but so did the negative"
+    echo "         control. The test cannot detect broken hardware, so its PASS"
+    echo "         carries no weight. Fix the testbench before believing it."
+    exit 1
+fi
+echo "OVERALL: NOT PROVEN (intended_passed=$ok control_failed=$ctl)"
 exit 1

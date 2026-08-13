@@ -20,10 +20,18 @@
 //    is fully defined, and reports INCONCLUSIVE rather than PASS if
 //    fewer than MIN_DEFINED such cycles accumulate.
 //
-// 2. A test that passes at both interleave phases is not testing the
-//    interleave. Run it with +pinv=1 to invert the phase: that run MUST
-//    fail. If it passes, the testbench is insensitive and the +pinv=0
-//    pass is meaningless.
+// 2. A pass means nothing unless the test can also FAIL. The negative
+//    control is +pstuck=1, which holds `phase` constant so slot 1 is
+//    never serviced -- genuinely broken hardware. That run must fail.
+//
+//    NOTE: +pinv=1 (invert the phase) is NOT a valid negative control,
+//    though an earlier version of this file claimed it was. Inverting the
+//    phase is a benign relabelling: both slots still get serviced exactly
+//    once per clk_h, and only the sub-clk_h moment at which each output
+//    register updates changes. Both orderings settle before the next
+//    clk_h sampling edge, so both are correct and both pass. It is kept
+//    here because it is still worth knowing the design tolerates either
+//    phase alignment -- but as an observation, not as a control.
 //
 // Usage: see run_encrypt_equiv.sh, which regenerates the muxed core and
 // runs both polarities. ~2.7 s per simulated cycle here, so a 600-cycle
@@ -42,12 +50,14 @@ module tb;
 
     reg clk_h = 0;
     reg phase = 1;                 // phase==0 while clk_h is high
-    integer pinv = 0;
+    integer pinv   = 0;            // invert phase (benign; see header)
+    integer pstuck = 0;            // hold phase constant -- NEGATIVE CONTROL
     always @(posedge clk2x) begin
         clk_h <= ~clk_h;
         phase <= ~phase;
     end
-    wire phase_d = pinv ? ~phase : phase;
+    wire phase_t = pinv ? ~phase : phase;
+    wire phase_d = pstuck ? 1'b0 : phase_t;
 
     reg [639:0] in;
     reg         read = 0;
@@ -66,7 +76,8 @@ module tb;
     integer first_def = -1;
 
     initial begin
-        if (!$value$plusargs("pinv=%d", pinv)) pinv = 0;
+        if (!$value$plusargs("pinv=%d",   pinv))   pinv   = 0;
+        if (!$value$plusargs("pstuck=%d", pstuck)) pstuck = 0;
         in = 640'h0; read = 0;
         repeat (4) @(posedge clk_h);
 
@@ -104,8 +115,12 @@ module tb;
 
         $display("");
         $display("=== encrypt core: original vs shared-BRAM (2x muxed) ===");
-        $display("  phase polarity         : %0d%s", pinv,
-                 pinv ? " (CONTROL -- must FAIL)" : " (intended)");
+        if (pstuck)
+            $display("  mode                   : phase HELD CONSTANT (negative control -- must FAIL)");
+        else if (pinv)
+            $display("  mode                   : phase INVERTED (expected to pass; benign relabelling)");
+        else
+            $display("  mode                   : intended interleave");
         $display("  clk_h cycles driven    : %0d", N);
         $display("  first defined output   : cycle %0d", first_def);
         $display("  defined cycles compared: %0d", n_cmp);
