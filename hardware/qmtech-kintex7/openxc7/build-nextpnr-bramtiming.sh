@@ -51,14 +51,28 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC_DIR="${1:-$HERE/.openxc7-src}"
 REPO="$SRC_DIR/nextpnr-xilinx"
-NEXTPNR_TAG="${NEXTPNR_TAG:-0.9.2}"
+# The chipdb encodes nextpnr's internal ID table, so the chipdb and the
+# binary MUST be built from the SAME revision -- mixing them aborts at load
+# with "internal IDs of nextpnr are inconsistent with the supplied chip
+# database". Keep this identical in build-chipdb.sh and
+# build-nextpnr-bramtiming.sh.
+#
+# NOT the 0.9.2 tag: that release cannot route. It fails even the blinky
+# smoke test with
+#   ERROR: Failed to route arc 0 of net 'ctr[19]',
+#          from SITEWIRE/SLICE_X4Y83/DQ to SITEWIRE/SLICE_X4Y83/D1
+# -- a flip-flop output feeding a LUT input in the SAME slice. main routes
+# the identical netlist without complaint.
+NEXTPNR_REV="${NEXTPNR_REV:-e9b7354}"
+NEXTPNR_BRANCH="${NEXTPNR_BRANCH:-main}"
 JOBS="${JOBS:-$(nproc)}"
 
 if [ ! -d "$REPO/.git" ]; then
-    echo "==> cloning nextpnr-xilinx ($NEXTPNR_TAG)"
+    echo "==> cloning nextpnr-xilinx ($NEXTPNR_REV)"
     mkdir -p "$SRC_DIR"
-    git clone --depth 1 --branch "$NEXTPNR_TAG" \
+    git clone --branch "$NEXTPNR_BRANCH" \
         https://github.com/openXC7/nextpnr-xilinx.git "$REPO"
+    git -C "$REPO" checkout --detach "$NEXTPNR_REV"
 fi
 
 echo "==> applying block RAM timing patch"

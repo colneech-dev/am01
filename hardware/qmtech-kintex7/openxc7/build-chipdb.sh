@@ -19,7 +19,20 @@ set -euo pipefail
 DEVICE="${DEVICE:-xc7k325tffg676-1}"
 OUT_DIR="${OUT_DIR:-$PWD/chipdb}"
 SRC_DIR="${SRC_DIR:-$PWD/.openxc7-src}"
-NEXTPNR_TAG="${NEXTPNR_TAG:-0.9.2}"
+# The chipdb encodes nextpnr's internal ID table, so the chipdb and the
+# binary MUST be built from the SAME revision -- mixing them aborts at load
+# with "internal IDs of nextpnr are inconsistent with the supplied chip
+# database". Keep this identical in build-chipdb.sh and
+# build-nextpnr-bramtiming.sh.
+#
+# NOT the 0.9.2 tag: that release cannot route. It fails even the blinky
+# smoke test with
+#   ERROR: Failed to route arc 0 of net 'ctr[19]',
+#          from SITEWIRE/SLICE_X4Y83/DQ to SITEWIRE/SLICE_X4Y83/D1
+# -- a flip-flop output feeding a LUT input in the SAME slice. main routes
+# the identical netlist without complaint.
+NEXTPNR_REV="${NEXTPNR_REV:-e9b7354}"
+NEXTPNR_BRANCH="${NEXTPNR_BRANCH:-main}"
 
 # bbasm turns the .bba text export into the binary chipdb. Any bbasm
 # works (it is a dumb assembler); apio ships one, or build from source.
@@ -41,9 +54,10 @@ mkdir -p "$OUT_DIR" "$SRC_DIR"
 # submodules (prjxray-db for the fuzzed device data, nextpnr-xilinx-meta
 # for site metadata). No compilation needed for chipdb generation.
 if [ ! -d "$SRC_DIR/nextpnr-xilinx/.git" ]; then
-    echo "==> cloning nextpnr-xilinx ($NEXTPNR_TAG) + submodules"
-    git clone --depth 1 --branch "$NEXTPNR_TAG" \
+    echo "==> cloning nextpnr-xilinx ($NEXTPNR_REV) + submodules"
+    git clone --branch "$NEXTPNR_BRANCH" \
         https://github.com/openXC7/nextpnr-xilinx.git "$SRC_DIR/nextpnr-xilinx"
+    git -C "$SRC_DIR/nextpnr-xilinx" checkout --detach "$NEXTPNR_REV"
     git -C "$SRC_DIR/nextpnr-xilinx" submodule update --init --recursive --depth 1 \
         xilinx/external/prjxray-db xilinx/external/nextpnr-xilinx-meta
 fi
