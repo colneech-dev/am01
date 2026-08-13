@@ -58,11 +58,19 @@ module am01_qmtech_top (
     wire sys_clk_ibuf;
     IBUF ibuf_sys_clk (.I(sys_clk_50m), .O(sys_clk_ibuf));
 
-    wire clk_h, clk_h_locked;
+    // clk_2x is 2 x clk_h off the same MMCM, phase-aligned. It exists for
+    // the shared-BRAM S-boxes (see hdl/sbox_large_mux2.v). Nothing
+    // consumes it yet -- the muxed core is applied to encrypt.v at build
+    // time by tools/mux2_transform.py -- so synthesis will currently drop
+    // its BUFG. It is generated here rather than later so that both
+    // builds share one clocking source and the 2:1 phase alignment is a
+    // property of the MMCM, not of whoever wires it up.
+    wire clk_h, clk_2x, clk_h_locked;
     clk_gen_hash clk_gen_hash_inst (
         .clk_in      (sys_clk_ibuf),
         .rst         (1'b0),
         .clk_h       (clk_h),
+        .clk_2x      (clk_2x),
         .clk_h_locked(clk_h_locked)
     );
 

@@ -29,45 +29,77 @@
 // scaffolded from the command line (see ../vivado/build.tcl) without
 // needing to click through IP Integrator.
 //
-// STATUS / TODO: CLKFBOUT_MULT / CLKOUT0_DIVIDE below target 150MHz (50MHz
-// x 15 / 5), not the earlier arbitrary 125MHz guess. 150MHz is grounded in
-// a real cross-reference: exmaples/odocrypt/fpga/src/hdl/miner.v is the
-// same upstream `THROUGHPUT 4` pipelined odo_encrypt core (MentalCollatz)
-// that colneech-dev/odo-miner-cyclonev benchmarked on comparable-class
-// fabric (QMTECH Cyclone V SoC, ~110K LE) -- Quartus reported Fmax =
-// 162.1MHz @ Slow/85C for that exact core, and it's deployed at 156.25MHz
-// on that board. 150MHz is the upstream reference clock (37.5MH/s at
-// THROUGHPUT=4). Xilinx 7-series (-1 speed grade) should have at least as
-// much headroom as that Cyclone V part, but this is still a cross-vendor,
-// cross-part estimate, not a Vivado STA result for THIS wrapper on THIS
-// XC7K325T-1FFG676C -- re-verify from post-synthesis timing and retune if
-// it doesn't close.
+// Emits TWO phase-aligned clocks from one MMCM:
+//
+//   clk_h   -- the hash-core clock, as before
+//   clk_2x  -- exactly 2 x clk_h, for the shared-BRAM S-boxes in
+//              sbox_large_mux2.v / the mux2 transform
+//
+// Both come off the same MMCM with CLKOUTn_PHASE 0.0, so they are
+// phase-aligned by construction. That is what makes the S-box time
+// multiplexing synchronous multi-rate logic rather than a clock-domain
+// crossing -- no synchronisers, no metastability. Nothing else in the
+// design may generate clk_2x, or that guarantee is gone.
+//
+// WHY THE FREQUENCIES CHANGED (150 -> 133.33MHz nominal)
+// ------------------------------------------------------
+// The 2x pair has to be two *integer* MMCM output dividers in a 2:1
+// ratio. From the old VCO of 750MHz the only integer pairs available were
+// 3/6 (250/125MHz) and 2/4 (375/187.5MHz); 750/2.5 = 300MHz would work
+// arithmetically but only via CLKOUT0's fractional divider, which costs
+// duty-cycle accuracy and adds jitter on the very clock the block RAMs
+// run on. Raising the VCO to 800MHz (MULT 16, still inside the -1 grade's
+// 600-1200MHz range) gives the clean integer pair 3/6 = 266.67/133.33MHz.
+//
+// Dropping the nominal from 150 to 133.33MHz costs nothing real: the old
+// 150 was never verified on this part. It came from a cross-vendor
+// comparison with colneech-dev/odo-miner-cyclonev, where Quartus reported
+// Fmax = 162.1MHz for the same upstream THROUGHPUT=4 core on a Cyclone V.
+// The first actual measurement on THIS XC7K325T-1FFG676C came back at
+// clk_h = 135.04MHz -- the Kintex-7 clocks *lower* than the Cyclone V for
+// this design, not higher. 133.33MHz sits just under that measurement, so
+// this is the first setting here grounded in a number from this part
+// rather than from another vendor's.
+//
+// STATUS: clk_2x at 266.67MHz has NOT been shown to close timing on
+// real place-and-route. The block RAM itself has margin (ds182 rates
+// FMAX_BRAM at 458MHz for -1), so the path to watch is the address
+// muxing in sbox_large_mux2, not the memory.
 //
 `timescale 1ns / 1ps
 
 module clk_gen_hash #(
     parameter CLKIN_PERIOD_NS = 20.000, // 50MHz input
-    parameter CLKFBOUT_MULT   = 15,     // VCO = 50MHz * 15 = 750MHz (7-series -1: 600-1200MHz range)
-    parameter CLKOUT0_DIVIDE  = 5       // clk_h = 750MHz / 5 = 150MHz -- see note above
+    parameter CLKFBOUT_MULT   = 16,     // VCO = 50MHz * 16 = 800MHz (7-series -1: 600-1200MHz range)
+    parameter CLKOUT_DIVIDE_2X = 3      // clk_2x = 800/3 = 266.67MHz, clk_h = 800/6 = 133.33MHz
 )
 (
     input  wire clk_in,     // from sys_clk_50m (via IBUF upstream)
     input  wire rst,        // async reset, active high
     output wire clk_h,      // hash-core clock
+    output wire clk_2x,     // 2 x clk_h, phase aligned -- shared-BRAM S-boxes
     output wire clk_h_locked
 );
 
+    // clk_h is derived by doubling the clk_2x divider, so the 2:1 ratio
+    // cannot drift if someone retunes CLKOUT_DIVIDE_2X.
+    localparam CLKOUT_DIVIDE_H = 2 * CLKOUT_DIVIDE_2X;
+
     wire clkfb;
-    wire clkout0_unbuf;
+    wire clkout0_unbuf;   // clk_2x
+    wire clkout1_unbuf;   // clk_h
 
     MMCME2_BASE #(
         .BANDWIDTH        ("OPTIMIZED"),
         .CLKFBOUT_MULT_F  (CLKFBOUT_MULT),
         .CLKFBOUT_PHASE   (0.0),
         .CLKIN1_PERIOD    (CLKIN_PERIOD_NS),
-        .CLKOUT0_DIVIDE_F (CLKOUT0_DIVIDE),
+        .CLKOUT0_DIVIDE_F (CLKOUT_DIVIDE_2X),
         .CLKOUT0_DUTY_CYCLE(0.5),
         .CLKOUT0_PHASE    (0.0),
+        .CLKOUT1_DIVIDE   (CLKOUT_DIVIDE_H),
+        .CLKOUT1_DUTY_CYCLE(0.5),
+        .CLKOUT1_PHASE    (0.0),
         .DIVCLK_DIVIDE    (1),
         .REF_JITTER1      (0.010),
         .STARTUP_WAIT     ("FALSE")
@@ -76,13 +108,19 @@ module clk_gen_hash #(
         .CLKFBIN  (clkfb),
         .CLKFBOUT (clkfb),
         .CLKOUT0  (clkout0_unbuf),
+        .CLKOUT1  (clkout1_unbuf),
         .PWRDWN   (1'b0),
         .RST      (rst),
         .LOCKED   (clk_h_locked)
     );
 
-    BUFG bufg_clk_h (
+    BUFG bufg_clk_2x (
         .I (clkout0_unbuf),
+        .O (clk_2x)
+    );
+
+    BUFG bufg_clk_h (
+        .I (clkout1_unbuf),
         .O (clk_h)
     );
 
