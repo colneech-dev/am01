@@ -75,10 +75,51 @@ per unrolled round**. The XC7K325T has **890 RAMB18** (445 x RAMB36):
 
 Note every row lands on the same total. **Tuning THROUGHPUT alone buys
 nothing** — the BRAM budget fixes the ceiling. The clock is the only
-lever, and the clock is limited by combinational depth, which UNROLLING
-sets. So THROUGHPUT=4 is arguably the *worst* operating point available
-here: it runs the deepest logic path (3 keccak rounds between registers)
-while the block RAM idles at a fraction of its rating.
+lever.
+
+> **An earlier revision of this section went one step further and was
+> wrong.** It argued that "the clock is limited by combinational depth,
+> which UNROLLING sets", concluding THROUGHPUT=4 was the *worst* operating
+> point and that regenerating `encrypt.v` at THROUGHPUT=12 was the one
+> change that would move Fmax.
+>
+> UNROLLING does set *keccak's* depth. It does not follow that keccak owns
+> the critical path, and measurement says it does not:
+>
+> | measured, post-route | Fmax |
+> |---|---|
+> | keccak alone, UNROLLING=3 (THROUGHPUT=4) | 227.69 MHz |
+> | keccak alone, UNROLLING=1 (THROUGHPUT=12) | 293.94 MHz |
+> | **whole miner (encrypt + keccak)** | **86.52 MHz** |
+>
+> Keccak has ~2.6x headroom over the clock the design actually reaches, so
+> shortening its path raises a ceiling that was never touching the floor.
+> Corroborated independently: when the shared-BRAM experiment moved the
+> S-box paths into a separate clock domain, the miner's remaining `clk_h`
+> paths reported 161.29 MHz — everything that is not an S-box is
+> comfortably fast.
+>
+> The limiter is the encrypt core's block RAM S-box path, which does not
+> scale with THROUGHPUT at all. The arithmetic then closes the door:
+> THROUGHPUT=12 gives 140 RAMB18/instance and 6 instances, so
+> `6 x F/12` = `0.5F` — identical to today's `2 x F/4`. More instances,
+> same rate.
+>
+> Two things worth extracting from the mistake. The paragraph above
+> already said the critical path "runs through a BRAM S-box lookup **plus**
+> three unrolled keccak rounds" — both halves were named correctly, and
+> then only the half THROUGHPUT touches got used, because that was the
+> half that varied. And at the time nextpnr did not time block RAM at all
+> (see [openxc7/](openxc7/)), so the only instrument available would have
+> confirmed the wrong answer.
+
+If you can regenerate `encrypt.v`, the change worth asking for is not a
+different THROUGHPUT but **block RAM output registers** (`DO_REG=1`) on
+the large S-boxes: measured **+13%** (84.90 → 96.04 MHz), because it cuts
+BRAM clock-to-out from 2.454 ns to 0.882 ns. It cannot be done downstream
+— yosys maps a second register stage to fabric flops rather than into the
+block RAM — and it costs a pipeline stage the generator can absorb by
+adjusting `progress` and `period`.
 
 **What this part is actually rated for** (Kintex-7 datasheet ds182,
 **-1** speed grade — the grade on this board's XC7K325T-1FFG676C):
