@@ -73,6 +73,24 @@ else
     exit 1
 fi
 
+# The patch adds #include "xc7_bram_timing.h", and that header is
+# GENERATED from prjxray's SDF rather than checked in -- so it has to exist
+# before the compiler sees arch.cc. Generating it here keeps the two in
+# step; editing the numbers means re-running make-bram-timing-db.sh, not
+# editing arch.cc.
+HEADER="$REPO/xilinx/xc7_bram_timing.h"
+if [ ! -f "$HEADER" ]; then
+    echo "==> generating block RAM timing header (missing)"
+    "$HERE/make-bram-timing-db.sh" || {
+        echo "ERROR: could not generate $HEADER"
+        echo "       run ./build-chipdb.sh first -- it clones the prjxray-db"
+        echo "       that the timing numbers are extracted from."
+        exit 1
+    }
+else
+    echo "==> block RAM timing header present"
+fi
+
 echo "==> configuring"
 mkdir -p "$REPO/build"
 cmake -S "$REPO" -B "$REPO/build" \
