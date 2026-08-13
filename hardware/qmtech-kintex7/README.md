@@ -107,7 +107,11 @@ Max frequency for clock   'clk_h': 135.04 MHz  (FAIL at 150 MHz)
 | 2 instances if Vivado closes at 200 MHz | 200 | 100 MH/s |
 | Hard BRAM ceiling (bounds the problem; not reachable) | 458 | 229 MH/s |
 
-**Best current estimate for this board: ~67.5 MH/s.**
+**Best current estimate for this board: ~67.5 MH/s — and this should be
+read as an upper bound, not a conservative one.** The 135 MHz it rests on
+came from a timing analysis that does not appear to time block-RAM paths
+at all, in a design that is 420 block RAMs per instance. See the third
+qualification below.
 
 ### The earlier projection here was too optimistic — by about 2x
 
@@ -126,15 +130,35 @@ S-box lookup plus three unrolled keccak rounds (`UNROLLING=3` at
 `THROUGHPUT=4`). The capacity is what the 2-instance build spends, and
 that is a real 2x; it just does not buy any clock.
 
-Two qualifications on the 135 MHz, in both directions:
+(That description of the critical path is the design's actual structure,
+but note it is *not* what nextpnr measured — see the third qualification
+below. A path out of a BRAM S-box is exactly the kind this flow's STA
+does not time.)
+
+Three qualifications on the 135 MHz. The third undercuts the other two.
 
 - **It is nextpnr's STA, not Vivado's.** Open-source PnR generally has
   worse QoR than vendor tools, so Vivado on the same silicon could
-  plausibly close higher. Treat it as a floor for this flow, not the
-  part's ceiling. (The 200 MHz row above is illustrative of that, not a
-  measurement.)
+  plausibly close higher. (The 200 MHz row above is illustrative of that,
+  not a measurement.)
 - **It is post-placement.** Routing normally degrades timing, so the
   final routed figure is likely at or below 135 MHz.
+- **nextpnr does not appear to time paths starting at a block RAM output
+  on this chipdb.** Inserting a register into a BRAM-fed path — which can
+  only shorten each path — made the reported Fmax *fall* from 840 MHz to
+  197 MHz in a controlled harness. A working timing model cannot do that;
+  the BRAM-to-fabric path was simply never considered. Full measurements
+  in [openxc7/README.md](openxc7/README.md#nextpnrs-sta-does-not-see-block-ram-paths).
+
+That third point matters here more than anywhere, because this design is
+420 block RAMs per hash instance and the paragraph above asserts its
+critical path "runs through a BRAM S-box lookup plus three unrolled
+keccak rounds". If BRAM paths are not timed, that path is not what
+produced 135.04 MHz — a fabric-only path did. So **135 MHz is an upper
+bound on this flow's Fmax, not a floor, and ~67.5 MH/s is optimistic
+rather than conservative.** Treat every hashrate figure on this page as
+provisional until a tool that times BRAM arcs (Vivado STA) confirms the
+clock.
 
 ### Why the Cyclone-V anchor was still the wrong method
 

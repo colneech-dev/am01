@@ -253,14 +253,62 @@ S-box lookup and three unrolled keccak rounds (`UNROLLING=3` at
 `THROUGHPUT=4`). Capacity and clock are different axes. The extra
 capacity is what the 2-instance build spends; it does not buy frequency.
 
-Two honest qualifications on the 135 MHz:
+Three qualifications on the 135 MHz. The third is the serious one and it
+points the opposite way from the first.
 
 1. **It is nextpnr's STA, not Vivado's.** Open-source place-and-route
    generally has worse quality of result than vendor tools, so Vivado on
-   the same silicon could plausibly do better. Treat 135 MHz as a floor
-   for *this flow*, not a ceiling for the part.
+   the same silicon could plausibly do better.
 2. **It is the post-placement figure.** Routing normally degrades
    timing, so the final routed number is likely at or below this.
+3. **nextpnr does not appear to time paths that start at a block RAM
+   output on this chipdb** — so 135 MHz is a *fabric-only* figure, and
+   the true Fmax of a design with 420 BRAMs per instance is likely
+   **lower**, not higher. See below.
+
+### nextpnr's STA does not see block RAM paths
+
+Measured with three variants of the same S-box timing harness (20-40
+S-boxes, LFSR-driven addresses, XOR-folded outputs, identical fold depth
+in all three):
+
+| harness | timed path | reported Fmax |
+|---|---|---|
+| stock S-boxes | BRAM out -> XOR fold -> FF | **840.34 MHz** |
+| stock + fabric register | BRAM out -> **FF** -> XOR fold -> FF | **197.43 MHz** |
+| shared-BRAM S-boxes | BRAM out -> FF -> XOR fold -> FF | **172.12 MHz** |
+
+Inserting a register can only ever make each individual path *shorter*.
+Reported Fmax fell from 840 to 197 MHz. A working timing model cannot
+behave that way. The only consistent reading is that in the first row the
+BRAM-to-fabric path was never considered at all, so the reported figure
+came from some other, much shorter path.
+
+Fabric timing itself is fine: 197 MHz for a ~6-LUT-level XOR tree is
+about right. It is specifically the block-RAM arcs that are missing.
+
+**What this means for every frequency number from this flow:** any
+critical path running out of a BRAM is invisible. For a design that is
+420 block RAMs per hash instance and whose critical path was assumed to
+run "through a BRAM S-box lookup", that assumption cannot be what the
+tool measured — such a path is exactly the kind it does not time. So
+`clk_h = 135.04 MHz` should be read as *the worst fabric-to-fabric path*,
+an upper bound on the real Fmax rather than a floor, and **~67.5 MH/s is
+optimistic, not conservative**.
+
+Qualification 1 above still stands on its own (Vivado may route better),
+but it no longer makes 135 MHz safe to treat as a floor. Settling this
+needs a tool that times BRAM arcs — Vivado's STA, or a nextpnr/chipdb
+combination shown to model them.
+
+This also means the shared-BRAM S-box work in ../hdl/sbox_large_mux2.v
+**cannot be timing-validated with this flow**: whether its address mux
+closes at 266.67 MHz is precisely a question about a path adjacent to a
+block RAM. The 172 MHz in the table above is the XOR fold in the test
+harness, not the S-box. Replicating the interleave `phase` register to
+cut its fanout from 421 to 21 changed the reported figure by nothing at
+all (172.12 MHz before and after) — which is itself a good demonstration
+that the number was never measuring the S-box.
 
 ### What would actually raise it
 
