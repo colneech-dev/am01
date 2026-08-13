@@ -62,9 +62,43 @@
 // is generated once per design (not per S-box) so every muxed S-box
 // interleaves identically -- see sbox_mux_phase_gen at the bottom.
 //
-// STATUS: prototype. Simulation-verified bit-exact against two
-// independent sbox instances (see ../sim/tb_sbox_mux2.v). NOT yet timed
-// at 270 MHz on real place-and-route, and not run on hardware.
+// STATUS: prototype, MEASURED, and the result is a partial win with a
+// hard architectural ceiling. Read this before building on it.
+//
+// Bit-exactness holds: the transformed encrypt core is identical to the
+// stock one over 493 defined cycles, with a negative control that fails
+// 473/473 (../sim/tb_encrypt_equiv.v). Block RAM halves exactly as
+// intended, 420 -> 210 RAMB18 per hash instance, so 4 instances fit in
+// the 890 available where 2 fit before.
+//
+// But place-and-route of the real muxed miner gives clk_2x = 103.72 MHz,
+// not the ~160 MHz an isolated S-box probe suggested. Net effect:
+//
+//   stock       2 instances @ 84.90 MHz clk_h  = 42.5 MH/s
+//   shared-BRAM 4 instances @ 51.86 MHz clk_h  = 51.9 MH/s   (1.22x)
+//
+// WHY IT FALLS SHORT, AND WHY THAT IS STRUCTURAL
+// ---------------------------------------------
+// The S-box address is not register-driven. It arrives through
+// combinational logic from the previous pipeline stage and settles about
+// 9.6 ns into an 11.78 ns clk_h period. The stock design samples it on
+// the NEXT clk_h edge, so it gets the whole period. Time multiplexing
+// forces slot 0 to sample half a period early, at 5.888 ns -- before the
+// address is ready. Slot 1 still samples on the clk_h edge and is fine.
+//
+// The same place-and-route reports muxed clk_h = 161.29 MHz against the
+// stock design's 84.90. That is the tell: the long path did not get
+// faster, it MOVED into the clk_2x domain, where half the time is
+// available. An isolated probe misses this entirely because it drives
+// addresses straight from a flop.
+//
+// Fixing it means registering the S-box address, which costs a full clk_h
+// of latency on every S-box -- i.e. regenerating encrypt.v with different
+// pipelining, not a drop-in transform. Phase-shifting clk_2x does not
+// rescue it either: giving the address more time leaves under 2.2 ns
+// between the two reads, and block RAM clock-to-out alone is 2.454 ns.
+//
+// Still unverified on hardware.
 //
 `timescale 1ns / 1ps
 
