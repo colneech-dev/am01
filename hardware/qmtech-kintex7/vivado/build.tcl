@@ -25,18 +25,20 @@ set script_dir [file dirname [info script]]
 set proj_dir   [file join $script_dir build]
 
 set repo_root    [file normalize [file join $script_dir .. .. ..]]
-set odocrypt_hdl [file join $repo_root exmaples odocrypt fpga src hdl]
+set odocrypt_hdl [file join $repo_root hdl odocrypt]
 set this_hdl     [file join $repo_root hardware qmtech-kintex7 hdl]
 set this_xdc     [file join $repo_root hardware qmtech-kintex7 xdc]
 
 create_project $proj_name $proj_dir -part $part -force
 
-# Only the algorithm/interface-agnostic sources from the odocrypt example
-# (encrypt.v, keccak800.v, miner.v, and atomminer_misc.v's odo_block_data
-# / host_break_sm) -- deliberately NOT atomminer_odocrypt.v, usb3_interface.v,
-# usb3_sm_v3.v, or the artix200_v3_clocking/usb3_system_ram/xadc_artix200_v0
-# IP, all of which are specific to the stock AM01's FX3/Artix-7 setup and
-# have no place in this variant.
+# Only the algorithm/interface-agnostic sources from hdl/odocrypt/ (a copy
+# of the odocrypt example kept in sync with the current OdoCrypt epoch --
+# see hdl/odocrypt/NOTICE): encrypt.v, keccak800.v, miner.v, and
+# atomminer_misc.v's odo_block_data / host_break_sm. Deliberately NOT
+# atomminer_odocrypt.v, usb3_interface.v, usb3_sm_v3.v, or the
+# artix200_v3_clocking/usb3_system_ram/xadc_artix200_v0 IP (still in
+# exmaples/odocrypt/fpga/src/hdl/, unmodified), all of which are specific
+# to the stock AM01's FX3/Artix-7 setup and have no place in this variant.
 add_files -norecurse [list \
     [file join $odocrypt_hdl encrypt.v] \
     [file join $odocrypt_hdl keccak800.v] \

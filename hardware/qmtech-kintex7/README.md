@@ -42,8 +42,10 @@ From the QMTECH user manual (`QMTECH XC7K325T DEV BOARD USER MANUAL V01`):
 
 Same "7-series" architecture family as the AM01's Artix-7 (same MMCME2 /
 IOBUF / GTXE2 primitives), so `encrypt.v`, `keccak800.v`, `miner.v`,
-`odo_block_data`, `host_break_sm` from `exmaples/odocrypt/fpga/src/hdl/`
-port over unmodified — same conclusion as the Zynq doc. BRAM is the
+`odo_block_data`, `host_break_sm` from `hdl/odocrypt/` (a copy of
+`exmaples/odocrypt/fpga/src/hdl/` kept in sync with the current OdoCrypt
+epoch — see `hdl/odocrypt/NOTICE`) port over unmodified — same conclusion
+as the Zynq doc. BRAM is the
 binding resource for parallel hash-core instances (211 tiles/instance per
 `exmaples/odocrypt/fpga/utilization.txt`), so this chip fits **~2
 instances (~2x hashrate)** vs. today's single instance on the AM01.

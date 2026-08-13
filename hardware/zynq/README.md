@@ -99,9 +99,11 @@ flowchart LR
 ```
 
 Everything below `odo_block_data` / `host_break_sm` / `miner_top` in
-`exmaples/odocrypt/fpga/src/hdl/` (`encrypt.v`, `keccak800.v`, `miner.v`,
-`atomminer_misc.v`) is **untouched** — it has no board-specific pins or
-IP dependencies and ports straight over. What gets replaced is everything
+`hdl/odocrypt/` (`encrypt.v`, `keccak800.v`, `miner.v`, `atomminer_misc.v`
+— a copy of `exmaples/odocrypt/fpga/src/hdl/` kept in sync with the
+current OdoCrypt epoch, see `hdl/odocrypt/NOTICE`) is **untouched** — it
+has no board-specific pins or IP dependencies and ports straight over.
+What gets replaced is everything
 that talked to the FX3 chip:
 
 | Removed (FX3-era) | Replaced by |
@@ -149,7 +151,8 @@ The wrapper collapses the protocol to:
 Firmware flow: write 19 header words → write 8 target words → poll
 `STATUS.NONCE_VALID` or wait for `irq` → read `GOLDEN_NONCE` (this also
 clears the interrupt). `odo_block_data`, `host_break_sm`, and `miner_top`
-are instantiated completely unmodified from `exmaples/odocrypt/fpga/src/hdl/`.
+are instantiated completely unmodified from `hdl/odocrypt/` (see
+`hdl/odocrypt/NOTICE`).
 
 Every `HEADER_FIFO`/`TARGET_FIFO`/`CTRL` write crosses from the AXI clock
 domain into the hash-core clock domain over a toggle/ack handshake (see

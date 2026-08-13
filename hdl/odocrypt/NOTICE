@@ -1,0 +1,51 @@
+# hdl/odocrypt/ — shared OdoCrypt hash core
+
+This directory holds the OdoCrypt/Keccak hash core RTL shared, unmodified,
+by every real board variant in this repo (`hardware/qmtech-kintex7/`,
+`hardware/zynq/`, and the openXC7 build flow) — see those directories'
+READMEs and wrapper source comments for how each one consumes it.
+
+## Where it came from
+
+`atomminer_misc.v`, `keccak800.v`, and `miner.v` are exact copies of the
+same files in `exmaples/odocrypt/fpga/src/hdl/` (the stock AM01/vendor
+example, originally from upstream `atomminer/am01`). They are not
+epoch-dependent, so the two locations should always be identical for
+these three files.
+
+`encrypt.v` is different: OdoCrypt mutates every 10 days
+(`ntime - ntime % 864000`), so this file must track the *current* epoch to
+produce a working miner. The copy in `exmaples/odocrypt/` is deliberately
+**left at its original upstream epoch** (`1642464000`) because it's paired
+with matching test vectors in `exmaples/odocrypt/test/`. The copy here is
+regenerated for whatever epoch is current.
+
+## Why a separate copy instead of building from exmaples/ directly
+
+`exmaples/` is meant to stay a faithful copy of the upstream vendor
+example — easy to diff/merge against `upstream/master`, and safe to treat
+as reference material without worrying that a real board build depends on
+it byte-for-byte. Keeping the real, load-bearing build dependency in its
+own location (here) makes that dependency visible instead of implicit, and
+lets `encrypt.v` here diverge (by epoch) from the `exmaples/` copy without
+that looking like accidental drift.
+
+## Keeping this up to date
+
+Regenerate `encrypt.v` with the vendored generator at `tools/odo_gen/`:
+
+```
+cd tools/odo_gen && make odo_gen
+./odo_gen <current_epoch_seed> 4 encrypt_4 > ../../hdl/odocrypt/encrypt.v
+```
+
+See `tools/odo_gen/NOTICE` for how to determine the current epoch seed and
+full usage notes. `keccak800.v`, `miner.v`, and `atomminer_misc.v` only
+need re-copying from `exmaples/odocrypt/fpga/src/hdl/` if upstream changes
+them (unlikely — they're the fixed, non-mutating part of the core).
+
+## Licensing
+
+Same as `exmaples/odocrypt/fpga/src/hdl/`: GPL-3.0-or-later, part of the
+upstream `atomminer/am01` example, compatible with this repo's own
+GPL-3.0-or-later license (see top-level `LICENSE`).

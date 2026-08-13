@@ -29,7 +29,9 @@
 // general-purpose GPIO lines using a simple 4-phase parallel bus, instead
 // of the FX3's DQ-bus/USB link or the Zynq variant's on-chip AXI4-Lite.
 // odo_block_data, host_break_sm and miner_top (and everything below
-// them) are reused completely unmodified from exmaples/odocrypt/fpga/src/hdl/.
+// them) are reused completely unmodified from hdl/odocrypt/ (a copy of
+// exmaples/odocrypt/fpga/src/hdl/ kept in sync with the current OdoCrypt
+// epoch -- see hdl/odocrypt/NOTICE).
 //
 // STATUS: reference skeleton for a hardware proposal, not verified/timed
 // silicon-ready RTL. See "What's still needed before this is real

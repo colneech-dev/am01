@@ -4,7 +4,7 @@ Behavioural tests for the RTL in `../hdl/`, runnable with iverilog — no
 licensed simulator needed.
 
 ```sh
-ODO=../../../exmaples/odocrypt/fpga/src/hdl
+ODO=../../../hdl/odocrypt
 iverilog -g2005 -DTHROUGHPUT=4 -o /tmp/tb tb_nonce_split.v \
     $ODO/miner.v $ODO/encrypt.v $ODO/keccak800.v
 vvp /tmp/tb

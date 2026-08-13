@@ -28,7 +28,8 @@
 // FX3 chip, an ARM core on the Zynq PS writes them directly over on-chip
 // AXI4-Lite. odo_block_data, host_break_sm and miner_top (and everything
 // below them: encrypt.v, keccak800.v, miner.v) are reused completely
-// unmodified from exmaples/odocrypt/fpga/src/hdl/.
+// unmodified from hdl/odocrypt/ (a copy of exmaples/odocrypt/fpga/src/hdl/
+// kept in sync with the current OdoCrypt epoch -- see hdl/odocrypt/NOTICE).
 //
 // STATUS: reference skeleton for a hardware proposal, not verified/timed
 // silicon-ready RTL. See "What's still needed before this is real hardware"

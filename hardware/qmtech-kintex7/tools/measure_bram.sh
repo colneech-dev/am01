@@ -16,7 +16,7 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ODO="$HERE/../../../exmaples/odocrypt/fpga/src/hdl"
+ODO="$HERE/../../../hdl/odocrypt"
 WORK="${1:-${TMPDIR:-/tmp}/encrypt-bram}"
 YOSYS="${YOSYS:-$(command -v yosys || echo /opt/openxc7/bin/yosys)}"
 mkdir -p "$WORK" || exit 1
