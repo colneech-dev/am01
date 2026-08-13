@@ -34,8 +34,23 @@ CHIPDB="${CHIPDB:-$PWD/chipdb/$PART.bin}"
 PRJXRAY_DB="${PRJXRAY_DB:-$PWD/.openxc7-src/nextpnr-xilinx/xilinx/external/prjxray-db}"
 XDC="${XDC:-$(dirname "${SRCS[0]}")/$TOP.xdc}"
 FREQ="${FREQ:-50}"
-YOSYS="${YOSYS:-$(command -v yosys)}"
-NEXTPNR="${NEXTPNR:-$(command -v nextpnr-xilinx)}"
+# NB: do NOT write these as YOSYS="${YOSYS:-$(command -v yosys)}". Under
+# `set -e` a failing command substitution inside an assignment kills the
+# script immediately -- so if the tool is not on PATH, build.sh exits 1
+# having printed absolutely nothing, which is a miserable thing to debug.
+# `|| true` keeps the assignment succeeding so the explicit check below
+# can report which tool is missing.
+YOSYS="${YOSYS:-$(command -v yosys || true)}"
+NEXTPNR="${NEXTPNR:-$(command -v nextpnr-xilinx || true)}"
+
+for t in YOSYS:"$YOSYS" NEXTPNR:"$NEXTPNR"; do
+    name=${t%%:*}; path=${t#*:}
+    [ -n "$path" ] && [ -x "$path" ] || {
+        echo "ERROR: $name not found or not executable (${path:-<unset>})."
+        echo "       Set $name=/path/to/tool, e.g. $name=/opt/openxc7/bin/${name,,}"
+        exit 1
+    }
+done
 
 for f in "$CHIPDB" "$XDC"; do
     [ -e "$f" ] || { echo "ERROR: missing $f"; exit 1; }
