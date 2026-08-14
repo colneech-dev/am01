@@ -79,12 +79,24 @@
 //
 // WHY IT FALLS SHORT, AND WHY THAT IS STRUCTURAL
 // ---------------------------------------------
-// The S-box address is not register-driven. It arrives through
-// combinational logic from the previous pipeline stage and settles about
-// 9.6 ns into an 11.78 ns clk_h period. The stock design samples it on
-// the NEXT clk_h edge, so it gets the whole period. Time multiplexing
-// forces slot 0 to sample half a period early, at 5.888 ns -- before the
-// address is ready. Slot 1 still samples on the clk_h edge and is fine.
+// The S-box address settles about 9.6 ns into an 11.78 ns clk_h period.
+// The stock design samples it on the NEXT clk_h edge, so it gets the
+// whole period. Time multiplexing forces slot 0 to sample half a period
+// early, at 5.888 ns -- before the address is ready. Slot 1 still samples
+// on the clk_h edge and is fine.
+//
+// NOTE (corrected): an earlier revision of this comment attributed that
+// 9.6 ns to "combinational logic from the previous pipeline stage". It is
+// not logic. encrypt_4apply_pbox0 is 640 plain `assign out[j] = in[i];`
+// statements -- zero operators -- so the address is a pure permutation of
+// state[i], a flip-flop output, at ZERO logic levels. The 9.6 ns is
+// ROUTING: a 640-bit die-crossing shuffle from one round's state
+// registers to that round's 20 block RAMs, in a build with no
+// floorplanning at all. That reframes the ceiling as placement rather
+// than pipeline structure -- see ../HASHRATE-REVIEW.md §3, and
+// ../vivado/report_sbox_paths.tcl which measures it. It also explains why
+// mux2_pipelined_transform.py made timing WORSE rather than better:
+// adding registers to a congestion-bound design pushes endpoints apart.
 //
 // The same place-and-route reports muxed clk_h = 161.29 MHz against the
 // stock design's 84.90. That is the tell: the long path did not get

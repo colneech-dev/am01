@@ -43,6 +43,25 @@ gcd(THROUGHPUT, loop_depth) must be 1 or passes collide:
 So +2 is both what the boundary registers need and the only depth in
 range that keeps the loop schedule sound.
 
+CORRECTION: that is true AT THROUGHPUT 4, AND ONLY THERE. THROUGHPUT was
+held fixed at 4 throughout the analysis above, but on this chip it is a
+free variable -- rate is BRAM-bound and flat in THROUGHPUT to within ~5%
+(see ../README.md's corrected table). With loop depth 3U+1 for the +1
+variant and U = (84-1)/T + 1:
+
+    T=4,  U=21, loop 64, gcd=4   BROKEN   <- the only case tested
+    T=5,  U=17, loop 52, gcd=1   OK
+    T=7,  U=12, loop 37, gcd=1   OK
+    T=9,  U=10, loop 31, gcd=1   OK
+    T=11, U=8,  loop 25, gcd=1   OK
+    T=13, U=7,  loop 22, gcd=1   OK
+
+T=4 is one of the few values in range where +1 fails. The cheaper +1
+variant was ruled out on a constraint that dissolves as soon as
+THROUGHPUT moves, at zero cost to hash rate (T=7 with mux2: 7 instances
+x 1/7 = 1.000 x f, identical to T=4's 4 x 1/4). See
+../HASHRATE-REVIEW.md §2.3.
+
 EVERYTHING THAT HAS TO MOVE WITH IT
 -----------------------------------
   * large S-boxes: address regs + output re-align regs (+2 clk_h)
@@ -60,9 +79,27 @@ STATUS: FAILED ON BOTH COUNTS. Do not use. Kept for the reasoning only.
      clk_2x = 88.80 MHz against the unpipelined 103.72 -- a 14% REGRESSION.
      The premise was wrong: registering the address does not buy it a full
      clk_h, because the BRAM still samples that address on clk_2x. Launch
-     point moved, constraint did not. Every path INTO a time-multiplexed
-     memory is capped at one clk_2x period no matter how it is registered,
-     and that is inherent to multiplexing rather than fixable in RTL.
+     point moved, constraint did not.
+
+     The generalisation drawn from that -- "every path INTO a
+     time-multiplexed memory is capped at one clk_2x period no matter how
+     it is registered, inherent to multiplexing rather than fixable in
+     RTL" -- is too strong on two counts.
+
+     (a) The two slots are not symmetric. With `phase` asserted over clk_h
+         low, slot 1 is captured at t=T, a full clk_h after state[i]
+         launches; only slot 0 is captured at t=T/2. One slot already has
+         the whole period.
+     (b) What was tested puts a clk_h register immediately before the
+         BRAM, which re-launches at t=0 and reproduces the same T/2 budget
+         it was meant to escape. Reading the PREVIOUS cycle's state[i]
+         instead -- i.e. delaying the lookup rather than re-registering
+         the address at the boundary -- gives slot 0 1.5T and slot 1 2T.
+
+     That is analysis, not a measurement, and it is untested. But it is a
+     different claim from "inherent and unfixable", and combined with the
+     THROUGHPUT correction above it is what makes the +1 variant worth
+     revisiting. See ../HASHRATE-REVIEW.md §3.
 
   2. NOT EQUIVALENT. sim/tb_encrypt_equiv_seq.v reports 140/140 mismatches
      with the muxed output all-X -- it never produces defined data at all.

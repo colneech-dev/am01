@@ -65,22 +65,45 @@ BRAM-starved and logic-rich — see "Can the idle logic buy a 3rd
 instance?" below for why that headroom still cannot be spent on more
 cores.
 
-`keccak800.v` sets `UNROLLING = (12-1)/THROUGHPUT + 1`, and BRAM scales
-with unrolling — measured 420 RAMB18 at UNROLLING=3, i.e. **140 RAMB18
-per unrolled round**. The XC7K325T has **890 RAMB18** (445 x RAMB36):
+The block RAM is all in `encrypt.v`, and it scales with **encrypt's**
+unrolling: `encrypt_4apply_sboxes` instantiates 20 `sbox_large` per
+round, one RAMB18 each, across `U = (84-1)/THROUGHPUT + 1` unrolled
+rounds — **20 RAMB18 per unrolled encrypt round**, 20 x 21 = 420 at
+THROUGHPUT 4. (`keccak800.v` has no memories at all; it is pure XOR/AND
+logic. An earlier revision of this table derived the 420 from keccak's
+`UNROLLING` and quoted "140 RAMB18 per unrolled round". That happens to
+give the right per-row totals at THROUGHPUT 4, 6 and 12 — encrypt's
+unrolling is exactly 7x keccak's at those three points — but it is wrong
+elsewhere, e.g. THROUGHPUT 7 gives 240 RAMB18, not the 280 that model
+predicts.) The XC7K325T has **890 RAMB18** (445 x RAMB36):
 
-| THROUGHPUT | UNROLLING | BRAM/inst | Instances that fit | Total rate |
+| THROUGHPUT | encrypt `U` | BRAM/inst | Instances that fit | Total rate |
 |---|---|---|---|---|
-| 4 (what `encrypt.v` hardcodes) | 3 | 420 | 2 | 0.50 x Fmax |
-| 6 | 2 | 280 | 3 | 0.50 x Fmax |
-| 12 | 1 | 140 | 6 | 0.50 x Fmax |
+| 4 (what `encrypt.v` hardcodes) | 21 | 420 | 2 | 0.50 x Fmax |
+| 6 | 14 | 280 | 3 | 0.50 x Fmax |
+| 7 | 12 | 240 | 3 | 0.43 x Fmax |
+| 12 | 7 | 140 | 6 | 0.50 x Fmax |
+| 21 | 4 | 80 | 11 | 0.52 x Fmax |
 
-Note every row lands on the same total. **Tuning THROUGHPUT alone buys
-nothing** — the BRAM budget fixes the ceiling. The clock is the only
-lever, and the clock is limited by combinational depth, which UNROLLING
-sets. So THROUGHPUT=4 is arguably the *worst* operating point available
-here: it runs the deepest logic path (3 keccak rounds between registers)
-while the block RAM idles at a fraction of its rating.
+Note how flat that last column is. **Tuning THROUGHPUT alone buys
+nothing** — the BRAM budget fixes the ceiling, and no value of THROUGHPUT
+moves it by more than ~5%.
+
+That makes THROUGHPUT a *free variable* rather than a dead end: it can be
+changed to buy something other than rate. See
+[HASHRATE-REVIEW.md](HASHRATE-REVIEW.md) §2.3 — the +1-stage shared-BRAM
+variant that `tools/mux2_pipelined_transform.py` records as
+unschedulable is unschedulable **only at THROUGHPUT 4**; it is available
+at 5, 7, 9, 11, 13 at identical rate.
+
+(An earlier revision of this section also argued the clock is "limited by
+combinational depth, which UNROLLING sets", and that THROUGHPUT=4 runs
+"the deepest logic path (3 keccak rounds between registers)". That is not
+this design's structure: every `keccak_round` contains a `keccak_buffer`
+register between theta and rho, and every encrypt round registers at
+`apply_sboxes`, so each round is two pipeline stages and the logic depth
+between registers is **constant regardless of UNROLLING**. Unrolling
+changes instance count, and therefore congestion — not path depth.)
 
 **What this part is actually rated for** (Kintex-7 datasheet ds182,
 **-1** speed grade — the grade on this board's XC7K325T-1FFG676C):
