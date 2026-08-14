@@ -26,9 +26,15 @@
  *      ./sim_lat
  *
  *  Note: encrypt.v elaborates 1260 S-box instances, so this is slow --
- *  roughly a minute of wall clock per simulated clock cycle is normal. The
- *  default RESULTS_WANTED=16 keeps it to a few hours; the interesting output
- *  (the measured latency) is printed as soon as the first result appears.
+ *  measured at ~3.7 s of wall clock per simulated clock cycle. The first
+ *  result (and the measured latency, which is the interesting output)
+ *  appears at cycle 228, so expect ~15 min before anything prints and
+ *  ~18 min for the default RESULTS_WANTED=16.
+ *
+ *  The "943 results, 0 mismatches" figure quoted in HASHRATE-REVIEW.md came
+ *  from a 4000-cycle run of this same bench (~4 h). Raise RESULTS_WANTED to
+ *  reproduce it; 16 is enough to confirm the latency and that result 0 is
+ *  attributed to nonce 0.
  *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
