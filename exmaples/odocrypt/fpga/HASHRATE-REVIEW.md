@@ -14,6 +14,12 @@ review environment. Those are marked as such.
 no measurement behind them, and the repo contains no power schematic. §4 is a sizing method and a
 list of things to go check on the physical board — not a result.
 
+> **Read §7 before acting on §2 or §3.** This review was written against `master` in isolation.
+> The branch `claude/sbox-mux2-integration` has measured results covering the same ground, and
+> they change the conclusion: **§2's recommendation is superseded** by S-box block-RAM sharing
+> (`sbox_large_mux2`), and **§3's 120–150 MHz rows are out of reach**. §7 reconciles the two,
+> including two errors in that branch's own analysis that should not be carried over.
+
 ---
 
 ## 1. Where the hash rate currently comes from
@@ -49,6 +55,12 @@ So the only two levers on hash rate are **clock frequency** and **number of core
 ---
 
 ## 2. Biggest finding: the unrolling factor strands 42% of the block RAM
+
+> **Superseded in part — see §7.2.** The diagnosis below (BRAM is the binding resource, and the
+> unrolling factor strands 42% of it) is confirmed by independent measurement. The *remedy* is not
+> the best one available: sharing S-boxes between block RAMs beats re-tiling the unrolling factor,
+> gives 2.0× instead of 1.71×, and needs no `encrypt.v` regeneration. The prerequisite in item 1
+> below (`NONCE_BASE`) is already implemented on that branch.
 
 The S-box layer is where all the BRAM goes. Per round (`encrypt_4apply_sboxes`):
 
@@ -127,13 +139,17 @@ this as "worth measuring", not as fact. But the shape of the design argues stron
 The MMCM makes this cheap to test: VCO is already 900 MHz (in range for a -1 part, 600–1200 MHz),
 so only `CLKOUT0_DIVIDE_F` needs to change — no re-solve of M/D:
 
-| divide | clk_h | hash rate (1 core) |
-|---|---|---|
-| 18.0 | 50 MHz | 12.5 MH/s (current) |
-| 12.0 | 75 MHz | 18.75 MH/s |
-| 9.0 | 100 MHz | 25 MH/s |
-| 7.5 | 120 MHz | 30 MH/s |
-| 6.0 | 150 MHz | 37.5 MH/s |
+| divide | clk_h | hash rate (1 core) | |
+|---|---|---|---|
+| 18.0 | 50 MHz | 12.5 MH/s (current) | |
+| 12.0 | 75 MHz | 18.75 MH/s | realistic target |
+| 9.0 | 100 MHz | 25 MH/s | realistic target |
+| 7.5 | 120 MHz | 30 MH/s | ~~out of reach — §7.2~~ |
+| 6.0 | 150 MHz | 37.5 MH/s | ~~out of reach — §7.2~~ |
+
+The last two rows are struck out on measured evidence, not on principle: a comparable 7-series
+part running this core measures **84.90 MHz** post-placement once block-RAM paths are timed at
+all (§7.2). The argument for headroom above 50 MHz stands; the magnitude does not.
 
 **Do this in steps and watch the telemetry.** The XADC already reports die temperature, VCCINT and
 VCCAUX into status RAM at `0x20a`/`0x20b`/`0x20c`, and `test/index.js:125` already decodes
@@ -307,10 +323,136 @@ nothing whatsoever about the host interface. Worth adding before anyone raises `
    not sufficient for the full target.
 6. **Fix B1/B2/B5** before scaling anything. Multiplying the share rate multiplies the exposure to
    a racy share-report path, and these are small, local fixes.
-7. **Regenerate `encrypt.v` at THROUGHPUT 7 and instantiate 3 cores** (§2). This is the structural
-   +71% and the only way to use the stranded 42% of block RAM. Requires the nonce-space split, the
-   recomputed latency constants, and result-bus merging — do not skip any of the three.
-8. **Fallback if 99% BRAM does not route:** THROUGHPUT 6 / 14 rounds / 2 cores, 77% BRAM, +33%.
+7. **Port `sbox_large_mux2` + `mux2_transform.py` from `claude/sbox-mux2-integration` and build 2
+   instances at THROUGHPUT 4** (§7.2). ~2.0×, 58% BRAM, ~61% LUT, no `encrypt.v` regeneration.
+   `NONCE_BASE` is already written; result-bus merging is still needed. This replaces the
+   THROUGHPUT-7 plan in §2, which is strictly worse on the AM01.
+8. **Measure `clk_2x` first, though** — the whole of step 7 turns on whether the address muxes
+   close at 2 × `clk_h` (100 MHz at today's clock). That is the one number that decides it.
+9. **Fallback if `clk_2x` does not close:** §2 as originally written — THROUGHPUT 7, 3 cores,
+   +71% at 99% BRAM.
 
 Steps 1–2 are worth doing even if you stop there: they tell you whether the 3.4× in §3 is a real
 target or an imaginary one, for the price of an afternoon and a USB power meter.
+
+---
+
+## 7. Reconciliation with `claude/sbox-mux2-integration`
+
+Everything above was written against `master` in isolation. A second branch,
+`claude/sbox-mux2-integration` (46 commits), covers much of the same ground with **measured**
+results where §2–§4 only had arithmetic and estimates. This section reconciles the two.
+
+Its target is a **QMTECH XC7K325T-1FFG676C** (Kintex-7, 890 RAMB18, 203,800 LUT), not the AM01's
+XC7A200T-1FBG484I (730 RAMB18, 133,800 LUT). Its numbers therefore do not transfer to the AM01
+unchanged — which turns out to matter in both directions.
+
+### 7.1 What it confirms
+
+- **BRAM is the binding resource and all 420 RAMB18 are the large S-boxes.** Measured with
+  `yosys synth_xilinx` against a real part. §2's central premise holds independently.
+- **LUT-built S-boxes are not viable.** Measured by synthesising one `encrypt_4sbox_large0` with
+  `synth_xilinx -nobram`: **406 LUT** (352 LUT6 + 54 LUT1–5, plus 190 MUXF7 / 70 MUXF8) per
+  instance, against a floor of 320 LUT6 from information content alone (10,240 ROM bits / 64 bits
+  per LUT6 × 2 ports). I had reached the same conclusion by estimate and discarded the route
+  without recording it; this is the number that settles it.
+- **The nonce-space split is real and untestable by resource counts.** Their `tb_nonce_split.v`
+  makes exactly §2's point: without it the design still synthesises, still fits, and still reports
+  "2 instances" — while delivering zero extra hash rate for double the power.
+- **§5.1's warm-up finding.** They drove `miner_top` with an all-ones target from reset and
+  observed `ticket2moon === 1'b0` for all 206 warm-up cycles, then exactly one 1-cycle assertion
+  per 4-cycle result slot. Independent corroboration that nothing is dropped and the gate is
+  correctly placed.
+
+### 7.2 What supersedes this review
+
+**§2's recommendation is no longer the best option.** `hardware/qmtech-kintex7/hdl/sbox_large_mux2.v`
+time-multiplexes **two S-boxes onto one block RAM** by clocking it at 2 × `clk_h` and interleaving
+the port pairs — four logical reads per hash cycle from two physical ports. BRAM per instance
+halves, 420 → 210, with latency unchanged (both results land inside one `clk_h` period), so it is a
+drop-in transform rather than a pipeline change. Bit-exactness is proven in simulation over 493
+cycles with a negative control that fails 473/473.
+
+That attacks the same stranded-BRAM problem as §2 but by sharing rather than re-tiling, and it does
+not require regenerating `encrypt.v` at all.
+
+On their Kintex it netted only **1.22×** (4 instances at 51.86 MHz vs 2 at 84.90 MHz), because
+`clk_2x` would not close: measured 103.72 MHz against the ~170 MHz needed. **On the AM01 that
+constraint is much weaker, and the reason is the AM01's low clock.** Their structural limit is that
+slot 0 samples half a `clk_h` period early — 5.888 ns into an 11.78 ns period — while the S-box
+address settles ~9.6 ns in. The requirement is `clk_h period / 2 ≥ address settle time`. At the
+AM01's 50 MHz that half-period is **10 ns**, and an AM01 build would be far less congested than
+their 94%-BRAM-full Kintex, so the address should settle sooner than 9.6 ns. The slow clock that
+makes the AM01 look weak is exactly what makes the muxing feasible here.
+
+Estimated for the AM01, `THROUGHPUT` left at 4 (LUT figures scaled from `utilization.txt` plus
+~20 LUT per shared pair for address muxing):
+
+| option | BRAM tiles | LUT | rate |
+|---|---|---|---|
+| stock | 211 / 365 (58%) | 28% | 0.250 × f |
+| §2 proposal — T=7, 3 cores, no muxing | 361 / 365 (99%) | 48% | 0.429 × f (1.71×) |
+| **mux2, 2 instances, T=4** | **211 / 365 (58%)** | **~61%** | **0.500 × f (2.0×)** |
+| mux2 + T=7, 4 instances | 241 / 365 (66%) | ~70% | 0.571 × f (2.3×) |
+| mux2, 3 instances, T=4 | 316 / 365 (87%) | ~92% | 0.750 × f — LUT too tight |
+
+**`mux2` with 2 instances beats §2's proposal on every axis**: more hash rate, far more BRAM
+headroom, and no `encrypt.v` regeneration. Note also that once BRAM is halved, **LUT becomes the
+binding resource on the AM01** — the inversion of §2's premise, and the reason the 3-instance row
+fails.
+
+**§3's upper rows are too optimistic.** They measured `clk_h` on a comparable part two ways:
+146.20 MHz with block-RAM paths untimed, **84.90 MHz once block-RAM timing was added** — a 42%
+correction, in a design that is 420 block RAMs per instance. Both figures are post-placement and
+neither routed, so the routed number is likely lower still. Their BRAM timing model is
+Artix-7-derived (prjxray has no Kintex-7 data), which they correctly call pessimistic for a
+Kintex — but that makes it *the right data for the AM01*. Treat §3's 120 and 150 MHz rows as out
+of reach and **75–100 MHz as the realistic target**. Direction of §3 stands; magnitude does not.
+
+**`NONCE_BASE` already exists.** That branch adds it to `miner`/`miner_top` in
+`exmaples/odocrypt/fpga/src/hdl/miner.v` — the one master file it touches — defaulted to 0 so
+existing instantiations are unchanged. §2's first prerequisite is done.
+
+### 7.3 Two errors in that branch's analysis, carried into its docs
+
+Both are in `hardware/qmtech-kintex7/README.md` and should not be imported here.
+
+**The BRAM scaling model attributes the block RAM to Keccak.** It states that `keccak800.v` sets
+`UNROLLING = (12-1)/THROUGHPUT + 1` and that "BRAM scales with unrolling — measured 420 RAMB18 at
+UNROLLING=3, i.e. 140 RAMB18 per unrolled round". `keccak800.v` contains no memories at all; it is
+pure XOR/AND logic. The 420 RAMB18 are in `encrypt.v` — 20 large-S-box instances × **21** unrolled
+*encrypt* rounds (`(84-1)/4 + 1 = 21`), i.e. **20 RAMB18 per encrypt round**.
+
+Its per-row totals are still right for THROUGHPUT 4/6/12 only because encrypt's unrolling happens
+to be 7 × Keccak's at those three points (21 = 7×3, 14 = 7×2, 7 = 7×1). The coincidence breaks
+elsewhere, and it breaks at exactly the point §2 recommends: at **THROUGHPUT 7** their model gives
+Keccak `UNROLLING = 2` → 280 RAMB18, where the true figure is encrypt `UNROLLING = 12` →
+**240 RAMB18**. On the AM01 that is the difference between 2 instances fitting and 3.
+
+**Combinational depth is not set by UNROLLING.** The README argues "the clock is limited by
+combinational depth, which UNROLLING sets", and hence that THROUGHPUT=4 "runs the deepest logic
+path (3 keccak rounds between registers)". Every `keccak_round` contains a `keccak_buffer`
+register between theta and rho (`keccak800.v:166`), so each round is two pipeline stages, not
+combinational; every encrypt round likewise registers at `apply_sboxes`. **Logic depth between
+registers is constant regardless of UNROLLING** — unrolling changes instance count, and therefore
+congestion, not path depth. The doc half-catches this ("that description ... is not what nextpnr
+measured") but keeps the conclusion. Consequence: lowering THROUGHPUT will not raise Fmax the way
+that page expects, which makes its own "tuning THROUGHPUT alone buys nothing" conclusion *more*
+true than its reasoning allows.
+
+Related, and more consequential for the mux2 result: the branch explains its `clk_2x` shortfall by
+saying the S-box address "is not register-driven — it arrives through combinational logic from the
+previous pipeline stage". `encrypt_4apply_pbox0` is 640 plain wire assignments with zero
+operators, so the address is a permutation of `state[i]`, a flip-flop output, at zero logic levels.
+Their 9.6 ns is therefore **routing** delay, not logic depth. That does not overturn the
+measurement or invalidate their proposed fix — but it reframes the ceiling as a
+placement/congestion symptom rather than a structural property of the pipeline, which is further
+reason to expect a smaller, emptier AM01 build to do better than their Kintex one did.
+
+### 7.4 Net effect on §6
+
+Replace step 7 (regenerate at THROUGHPUT 7, 3 cores) with: **port `sbox_large_mux2` and
+`mux2_transform.py` to the AM01 and build 2 instances at THROUGHPUT 4.** Keep `NONCE_BASE` — it is
+already written. The open question is no longer which unrolling factor to pick; it is whether
+`clk_2x` closes at 2 × `clk_h` on an Artix-7 -1, which at the AM01's 50 MHz means 100 MHz on the
+address muxes. That is the one number worth measuring first.
