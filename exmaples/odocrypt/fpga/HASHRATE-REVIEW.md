@@ -9,6 +9,11 @@ Claims about pipeline behaviour below were checked by RTL simulation
 timing closure were **not** — there is no timing report in the repo and no Vivado in the
 review environment. Those are marked as such.
 
+§4 (power and thermals) is weaker still: the board geometry there was measured off
+`hardware/am01-components-top-view.pdf` and is good to ~±3%, but the wattages are estimates with
+no measurement behind them, and the repo contains no power schematic. §4 is a sizing method and a
+list of things to go check on the physical board — not a result.
+
 ---
 
 ## 1. Where the hash rate currently comes from
@@ -100,7 +105,7 @@ Three things must change alongside it, or the design will build and silently rep
 1. **Split the nonce space.** `miner.v:114` starts every core at `nonce_in <= 32'h0`. Three cores
    would all hash the same nonces. Give each core an offset (`nonce_in <= {core_id, 30'h0}` or
    interleave the low bits) and apply the same offset to `nonce_out`.
-2. **Recompute the latency constants** — see §4.1. They are hand-fitted to THROUGHPUT 4.
+2. **Recompute the latency constants** — see §5.1. They are hand-fitted to THROUGHPUT 4.
 3. **Merge the result buses** — `ticket2moon` / `nonce` are single-core signals today.
 
 ---
@@ -132,19 +137,79 @@ so only `CLKOUT0_DIVIDE_F` needs to change — no re-solve of M/D:
 
 **Do this in steps and watch the telemetry.** The XADC already reports die temperature, VCCINT and
 VCCAUX into status RAM at `0x20a`/`0x20b`/`0x20c`, and `test/index.js:125` already decodes
-temperature and VCC. AM01 is a small USB-powered board; dynamic power scales linearly with
-frequency, so the real ceiling here is likely thermal/PDN rather than timing. Raise the clock,
-re-run `test/index.js`, and confirm both the nonce is still correct *and* temperature/VCCINT are
-sane before going further.
+temperature and VCC correctly (the standard `ADC/4096 × 503.975 − 273.15` conversion, reading Tj
+directly). Raise the clock one step, re-run `test/index.js`, and confirm both that the nonce is
+still correct *and* that temperature/VCCINT are sane before going further.
 
-Combined with §2, `3 cores × 100 MHz / 7` = **42.9 MH/s, ~3.4× the current 12.5 MH/s** — if the
-power budget allows it.
+Combined with §2, `3 cores × 100 MHz / 7` = **42.9 MH/s, ~3.4× the current 12.5 MH/s** — but see
+§4 first, because that is almost certainly not a thermal or electrical free lunch.
 
 ---
 
-## 4. Correctness
+## 4. The real ceiling is probably power, not timing
 
-### 4.1 Verified correct — do not "fix" these
+Odo mining is roughly fixed energy per hash, so **both changes above multiply power by about the
+same factor they multiply hash rate.** More unrolled rounds in flight means proportionally more
+switching; a higher clock means proportionally more switching again. Hash-per-joule stays roughly
+flat, and the device power does not:
+
+| config | hash rate | FPGA power (rough estimate) |
+|---|---|---|
+| stock — 50 MHz, 21 rounds, 1 core | 12.5 MH/s | ~3 W |
+| 100 MHz, 1 core | 25 MH/s | ~6 W |
+| 100 MHz, 3 cores (THROUGHPUT 7) | 42.9 MH/s | **~10 W** |
+
+Those wattages are estimates, dominated by 420 RAMB18 doing two reads every cycle, and should be
+treated as ±50%. There is no Vivado power report in the repo and no power sheet — the schematic
+PDF is sheet 2 only (Artix + Cypress). **Do not design around them; measure instead** (§4.3).
+
+### 4.1 Two limits that may bite before thermals do
+
+1. **The VCCINT regulator.** The board carries 1V0 / 1V2 / 1V8 / 3V3 rails (test points
+   X13 / X11 / X12 / X14) fed by switchers U7 / U8 / U9. Tripling FPGA power puts roughly 7 A on
+   the 1.0 V rail. A regulator on a board this size is plausibly rated 3–6 A. The part numbers are
+   not in this repo — read them off the physical board before committing to §2.
+2. **Where the board's power comes from.** If it is USB bus-powered, USB 3.0 caps the whole board
+   at 4.5 W and none of §2/§3 is reachable at any temperature. `am01-components-top-view.pdf` shows
+   the USB connector at XS1 and a two-terminal connector J1 that may be auxiliary power, but an
+   assembly drawing is not enough to tell. Check this first — it is the cheapest possible way to
+   find out the ceiling.
+
+### 4.2 Heatsink sizing, if the above check out
+
+Geometry measured from `am01-components-top-view.pdf`, scaled off the BGA ball pitch (1.0 mm for
+FBG484), so roughly ±3% — verify against the physical board before buying anything:
+
+- Board is **101.5 × 61 mm**. U4 sits 43 mm from the left edge, roughly centred vertically.
+- Clear space around the 23 × 23 mm package: ~31 mm left, ~47 mm right, ~19 mm above and below —
+  i.e. **≥30 mm in every direction from the package centre**.
+- A **40 × 40 mm** sink fits comfortably, 50 × 50 fits, 60 × 60 lands right at the board edge.
+- Surrounding passives are 0402/0603 and sit well below the package top, so a flat base clears them.
+
+For ~10 W with a 40 °C ambient and Tj held at 85 °C (the part is `XC7A200T-1FBG484I`, Tj limit
+100 °C), the budget is ~4.5 °C/W junction-to-air, of which ~3.5 °C/W has to come from the sink.
+A 40 × 40 × 20 mm extrusion is only ~6–8 °C/W in still air but ~2–3 °C/W with a 40 mm fan.
+
+**So: 40 × 40 × 20 mm plus a fan for the full 42.9 MH/s target. Passive cooling does not get
+there** — a passive 40 × 40 × 25 is adequate only up to roughly 75 MHz single-core (~4–5 W).
+
+Mounting: check whether your FBG484 is bare-die or lidded before clamping anything. Artix-7 FBG is
+flip-chip and these are frequently exposed silicon — fragile, and not something to torque a sink
+onto. Use a compliant ~1 mm pad or paste with a spring/clip mount. Avoid thermal adhesive tape
+above ~5 W; at ~1 W/m·K it becomes the dominant resistance in the path.
+
+### 4.3 Measure it rather than trusting any of the above
+
+The board can characterise itself, which beats every estimate in this section. The XADC reads
+junction temperature directly and `test/index.js` already prints it. Run stock at 50 MHz with a
+USB power meter inline, record Tj − ambient and input power, and you have θJA and real dissipation
+for *your* board in a single measurement. Size the sink from that, then repeat at each clock step.
+
+---
+
+## 5. Correctness
+
+### 5.1 Verified correct — do not "fix" these
 
 The nonce bookkeeping looks wrong on first read and is not. `miner.v` discards results until
 `cou_deltanonce == 6'h33` (51 advances), then starts counting `nonce_out` from 0. Simulation over
@@ -168,7 +233,7 @@ the MSB, matching a big-endian 256-bit compare — confirmed against the testben
 asymmetry is real and intentional; it just needs to be documented for anyone porting this to a
 new algorithm, which is what this repo is for.
 
-### 4.2 Bugs
+### 5.2 Bugs
 
 **B1 — unsynchronised clock-domain crossing on the share report.** `usb3_interface.v:189–213`.
 `go_success`/`go_unsuccess` are written in `clk_h` and sampled in `clk_100` with no synchroniser;
@@ -215,7 +280,7 @@ stalling on the USB round trip.
 zero so nothing breaks today, but it silently stops meaning "all bits zero" if anyone reuses the
 module. One-character fix.
 
-### 4.3 Constraints
+### 5.3 Constraints
 
 `timing.xdc` is a single `set_clock_groups` line. There are **no `set_input_delay` / `set_output_delay`
 constraints on the FX3 bus** (`DQ`, `strobe_data`, `we`, `FX3_ready`, `artix_ready`), so those paths
@@ -225,16 +290,27 @@ nothing whatsoever about the host interface. Worth adding before anyone raises `
 
 ---
 
-## 5. Suggested order of work
+## 6. Suggested order of work
 
-1. **Measure first.** Build the current design and read off WNS on `clk_h`. That single number
-   decides how much of §3 is free. Nothing else should be done before this.
-2. **Raise `CLKOUT0_DIVIDE_F` in steps** (18 → 12 → 9 → …), re-running `test/index.js` at each step
-   and checking the XADC temperature/VCCINT alongside the nonce. Cheapest possible win — one IP
-   parameter, no RTL change. Stop when timing or thermals say stop.
-3. **Fix B1/B2/B5** before scaling anything. Multiplying the share rate multiplies the exposure to
+1. **Find the power ceiling before touching anything** (§4.1). Read the U7/U8/U9 part numbers off
+   the board for the 1.0 V rail's current rating, and establish whether the board is bus-powered or
+   takes auxiliary power at J1. Costs nothing, needs no tools, and can invalidate every step below.
+2. **Baseline the board against itself** (§4.3). Run stock at 50 MHz with a USB power meter inline
+   and record Tj − ambient from `test/index.js`. That gives real θJA and real dissipation, which
+   beats every wattage estimate in §4.
+3. **Read off WNS.** Build the current design and check slack on `clk_h`. That single number
+   decides how much of §3 is free.
+4. **Raise `CLKOUT0_DIVIDE_F` in steps** (18 → 12 → 9 → …), re-running `test/index.js` at each step
+   and checking XADC temperature/VCCINT alongside the nonce. Cheapest possible win — one IP
+   parameter, no RTL change. Stop when timing, thermals, or the 1.0 V rail say stop.
+5. **Fit cooling before going past ~75 MHz** (§4.2). 40 × 40 × 20 mm plus a 40 mm fan; passive is
+   not sufficient for the full target.
+6. **Fix B1/B2/B5** before scaling anything. Multiplying the share rate multiplies the exposure to
    a racy share-report path, and these are small, local fixes.
-4. **Regenerate `encrypt.v` at THROUGHPUT 7 and instantiate 3 cores** (§2). This is the structural
+7. **Regenerate `encrypt.v` at THROUGHPUT 7 and instantiate 3 cores** (§2). This is the structural
    +71% and the only way to use the stranded 42% of block RAM. Requires the nonce-space split, the
    recomputed latency constants, and result-bus merging — do not skip any of the three.
-5. **Fallback if 99% BRAM does not route:** THROUGHPUT 6 / 14 rounds / 2 cores, 77% BRAM, +33%.
+8. **Fallback if 99% BRAM does not route:** THROUGHPUT 6 / 14 rounds / 2 cores, 77% BRAM, +33%.
+
+Steps 1–2 are worth doing even if you stop there: they tell you whether the 3.4× in §3 is a real
+target or an imaginary one, for the price of an afternoon and a USB power meter.
