@@ -1,0 +1,78 @@
+diff --git a/xilinx/arch.cc b/xilinx/arch.cc
+index e774bb8..018f9df 100644
+--- a/xilinx/arch.cc
++++ b/xilinx/arch.cc
+@@ -20,6 +20,7 @@
+ 
+ #include <algorithm>
+ #include <boost/algorithm/string.hpp>
++#include "xc7_bram_timing.h"
+ #include <boost/range/adaptor/reversed.hpp>
+ #include <cmath>
+ #include <cstring>
+@@ -2481,6 +2482,34 @@ TimingPortClass Arch::getPortTimingClass(const CellInfo *cell, IdString port, in
+         if (dsp48e1CombInputDelayNS(base) > 0.0)
+             return TMG_COMB_INPUT;
+         return TMG_IGNORE; // CLK / CE* / RST* / config pins
++    } else if (cell->type == id_RAMB18E1_RAMB18E1 || cell->type == id_RAMB36E1_RAMB36E1) {
++        // Block RAM used to be absent from this function entirely, so every
++        // RAMB port fell through to TMG_IGNORE below. That silently removed
++        // block RAM from timing analysis: a BRAM output was not a start
++        // point, its address inputs were not endpoints, and any critical
++        // path through a memory was invisible. On a BRAM-heavy design the
++        // reported Fmax was then just the worst LUT-to-LUT path, which is
++        // both wrong and optimistic -- and it inverted under a register
++        // insertion that could only ever shorten paths. See
++        // ../../../README.md "nextpnr's STA does not see block RAM paths".
++        const std::string p = port.str(this);
++        if (p == "CLKARDCLK" || p == "CLKBWRCLK")
++            return TMG_CLOCK_INPUT;
++        // Synchronous reads: DO*/DOP* are driven off the read clock.
++        if (boost::starts_with(p, "DOADO") || boost::starts_with(p, "DOBDO") ||
++            boost::starts_with(p, "DOPADOP") || boost::starts_with(p, "DOPBDOP")) {
++            clockInfoCount = 1;
++            return TMG_REGISTER_OUTPUT;
++        }
++        // Everything else that carries data is sampled on a clock edge.
++        if (boost::starts_with(p, "ADDR") || boost::starts_with(p, "DIADI") ||
++            boost::starts_with(p, "DIBDI") || boost::starts_with(p, "DIPADIP") ||
++            boost::starts_with(p, "DIPBDIP") || boost::starts_with(p, "WE") ||
++            boost::starts_with(p, "EN") || boost::starts_with(p, "REGCE")) {
++            clockInfoCount = 1;
++            return TMG_REGISTER_INPUT;
++        }
++        return TMG_IGNORE; // RST*, cascade and config pins
+     }
+     return TMG_IGNORE;
+ }
+@@ -2493,6 +2522,30 @@ TimingClockingInfo Arch::getPortClockingInfo(const CellInfo *cell, IdString port
+     info.clockToQ = getDelayFromNS(0.1);
+     info.clock_port = xc7 ? id_CK : id_CLK;
+     info.edge = RISING_EDGE;
++
++    if (cell->type == id_RAMB18E1_RAMB18E1 || cell->type == id_RAMB36E1_RAMB36E1) {
++        // Block RAM numbers come from xc7_bram_timing.h, which is generated
++        // by tools/make_bram_timing.py out of prjxray's SDF -- see
++        // openxc7/make-bram-timing-db.sh for provenance and limits. They are
++        // NOT hand-typed here, so re-running the generator against better
++        // source data (real Kintex-7 SDF from DS182, say) updates them.
++        const std::string p = port.str(this);
++        const bool b_side = boost::starts_with(p, "DOBDO") || boost::starts_with(p, "DOPBDOP") ||
++                            boost::starts_with(p, "ADDRBWRADDR") || boost::starts_with(p, "DIBDI") ||
++                            boost::starts_with(p, "DIPBDIP") || boost::starts_with(p, "WEBWE") ||
++                            boost::starts_with(p, "ENBWREN") || boost::starts_with(p, "REGCEB");
++        info.clock_port = b_side ? id("CLKBWRCLK") : id("CLKARDCLK");
++
++        // The optional output register is what the 458MHz FMAX_BRAM rating
++        // assumes. Without it (DO_REG=0, which is what a plain
++        // `q <= mem[addr]` infers) the read comes off the latch and is
++        // roughly 2.8x slower.
++        const bool reg_out = b_side ? bool_or_default(cell->params, id("DOB_REG"), false)
++                                    : bool_or_default(cell->params, id("DOA_REG"), false);
++        info.clockToQ = getDelayFromNS(reg_out ? XC7_BRAM_CLK_TO_DO_REG_NS : XC7_BRAM_CLK_TO_DO_NS);
++        info.setup = getDelayFromNS(XC7_BRAM_ADDR_SETUP_NS);
++        info.hold = getDelayFromNS(XC7_BRAM_ADDR_HOLD_NS);
++    }
+     return info;
+ }
+ 

@@ -1,0 +1,54 @@
+# Vendored third-party source: odo_gen (from upstream odo-miner)
+
+`odo_gen.cpp`, `odocrypt.h`, and `odocrypt.cpp` in this directory are a
+vendored subset of the upstream `odo-miner` project (MentalCollatz), the same
+per-epoch OdoCrypt RTL generator used to originally produce
+`exmaples/odocrypt/fpga/src/hdl/encrypt.v` (the stock AM01/vendor example,
+left at its original upstream epoch) and now used to keep
+`hdl/odocrypt/encrypt.v` (the shared core the real board builds use) current.
+
+- Upstream:      https://github.com/MentalCollatz/odo-miner
+- Copied from:   a local checkout of `colneech-dev/odo-miner-cyclonev`
+                  (`third_party/odo-miner/`), which pins upstream commit
+                  `fb1bd94892e3b1893bfc2439ebec877b25856b18` (heads/master),
+                  vendored there on 2026-06-27.
+- Copied here:   2026-08-13, so `am01` can regenerate/verify per-epoch RTL
+                  without needing a checkout of odo-miner-cyclonev.
+- Scope:         only the 3 files needed to build the `odo_gen` binary
+                  (`src/verilog/odo_gen.cpp` + `src/crypto/odocrypt.{h,cpp}`
+                  from upstream). The `#include "../crypto/odocrypt.h"` in
+                  `odo_gen.cpp` was flattened to `#include "odocrypt.h"`
+                  since all three files now live in one directory; no other
+                  changes were made.
+
+## Licensing
+
+- `odo_gen.cpp` — GPL-3.0-or-later, Copyright (C) 2019 MentalCollatz. This
+  repo (am01) is itself GPL-3.0-or-later (see top-level LICENSE), so vendoring
+  is license-compatible.
+- `odocrypt.h`, `odocrypt.cpp` — MIT/X11, Copyright (c) 2009-2018 The DigiByte
+  developers. See `COPYING` in this directory for the full text.
+
+Original license headers in each file are preserved verbatim and must not be
+removed.
+
+## Usage
+
+```
+make odo_gen
+./odo_gen <epoch_seed> <throughput> [module_prefix] > encrypt.v
+```
+
+`epoch_seed` is the OdoCrypt epoch key: `ntime - ntime % 864000` on mainnet
+(864000s = 10 days), where `ntime` is ideally the current chain tip's block
+time (not just wall clock, though they track closely except right at a
+10-day boundary).
+
+For a drop-in replacement of `hdl/odocrypt/encrypt.v` (the shared core the
+real board builds use — see hardware/qmtech-kintex7/ and hardware/zynq/),
+use `throughput=4` and `module_prefix=encrypt_4` — that matches the module
+names already in that file (`encrypt_4pre_mix`, `encrypt_4sbox_large0`,
+...), which is how it was generated in the first place. Do NOT regenerate
+`exmaples/odocrypt/fpga/src/hdl/encrypt.v` this way — that copy is the
+original upstream/vendor example, deliberately left at its original epoch
+so it stays paired with `exmaples/odocrypt/test/`'s matching test vectors.
