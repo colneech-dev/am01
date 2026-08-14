@@ -67,12 +67,21 @@ FLATTEN="${FLATTEN:-1}"
 [ "$FLATTEN" = "1" ] && FLATTEN_ARG="-flatten" || FLATTEN_ARG=""
 
 echo "==> [1/4] synthesis (yosys)${FLATTEN_ARG:+ , flattened}"
-"$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG -json $OUT/$TOP.json" "${SRCS[@]}"
+# NB: write_json as a separate command, NOT `synth_xilinx -json`. Mainline
+# yosys's synth_xilinx has -blif and -edif but no -json (checked on 0.33),
+# so the combined form dies with "Unknown option or option in arguments"
+# before synthesis starts. write_json works on every version.
+"$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG; write_json $OUT/$TOP.json" "${SRCS[@]}"
 
 echo "==> [2/4] place & route (nextpnr-xilinx)"
+# --write emits the placed/routed netlist as JSON, with each cell's assigned
+# bel in its NEXTPNR_BEL attribute. Costs nothing to produce and is what
+# report_sbox_paths.py reads to check whether the S-box address paths are
+# placement-bound. Harmless if unused.
 "$NEXTPNR" --chipdb "$CHIPDB" \
     --json "$OUT/$TOP.json" --xdc "$XDC" \
     --fasm "$OUT/$TOP.fasm" --freq "$FREQ" \
+    --write "$OUT/$TOP.routed.json" \
     --log "$OUT/$TOP.pnr.log"
 
 echo "==> [3/4] fasm -> frames"

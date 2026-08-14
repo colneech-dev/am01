@@ -9,11 +9,14 @@ the Artix IP) are deliberately excluded from `vivado/build.tcl`, so they are out
 correctness review of those, including six bugs in the FX3 interface, is in git history at
 `635fab3` under `exmaples/odocrypt/fpga/HASHRATE-REVIEW.md`.
 
-What is verified how: the pipeline structure and latency claims below were checked by RTL
-simulation (`exmaples/odocrypt/fpga/src/sim/miner_latency_tb.v`, Icarus) and by reading the
-generated RTL. The Fmax and utilisation figures are this branch's own nextpnr/yosys measurements,
-quoted as such. **Nothing here was re-measured** — there is no Vivado or nextpnr in the review
-environment. New claims are marked as analysis.
+What is verified how. The pipeline structure and latency claims were checked by RTL simulation
+(`exmaples/odocrypt/fpga/src/sim/miner_latency_tb.v`, Icarus) and by reading the generated RTL.
+Two numbers below were **re-measured independently for this review** with yosys 0.33
+(`synth_xilinx -family xc7`), noted inline where they appear. The Fmax figures are this branch's
+own nextpnr measurements and were *not* reproduced — there is no nextpnr in the review
+environment, and no Vivado (nor any free tier for this part). New claims are marked as analysis.
+
+Everything here uses the open-source toolchain: yosys + nextpnr-xilinx per `openxc7/`.
 
 ---
 
@@ -51,6 +54,11 @@ iota. Every one of the 420 RAMB18 is in `encrypt.v`: 20 `sbox_large` instances p
 (`encrypt_4apply_sboxes`), across **21** unrolled *encrypt* rounds, where encrypt's unrolling is
 `(84-1)/T + 1 = 21` at T=4. So the correct constant is **20 RAMB18 per unrolled encrypt round**,
 not 140 per unrolled Keccak round.
+
+*Measured for this review:* a two-round wrapper (`encrypt_4full_round` ×2) through
+`synth_xilinx -family xc7 -flatten` gives **40 RAMB18 — exactly 20 per round**, scaling to
+20 × 21 = 420 at T=4, which is the figure in `utilization.txt` and this branch's own count. The
+total was never in dispute; what it scales with was.
 
 The published table is still numerically right at T = 4, 6, 12 — but only by coincidence, because
 encrypt's unrolling happens to be exactly 7 × Keccak's at those three points (21=7×3, 14=7×2,
@@ -155,11 +163,17 @@ T/2 budget it was meant to escape.
 
 ## 4. What to do, in order
 
-1. **Measure the address path before designing around it.** Run
-   `vivado/report_sbox_paths.tcl` after `place_design` on the stock 2-instance build. It reports,
-   per round, the physical spread between the state registers and their block RAMs, and the worst
-   `state[i] → BRAM address` delay. If that delay is the 9.6 ns figure and the spread is large,
-   §3 is confirmed and floorplanning is the lever. Nothing below is worth doing first.
+1. **Measure the address path before designing around it.** Build with `openxc7/build.sh` (which
+   now emits a post-route JSON) and run `openxc7/report_sbox_paths.py` on it. It reports, per
+   round, where that round's block RAMs were placed, where the flip-flops driving their address
+   pins were placed, and the worst driver→BRAM Manhattan distance. Large spread confirms §3 and
+   makes floorplanning the lever; a tight spread refutes it and points back at the fabric.
+   Nothing below is worth doing first.
+
+   This deliberately uses the open-source flow: **the XC7K325T is not covered by any free Vivado
+   tier** (`openxc7/README.md`), so a Tcl report is unusable for most people working on this
+   board. `vivado/report_sbox_paths.tcl` does the same job and additionally gives real
+   `DATAPATH_DELAY` numbers, but only if you have a licence.
 2. **Floorplan one round as a probe.** Wrap a single `crypter/round<N>` — its 20 block RAMs and
    its 640 state registers — in a pblock and re-place. If the round's address delay drops, roll it
    out to all 21 and re-measure `clk_h`. This costs no RTL change and is reversible.
@@ -169,7 +183,42 @@ T/2 budget it was meant to escape.
    (§2.3). Same rate, schedulable loop, and both mux slots get a full `clk_h`.
 5. **Do not spend effort tuning THROUGHPUT for rate** (§2.2). It is flat. Spend it on schedulability.
 
-## 5. Smaller findings
+## 5. LUT-built S-boxes: confirmed too expensive, and for one more reason
+
+`README.md` rules out spending idle logic on a 3rd instance by measuring one `sbox_large` at
+**406 LUT** with `synth_xilinx -nobram`. Re-measured for this review on yosys 0.33:
+
+```
+LUT6 340    MUXF7 160    MUXF8 80        (per sbox_large, both read ports)
+```
+
+340 against their 406 — different yosys version and a different OdoCrypt epoch's tables, same
+conclusion by a wide margin. The information-theoretic floor is 320 LUT6 (a 1024×10 ROM is 10,240
+bits, a LUT6 holds 64, ×2 ports), so at 340 the tools are within 6% of optimal and there is no
+headroom to find.
+
+**One resource that budget misses: MUXF7/MUXF8.** Building a 10-input function needs 16 LUT6 plus
+a mux tree, and the measurement shows 240 MUXF7/F8 per S-box alongside the 340 LUTs. The XC7K325T
+has 101,900 MUXF7 and 50,950 MUXF8 (half and a quarter of the LUT count). Converting the 370
+S-boxes a 3rd instance would need costs ~59,200 MUXF7 and ~29,600 MUXF8 — **58% of both**, on top
+of the LUTs. The LUT-only budget in `README.md` reaches the right answer, but it understates how
+far out of reach it is.
+
+## 6. Smaller findings
+
+**`openxc7/build.sh` did not run as written.** It invoked
+`synth_xilinx -top … -family xc7 -json out.json`, but mainline yosys's `synth_xilinx` has `-blif`
+and `-edif` and **no `-json`** (verified on 0.33), so the command aborted with "Unknown option or
+option in arguments" before synthesis began. Fixed here by splitting it into
+`synth_xilinx …; write_json out.json`, which works on every yosys version. If the flow ran for
+you as-written, your yosys is patched or packaged differently — worth knowing either way, since
+the README presents this script as the verified path.
+
+**`FLATTEN=1` on the full miner is expensive.** yosys was killed during the FLATTEN pass on
+`miner` (encrypt + keccak + miner) in a 16 GB container, while the same design synthesises fine
+unflattened and a two-round wrapper flattens without trouble. nextpnr needs a flat netlist so the
+flag cannot simply be dropped, but anyone hitting an unexplained yosys death mid-build should
+suspect memory here rather than a design problem.
 
 **The latency constants are correct but fragile, and §2.3/§4 would break them.** `miner.v`'s
 `6'h33` (51 advances) and the wrapper's `8'hcd` (205 cycles) encode a 204-cycle pipeline latency.
@@ -184,4 +233,5 @@ today so nothing breaks, but it stops meaning "all bits zero" the moment the mod
 different width. `delreg_varbits_vardel` is instantiated from `usb3_interface.v` only, so this is
 out of the Kintex build's path — worth fixing in passing.
 
-**`clk_gen_hash.v` already emits the 2x clock**, so §2.3 and §4.3 need no new clocking work.
+**`clk_gen_hash.v` already emits the 2x clock**, so §2.3 and step 3 of §4 need no new clocking
+work.
