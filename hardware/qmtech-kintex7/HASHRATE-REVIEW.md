@@ -173,20 +173,40 @@ their address pins are spread across essentially the whole fabric**, up to 75 sl
 
 That is the shape §3 predicts, now at one full instance's S-box load rather than a toy design.
 
-**And yet Fmax does not move: 178.25 MHz, the same as the 2-round probe.** The most economical
-explanation is that nextpnr is not timing the path in question. `openxc7/README.md` establishes
-that its STA does not time paths *starting at* a block RAM output; a path *ending at* a block RAM
-address pin is the same class of arc, and if it too is untimed then the reported Fmax is blind to
-exactly the net bundle measured above. That would also explain the 146 → 85 MHz collapse when the
-timing patch is applied: not a placement change, but the tool finally costing a path that was
-always there.
+**And yet stock Fmax does not move: 178.25 MHz, the same as the 2-round probe.** That is because
+nextpnr is not timing the path at all. `build-nextpnr-bramtiming.sh` states it plainly — with
+block RAM absent from `getPortTimingClass()`, "a block RAM output is not a timing start point,
+**its address inputs are not endpoints**, and any critical path through a memory is invisible".
+The stock 178 MHz is blind to exactly the net bundle measured above.
 
-**Status: consistent with §3, still not proven.** What is now measured is the spread (large, and
-uniformly so at realistic density) and that untimed Fmax is insensitive to it. What is not
-measured is the same design *with* `patches/0001-xc7-block-ram-timing.patch` applied — that is the
-one run that would convert this from a plausible story into a result, and it is the open item.
+### 3.3 Confirmed: the address path is real, and it scales with S-box count
 
-### 3.3 Practical notes for reproducing the above
+Rebuilt nextpnr with `patches/0001-xc7-block-ram-timing.patch` (which applies cleanly to main
+`8b836d6`, not only to the 0.9.2 its script pins) and re-placed both probes unchanged:
+
+| design | RAMB18 | stock, BRAM untimed | **BRAM timed** | path added |
+|---|---|---|---|---|
+| 2 rounds | 40 | 177.78 MHz (5.625 ns) | **136.91 MHz** (7.304 ns) | +1.68 ns |
+| 21 rounds | 420 | 178.25 MHz (5.610 ns) | **78.44 MHz** (12.749 ns) | **+7.14 ns** |
+
+This is the measurement §3 needed, and it confirms the hypothesis.
+
+The fixed block-RAM arc — 0.566 ns address setup plus 2.454 ns clock-to-out — is *identical* in
+both designs. If that were the whole story both would lose the same ~1.7 ns. They do not: the
+420-BRAM design loses **5.46 ns more** than the 40-BRAM one. That excess is not a property of the
+memory; it is the address path getting longer as the S-box count grows, exactly as §3 argues, and
+it is invisible to any tool that does not time BRAM arcs.
+
+It also reconciles with this branch's own numbers. One instance's S-box load timed at 78.44 MHz
+sits just below the 84.90 MHz measured for the full two-instance build, and the ~7 ns of address
+path here is the same order as the "~9.6 ns into an 11.78 ns period" quoted in
+`hdl/sbox_large_mux2.v`.
+
+**Verdict: §3 holds.** The hash core is placement-bound on a zero-logic net bundle, the stock flow
+cannot see it, and floorplanning is therefore the lever — step 2 of §4 is now the highest-value
+thing to try, and `report_sbox_paths.py` gives the before/after metric for it.
+
+### 3.4 Practical notes for reproducing the above
 
 - `cmake -DBUILD_PYTHON=OFF` — nextpnr's Python bindings need dev headers, and nothing here uses
   them (`report_sbox_paths.py` parses JSON offline, by design).
