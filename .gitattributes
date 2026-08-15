@@ -1,0 +1,7 @@
+# Shell scripts must stay LF -- CRLF breaks them on Linux/WSL (bad
+# shebang resolution, broken heredocs). This repo is checked out on
+# Windows with core.autocrlf=true, which would otherwise convert them.
+# Bit us repeatedly during hardware/qmtech-kintex7/openxc7/ bring-up and
+# would bite hardware/qmtech-kintex7/cm4-firmware/setup-pi.sh the same
+# way when fetched onto the Pi via curl | bash.
+*.sh text eol=lf
