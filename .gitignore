@@ -1,0 +1,8 @@
+# Vivado drops these wherever it's invoked from, regardless of project
+# directory -- catch them repo-wide rather than per-subdirectory.
+.Xil/
+retry_open_fs.log
+webtalk*
+*.jou
+vivado*.log
+vivado*.str
