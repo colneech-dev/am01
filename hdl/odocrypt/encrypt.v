@@ -3064,6 +3064,8 @@ module encrypt_4sbox_large0(clk, a_in, b_in, a_out, b_out);
     reg [9:0] mem[0:1023];
     always @(posedge clk) begin
         a_out <= mem[a_in];
+    end
+    always @(posedge clk) begin
         b_out <= mem[b_in];
     end
     initial begin
@@ -4103,6 +4105,8 @@ module encrypt_4sbox_large1(clk, a_in, b_in, a_out, b_out);
     reg [9:0] mem[0:1023];
     always @(posedge clk) begin
         a_out <= mem[a_in];
+    end
+    always @(posedge clk) begin
         b_out <= mem[b_in];
     end
     initial begin
@@ -5142,6 +5146,8 @@ module encrypt_4sbox_large2(clk, a_in, b_in, a_out, b_out);
     reg [9:0] mem[0:1023];
     always @(posedge clk) begin
         a_out <= mem[a_in];
+    end
+    always @(posedge clk) begin
         b_out <= mem[b_in];
     end
     initial begin
@@ -6181,6 +6187,8 @@ module encrypt_4sbox_large3(clk, a_in, b_in, a_out, b_out);
     reg [9:0] mem[0:1023];
     always @(posedge clk) begin
         a_out <= mem[a_in];
+    end
+    always @(posedge clk) begin
         b_out <= mem[b_in];
     end
     initial begin
@@ -7220,6 +7228,8 @@ module encrypt_4sbox_large4(clk, a_in, b_in, a_out, b_out);
     reg [9:0] mem[0:1023];
     always @(posedge clk) begin
         a_out <= mem[a_in];
+    end
+    always @(posedge clk) begin
         b_out <= mem[b_in];
     end
     initial begin
@@ -8259,6 +8269,8 @@ module encrypt_4sbox_large5(clk, a_in, b_in, a_out, b_out);
     reg [9:0] mem[0:1023];
     always @(posedge clk) begin
         a_out <= mem[a_in];
+    end
+    always @(posedge clk) begin
         b_out <= mem[b_in];
     end
     initial begin
@@ -9298,6 +9310,8 @@ module encrypt_4sbox_large6(clk, a_in, b_in, a_out, b_out);
     reg [9:0] mem[0:1023];
     always @(posedge clk) begin
         a_out <= mem[a_in];
+    end
+    always @(posedge clk) begin
         b_out <= mem[b_in];
     end
     initial begin
@@ -10337,6 +10351,8 @@ module encrypt_4sbox_large7(clk, a_in, b_in, a_out, b_out);
     reg [9:0] mem[0:1023];
     always @(posedge clk) begin
         a_out <= mem[a_in];
+    end
+    always @(posedge clk) begin
         b_out <= mem[b_in];
     end
     initial begin
@@ -11376,6 +11392,8 @@ module encrypt_4sbox_large8(clk, a_in, b_in, a_out, b_out);
     reg [9:0] mem[0:1023];
     always @(posedge clk) begin
         a_out <= mem[a_in];
+    end
+    always @(posedge clk) begin
         b_out <= mem[b_in];
     end
     initial begin
@@ -12415,6 +12433,8 @@ module encrypt_4sbox_large9(clk, a_in, b_in, a_out, b_out);
     reg [9:0] mem[0:1023];
     always @(posedge clk) begin
         a_out <= mem[a_in];
+    end
+    always @(posedge clk) begin
         b_out <= mem[b_in];
     end
     initial begin

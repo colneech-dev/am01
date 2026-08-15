@@ -57,8 +57,19 @@ void GenerateSboxes(const T (&sbox)[sz1][sz2], bool dual_port, const char* prefi
             fprintf(f, "    input [%d:0] b_in;\n", width-1);
             fprintf(f, "    output reg [%d:0] b_out;\n", width-1);
             fprintf(f, "    reg [%d:0] mem[0:%zd];\n", width-1, sz2-1);
+            // Separate always blocks per port, each with its own read of the
+            // shared `mem` array -- Vivado's dual-port BRAM inference is
+            // pattern-sensitive and doesn't reliably collapse two reads in
+            // one always block into a single true-dual-port RAMB18 (it was
+            // observed synthesizing 2 BRAMs per instance here instead of 1,
+            // doubling the design's block RAM usage). yosys's memory_bram
+            // pass recognized the original single-always-block form fine;
+            // this two-block form is the documented-safer template for both
+            // (see AMD/Xilinx UG901's memory inference coding guidelines).
             fprintf(f, "    always @(posedge clk) begin\n");
             fprintf(f, "        a_out <= mem[a_in];\n");
+            fprintf(f, "    end\n");
+            fprintf(f, "    always @(posedge clk) begin\n");
             fprintf(f, "        b_out <= mem[b_in];\n");
             fprintf(f, "    end\n");
         }
