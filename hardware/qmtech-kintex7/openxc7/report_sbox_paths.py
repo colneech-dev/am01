@@ -19,15 +19,20 @@ there is no floorplanning anywhere in this build to fix it.
 
 This measures it, per unrolled encrypt round:
 
-  * where that round's block RAMs were placed (bounding box, tile coords)
-  * where the flip-flops driving their address pins were placed
-  * the worst driver -> block RAM Manhattan distance
+  * where that round's block RAMs were placed (bounding box, RAMB18 grid)
+  * where the flip-flops driving their address pins were placed (SLICE grid)
+  * the spread (half-perimeter) of that driver set
 
-Manhattan distance in tile coordinates is the thing a floorplan would
-shrink, and it needs no timing model -- which matters here, because
-nextpnr's STA had to be patched to time block RAM paths at all (see
-README.md).  Wide boxes and long distances confirm the diagnosis; tight
-boxes with a slow clock refute it and point back at the fabric.
+Spread needs no timing model, which matters here: nextpnr's STA had to be
+patched to time block RAM paths at all (see README.md), so a delay-based
+metric is only as good as that patch.  Spread is what a floorplan shrinks,
+and it is directly comparable before and after one.
+
+Block RAM bels live on ``RAMB18_X*Y*`` and flip-flops on ``SLICE_X*Y*``.
+Those are DIFFERENT site grids -- a RAMB36 tile spans several CLB rows --
+so this deliberately does not compute a driver->BRAM distance.  Comparing
+the two boxes against each other would be meaningless; compare the spread
+against itself, before and after a floorplan.
 
 WHY THIS AND NOT VIVADO
 -----------------------
@@ -116,9 +121,17 @@ def driver_index(cells):
 
 
 def analyse(cells):
-    """-> {round_index: {"bram": [...], "drv": [...], "dist": int, "unplaced": n}}"""
+    """-> {round_index: {"bram": [...], "drv": [...], "unplaced": n}}
+
+    NOTE: block RAM bels live on the RAMB18_X*Y* site grid and flip-flops on
+    SLICE_X*Y*.  Those are different coordinate systems -- a RAMB36 tile spans
+    several CLB rows -- so a driver->BRAM distance mixing them is meaningless
+    and is deliberately NOT computed.  What is reported instead is the spread
+    of each set within its own grid, which is exactly what a floorplan shrinks
+    and is directly comparable before and after one.
+    """
     drv = driver_index(cells)
-    rounds = defaultdict(lambda: {"bram": [], "drv": [], "dist": 0, "unplaced": 0})
+    rounds = defaultdict(lambda: {"bram": [], "drv": [], "unplaced": 0})
 
     for name, c in cells.items():
         if not _BRAM.match(c["type"]):
@@ -145,10 +158,12 @@ def analyse(cells):
                 if sxy is None:
                     continue
                 r["drv"].append(sxy)
-                d = abs(sxy[0] - c["xy"][0]) + abs(sxy[1] - c["xy"][1])
-                if d > r["dist"]:
-                    r["dist"] = d
     return rounds
+
+
+def spread(bb):
+    """Half-perimeter of a bounding box, in that box's own site grid."""
+    return 0 if not bb else (bb[1] - bb[0]) + (bb[3] - bb[2])
 
 
 def fmt(bb):
@@ -162,17 +177,18 @@ def report(rounds, out=sys.stdout):
     print("=" * 78, file=out)
     print(" S-box address path -- placement spread per unrolled encrypt round", file=out)
     print("=" * 78, file=out)
-    print(f"  {'round':<7}{'BRAM bbox (X,Y)':<24}{'addr driver bbox (X,Y)':<26}{'worst dist':>10}",
-          file=out)
-    print("  " + "-" * 74, file=out)
+    print(f"  {'round':<7}{'BRAM bbox [RAMB18 grid]':<26}"
+          f"{'addr driver bbox [SLICE grid]':<32}{'drv spread':>11}", file=out)
+    print("  " + "-" * 76, file=out)
 
     worst = 0
     for key in sorted(rounds):
         r = rounds[key]
         label = str(key) if key >= 0 else "(none)"
-        print(f"  {label:<7}{fmt(bbox(r['bram'])):<24}{fmt(bbox(r['drv'])):<26}"
-              f"{r['dist']:>10}", file=out)
-        worst = max(worst, r["dist"])
+        sp = spread(bbox(r["drv"]))
+        print(f"  {label:<7}{fmt(bbox(r['bram'])):<26}{fmt(bbox(r['drv'])):<32}"
+              f"{sp:>11}", file=out)
+        worst = max(worst, sp)
         if r["unplaced"]:
             print(f"          ({r['unplaced']} block RAM(s) with no NEXTPNR_BEL "
                   f"-- is this JSON post-placement?)", file=out)
@@ -185,14 +201,19 @@ def report(rounds, out=sys.stdout):
         print("  No round<N> in any cell name. If you built with FLATTEN=0 the", file=out)
         print("  hierarchy is in modules rather than names; rebuild with the", file=out)
         print("  default FLATTEN=1 for a per-round breakdown.", file=out)
-    print(f"  Worst address-driver -> block RAM distance: {worst} tiles", file=out)
+    print(f"  Worst address-driver spread: {worst} slice rows+cols "
+          f"(half-perimeter)", file=out)
+    print("", file=out)
+    print("  BRAM and SLICE are separate site grids, so no driver->BRAM distance", file=out)
+    print("  is computed -- compare the spread against itself before and after a", file=out)
+    print("  floorplan, not against the BRAM box.", file=out)
     print("", file=out)
     print("  Interpretation:", file=out)
-    print("    Large distances -> placement-bound. Floorplan each round (its 20", file=out)
-    print("       block RAMs and the flip-flops feeding their address pins) and", file=out)
-    print("       re-measure clk_h. No RTL change, reversible.", file=out)
-    print("    Small distances but a slow clock -> not placement. Look at block", file=out)
-    print("       RAM setup time and the fabric instead.", file=out)
+    print("    Wide driver spread -> the 640 flip-flops feeding one round's", file=out)
+    print("       address pins are scattered. Floorplan the round (its block RAMs", file=out)
+    print("       and those flops) and re-measure both spread and clk_h.", file=out)
+    print("    Tight spread but a slow clock -> not placement. Look at block RAM", file=out)
+    print("       setup time and the fabric instead.", file=out)
     print("", file=out)
     return worst
 
@@ -227,8 +248,9 @@ def selftest():
 
     print("self-test: synthetic 2-round design")
     check("rounds discovered", sorted(rounds), [0, 1])
-    check("round0 worst distance", rounds[0]["dist"], 2)
-    check("round1 worst distance", rounds[1]["dist"], 117)
+    check("round0 driver spread", spread(bbox(rounds[0]["drv"])), 1)
+    check("round1 driver spread", spread(bbox(rounds[1]["drv"])), 0)
+    check("no cross-grid distance key", "dist" in rounds[0], False)
     check("round0 BRAM bbox", bbox(rounds[0]["bram"]), (11, 11, 10, 10, 1))
     check("round0 driver bbox", bbox(rounds[0]["drv"]), (10, 10, 10, 11, 2))
     check("unplaced counted", rounds[0]["unplaced"], 0)
@@ -237,6 +259,7 @@ def selftest():
     cells["top.crypter.round0.sboxes.s1"] = {
         "type": "RAMB18E1", "xy": None, "conns": {}, "dirs": {}}
     check("unplaced BRAM detected", analyse(cells)[0]["unplaced"], 1)
+    check("spread of empty box", spread(None), 0)
 
     report(analyse(cells), out=open("/dev/null", "w"))
     print("  report() rendered without error                     ok")

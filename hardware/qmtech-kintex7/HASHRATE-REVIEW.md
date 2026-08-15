@@ -128,7 +128,49 @@ in the module. The S-box address is a pure *permutation of `state[i]`*, a flip-f
 So the 9.6 ns is not combinational depth. It is **routing** — a 640-bit die-crossing shuffle from
 one round's state registers to that round's 20 block RAMs.
 
-Three things follow, none of which are in the current docs:
+### 3.1 First open-source measurements of it
+
+Built here from scratch to check this: yosys 0.33, nextpnr-xilinx at main `8b836d6`, and a
+Kintex-7 chipdb generated for `xc7k325tffg676-1` (462 MB, matching `openxc7/README.md`). The test
+design is `N` chained `encrypt_4full_round` stages with state registers between them — the encrypt
+loop's exact structure, cut down to 3 I/O pins.
+
+| design | RAMB18 | post-place | post-route |
+|---|---|---|---|
+| 2 rounds | 40 | 177.78 MHz | 165.98 MHz |
+| 21 rounds (= one instance's S-box load) | 420 | **178.25 MHz** | *(routing, see below)* |
+| this branch's full 2-instance build | 840 | 146.20 MHz | — |
+
+**Two caveats that matter more than the numbers.** My nextpnr is stock — it does *not* carry
+`openxc7/patches/0001-xc7-block-ram-timing.patch`, so block-RAM paths are untimed. These figures
+are therefore the same flavour as this branch's 146.20 MHz, **not** its 84.90 MHz. And the probe
+has no Keccak, no miner wrapper and one instance rather than two.
+
+Like-for-like, then: 178 MHz at 420 block RAMs against 146 MHz at 840 with the full design around
+it. **Going from 40 to 420 block RAMs cost nothing at all** (177.78 → 178.25 post-place). That is
+weaker support for congestion than §3's argument assumes — a single instance's S-box load does not
+degrade placement on this chip, and the drop to 146 MHz comes from whatever the second instance
+and the wrapper add. The 42% that block-RAM timing then removes (146 → 85) is a *timing-model*
+effect, not a placement one.
+
+The placement spread, measured with `openxc7/report_sbox_paths.py` on the routed 2-round design:
+
+```
+  round  BRAM bbox [RAMB18 grid]   addr driver bbox [SLICE grid]    drv spread
+  0      1-2, 32-66 (20)           0-23, 99-347 (640)                      271
+  1      0-1, 34-67 (20)           0-18, 107-347 (640)                     258
+```
+
+The 640 flip-flops feeding one round's address pins are spread over ~250 slice rows while its
+block RAMs sit in two columns — the shape §3 predicts. But on a near-empty chip the placer has no
+reason to do otherwise, so this is not yet evidence of a *problem*. The number to compare it
+against is the same measurement on the real 2-instance build, which is the open item.
+
+**Verdict so far: not proven.** The hypothesis below is still the best explanation for the
+pipelined variant's regression, but the one measurement that would settle it — spread and Fmax on
+the full design, with the block-RAM timing patch applied — has not been made.
+
+Three things follow from the structure regardless, none of which are in the current docs:
 
 **The stock design is already routing-bound, not logic-bound.** 9.6 ns of a 11.78 ns period —
 **82% of the clock** — is one zero-logic net bundle. The 84.90 MHz figure is a placement result,
