@@ -11,10 +11,11 @@ correctness review of those, including six bugs in the FX3 interface, is in git 
 
 What is verified how. The pipeline structure and latency claims were checked by RTL simulation
 (`exmaples/odocrypt/fpga/src/sim/miner_latency_tb.v`, Icarus) and by reading the generated RTL.
-Two numbers below were **re-measured independently for this review** with yosys 0.33
-(`synth_xilinx -family xc7`), noted inline where they appear. The Fmax figures are this branch's
-own nextpnr measurements and were *not* reproduced — there is no nextpnr in the review
-environment, and no Vivado (nor any free tier for this part). New claims are marked as analysis.
+Resource and Fmax figures marked *measured for this review* were produced here with yosys 0.33 and
+a from-scratch nextpnr-xilinx (main `8b836d6`) plus a generated Kintex-7 chipdb — including a
+rebuild carrying `openxc7/patches/0001-xc7-block-ram-timing.patch` (§3.3). Figures attributed to
+this branch are its own and were not re-run. There is no Vivado here, nor any free tier for this
+part. New claims are marked as analysis.
 
 Everything here uses the open-source toolchain: yosys + nextpnr-xilinx per `openxc7/`.
 
