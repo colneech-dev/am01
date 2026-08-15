@@ -1,0 +1,6 @@
+# Vivado project working directory and logs -- large, machine-specific,
+# reproducible via build.tcl/build_full.tcl. Never commit these.
+build/
+*.log
+*.jou
+webtalk*
