@@ -56,7 +56,17 @@ void GenerateSboxes(const T (&sbox)[sz1][sz2], bool dual_port, const char* prefi
             fprintf(f, "    output reg [%d:0] a_out;\n", width-1);
             fprintf(f, "    input [%d:0] b_in;\n", width-1);
             fprintf(f, "    output reg [%d:0] b_out;\n", width-1);
-            fprintf(f, "    reg [%d:0] mem[0:%zd];\n", width-1, sz2-1);
+            // Explicit ram_style forces Vivado's choice instead of letting its
+            // own heuristic decide. Measured necessary: without it, Vivado
+            // synthesizes correctly up to ~220 of these per instance, then
+            // silently doubles to 2 RAMB18E1 each past ~240 -- a total-design
+            // memory-object-count threshold, not a per-module inference
+            // issue (confirmed: reproduces even with two structurally
+            // distinct, differently-named module trees, so it isn't about
+            // Vivado conflating duplicate instances either). With this
+            // attribute the correct count holds even past that threshold.
+            // yosys already infers this correctly regardless; unaffected.
+            fprintf(f, "    (* ram_style = \"block\" *) reg [%d:0] mem[0:%zd];\n", width-1, sz2-1);
             // Separate always blocks per port, each with its own read of the
             // shared `mem` array -- Vivado's dual-port BRAM inference is
             // pattern-sensitive and doesn't reliably collapse two reads in
