@@ -153,22 +153,50 @@ degrade placement on this chip, and the drop to 146 MHz comes from whatever the 
 and the wrapper add. The 42% that block-RAM timing then removes (146 → 85) is a *timing-model*
 effect, not a placement one.
 
-The placement spread, measured with `openxc7/report_sbox_paths.py` on the routed 2-round design:
+### 3.2 Placement spread at full S-box density — measured
+
+`openxc7/report_sbox_paths.py` on the placed 21-round probe (420 RAMB18, all 21 rounds):
 
 ```
   round  BRAM bbox [RAMB18 grid]   addr driver bbox [SLICE grid]    drv spread
-  0      1-2, 32-66 (20)           0-23, 99-347 (640)                      271
-  1      0-1, 34-67 (20)           0-18, 107-347 (640)                     258
+  0      3-3,  98-139 (20)         0-59, 171-345 (640)                     233
+  7      5-6,   0-24  (20)         0-75,  76-345 (640)                     344
+  14     0-1,  95-139 (20)         0-13, 171-345 (640)                     187
+  20     0-0,   0-53  (20)         0-15,  98-345 (640)                     262
+        (21 rounds total; spread ranges 187-344, worst 344)
 ```
 
-The 640 flip-flops feeding one round's address pins are spread over ~250 slice rows while its
-block RAMs sit in two columns — the shape §3 predicts. But on a near-empty chip the placer has no
-reason to do otherwise, so this is not yet evidence of a *problem*. The number to compare it
-against is the same measurement on the real 2-instance build, which is the open item.
+The pattern is consistent across all 21 rounds and it is lopsided: **each round's 20 block RAMs
+are placed tightly** — one or two BRAM columns, 25–45 rows — **while the 640 flip-flops feeding
+their address pins are spread across essentially the whole fabric**, up to 75 slice columns and
+270 slice rows. The placer clusters the memories and scatters their address sources.
 
-**Verdict so far: not proven.** The hypothesis below is still the best explanation for the
-pipelined variant's regression, but the one measurement that would settle it — spread and Fmax on
-the full design, with the block-RAM timing patch applied — has not been made.
+That is the shape §3 predicts, now at one full instance's S-box load rather than a toy design.
+
+**And yet Fmax does not move: 178.25 MHz, the same as the 2-round probe.** The most economical
+explanation is that nextpnr is not timing the path in question. `openxc7/README.md` establishes
+that its STA does not time paths *starting at* a block RAM output; a path *ending at* a block RAM
+address pin is the same class of arc, and if it too is untimed then the reported Fmax is blind to
+exactly the net bundle measured above. That would also explain the 146 → 85 MHz collapse when the
+timing patch is applied: not a placement change, but the tool finally costing a path that was
+always there.
+
+**Status: consistent with §3, still not proven.** What is now measured is the spread (large, and
+uniformly so at realistic density) and that untimed Fmax is insensitive to it. What is not
+measured is the same design *with* `patches/0001-xc7-block-ram-timing.patch` applied — that is the
+one run that would convert this from a plausible story into a result, and it is the open item.
+
+### 3.3 Practical notes for reproducing the above
+
+- `cmake -DBUILD_PYTHON=OFF` — nextpnr's Python bindings need dev headers, and nothing here uses
+  them (`report_sbox_paths.py` parses JSON offline, by design).
+- `bbasm` builds to `build/bbasm`, not the `build/bba/bbasm` that `build-chipdb.sh` expects.
+- **Routing the 21-round probe was killed twice for memory** on a 16 GB machine. Two fixes, both
+  effective: add swap (`fallocate -l 12G /swapfile && mkswap && swapon`), and use **`--no-route`**
+  — the diagnostic reads `NEXTPNR_BEL`, which is assigned at placement, so routing is not needed
+  for it at all. Placement-only completes comfortably and writes the JSON.
+- `build-chipdb.sh` pins `NEXTPNR_TAG=0.9.2` while `README.md` says 0.9.2 cannot route and to use
+  HEAD. Use one revision for both the binary and the chipdb; mixing them risks a format mismatch.
 
 Three things follow from the structure regardless, none of which are in the current docs:
 
