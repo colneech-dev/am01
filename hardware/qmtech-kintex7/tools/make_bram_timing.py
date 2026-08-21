@@ -34,7 +34,7 @@ def slow_max(triples):
     return float(triples[1][1])
 
 
-def extract(src_dir):
+def extract(src_dir, vivado_sdf=None):
     path = os.path.join(src_dir, "BRAM_L.sdf")
     if not os.path.isfile(path):
         sys.exit(f"ERROR: {path} not found")
@@ -56,6 +56,64 @@ def extract(src_dir):
                 mm = re.search(r'\(' + kind + r'\s+ADDRAU\s+\(posedge CLKARDCLKU\)\s+' + TRIPLE, body)
                 if mm:
                     vals.setdefault(key, float(mm.group(2)))
+
+    # Optional: override the unregistered clock->DO arc with REAL device data
+    # extracted from Vivado (write_sdf on a routed checkpoint for this exact
+    # part/speed grade). prjxray ships no kintex7 timing at all, so the rest of
+    # this file necessarily comes from artix7 -- same primitive family, different
+    # silicon. This one arc is the one on our critical path, so where a measured
+    # value exists we prefer it and say so.
+    #
+    # Vivado emits plain RAMB18E1 celltypes with the mode as cell PROPERTIES,
+    # not encoded in the celltype name the way prjxray does, so it needs its own
+    # tiny parser rather than the mode-suffix regex above.
+    if vivado_sdf:
+        if not os.path.exists(vivado_sdf):
+            sys.exit(f"ERROR: {vivado_sdf} not found")
+        seen = {}
+        # Vivado's delay form is (min:typ:max) with single colons, NOT prjxray's
+        # (min::max). And Vivado declares (TIMESCALE 1ps) while prjxray SDF is in
+        # ns, so the extracted value must be scaled or it lands 1000x out.
+        # Vivado's delay form is (min:typ:max) with single colons, NOT prjxray's
+        # (min::max). And Vivado declares (TIMESCALE 1ps) while prjxray SDF is in
+        # ns, so the value must be scaled or it lands 1000x out. Refuse to guess:
+        # the SDF spec's default is 1ns, and silently applying that to picosecond
+        # data would give a plausible-looking but absurd number.
+        head = open(vivado_sdf, errors="ignore").read(4000)
+        tm = re.search(r'\(TIMESCALE\s+([0-9.]*)\s*(ps|ns)\s*\)', head)
+        if not tm:
+            sys.exit(f"ERROR: no TIMESCALE in {vivado_sdf} -- refusing to guess units")
+        ts = float(tm.group(1) or 1.0) * (0.001 if tm.group(2) == "ps" else 1.0)
+        cellpat = re.compile(r'CELLTYPE\s+"([A-Z0-9_]+)"')
+        VTRIPLE = r'\(([-0-9.]+):([-0-9.]+):([-0-9.]+)\)'
+        iopat = re.compile(r'\(IOPATH\s+(CLK\S+)\s+(DO\S+)\s+' + VTRIPLE)
+        cur = None
+        with open(vivado_sdf, errors="ignore") as f:
+            for line in f:
+                m = cellpat.search(line)
+                if m:
+                    cur = m.group(1)
+                if cur == "RAMB18E1":
+                    io = iopat.search(line)
+                    if io:
+                        k = (io.group(1), io.group(2), io.group(3), io.group(5))
+                        seen[k] = seen.get(k, 0) + 1
+        if not seen:
+            sys.exit(f"ERROR: no RAMB18E1 CLK->DO IOPATH arcs found in {vivado_sdf}")
+        # Every instance must agree; a spread means some BRAM is configured
+        # differently and a single value would be wrong.
+        delays = set((k[2], k[3]) for k in seen)
+        if len(delays) != 1:
+            sys.exit(f"ERROR: {len(delays)} distinct clk->DO delays in {vivado_sdf} "
+                     f"-- cannot collapse to one value: {sorted(delays)}")
+        lo, hi = delays.pop()
+        measured = float(hi) * ts        # SDF units -> ns
+        n = sum(seen.values())
+        print(f"  Vivado override: clk->DO = {measured} ns "
+              f"(was {vals.get('clk_to_do')} from {os.path.basename(path)}), "
+              f"confirmed identical across {n} arcs")
+        vals["clk_to_do"] = measured
+        vals["clk_to_do_src"] = "vivado-measured"
 
     required = ("clk_to_do", "clk_to_do_reg", "addr_setup", "addr_hold")
     missing = [k for k in required if k not in vals]
@@ -137,10 +195,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", required=True, help="prjxray <family>/timings dir to extract from")
     ap.add_argument("--out-db", required=True, help="kintex7/timings dir to write")
+    ap.add_argument("--vivado-sdf",
+                    help="optional: SDF from Vivado write_sdf on a routed checkpoint "
+                         "for this exact part. Overrides the unregistered clock->DO "
+                         "arc with real measured device data instead of the artix7 proxy.")
     ap.add_argument("--out-header", required=True, help="C++ header to write")
     a = ap.parse_args()
 
-    vals = extract(a.src)
+    vals = extract(a.src, vivado_sdf=a.vivado_sdf)
     family = os.path.basename(os.path.dirname(a.src.rstrip("/")))
 
     print("extracted block RAM timing (ns, slow-corner max):")
