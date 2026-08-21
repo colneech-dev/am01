@@ -5,3 +5,7 @@
 # would bite hardware/qmtech-kintex7/cm4-firmware/setup-pi.sh the same
 # way when fetched onto the Pi via curl | bash.
 *.sh text eol=lf
+
+# Same reasoning applies to Python scripts: a CRLF shebang line
+# (#!/usr/bin/env python3) fails identically on Linux/WSL.
+*.py text eol=lf
