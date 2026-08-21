@@ -106,17 +106,48 @@ module odocrypt_gpio_wrapper #(
     // asserts -- standard practice for a source-synchronous-ish bus with
     // no shared clock.
     // =====================================================================
-    reg [2:0] wr_n_sync, rd_n_sync;
-    reg [3:0] addr_sync0, addr_sync1;
-    reg [15:0] data_in_sync0, data_in_sync1;
+    // ASYNC_REG on the first flop of each chain: tells P&R to place it
+    // close to whatever feeds it and prioritize it for MTBF, since it's
+    // the one actually catching an asynchronous input mid-transition.
+    // Paired with the set_clock_groups -asynchronous in the .xdc between
+    // sys_clk_50m and clk_h -- that tells STA these two clocks aren't
+    // meant to be timed against each other; this tells P&R the flops
+    // that assumption depends on need real metastability handling.
+    // wr_sync/rd_sync are stored ACTIVE-HIGH (inverted from the raw
+    // active-low gpio_wr_n/gpio_rd_n) purely so their idle/reset state is
+    // all-zero instead of all-one. That is not cosmetic: a reset-to-1
+    // register synthesizes to FDSE ("set" primitive) instead of FDRE
+    // ("reset" primitive), and FDRE/FDSE turn out to be JUST as
+    // half-slice-incompatible as the sync/async split above -- confirmed
+    // by hitting a second real 'control-set contention' FASM error, on
+    // this exact register, after already eliminating FDCE/FDPE. Same
+    // fix category, one bit of polarity instead of a sensitivity list.
+    // Functionally identical either way -- see wr_active/rd_active and
+    // the S_WRITE/S_READ release checks below, which un-invert as needed.
+    (* ASYNC_REG = "TRUE" *) reg [2:0] wr_sync, rd_sync;
+    (* ASYNC_REG = "TRUE" *) reg [3:0] addr_sync0;
+    reg [3:0] addr_sync1;
+    (* ASYNC_REG = "TRUE" *) reg [15:0] data_in_sync0;
+    reg [15:0] data_in_sync1;
 
-    always @(posedge bus_clk or negedge bus_rst_n) begin
+    // Synchronous reset deliberately, not async: bus_rst_n is already
+    // deasserted synchronously (see am01_qmtech_top.v's rst_stretch
+    // counter), so nothing here needs true async behaviour. Kept sync
+    // for a real, measured reason -- see openxc7/README.md "Why every
+    // reset in this file is synchronous": Xilinx 7-series async-set/
+    // reset FFs (FDCE/FDPE) route through the same half-slice control
+    // network as the sync ones (FDRE/FDSE), and nextpnr-xilinx's placer
+    // does not reliably keep the two families apart -- confirmed via a
+    // real 'control-set contention' FASM error on 2/2 random seeds
+    // before this fix. Vivado handles the mix fine; this is an openXC7
+    // portability fix, not a correctness bug this file ever had.
+    always @(posedge bus_clk) begin
         if (!bus_rst_n) begin
-            wr_n_sync <= 3'b111;
-            rd_n_sync <= 3'b111;
+            wr_sync <= 3'b000;
+            rd_sync <= 3'b000;
         end else begin
-            wr_n_sync <= {wr_n_sync[1:0], gpio_wr_n};
-            rd_n_sync <= {rd_n_sync[1:0], gpio_rd_n};
+            wr_sync <= {wr_sync[1:0], ~gpio_wr_n};
+            rd_sync <= {rd_sync[1:0], ~gpio_rd_n};
         end
     end
 
@@ -127,8 +158,8 @@ module odocrypt_gpio_wrapper #(
         data_in_sync1 <= data_in_sync0;
     end
 
-    wire wr_active = ~wr_n_sync[2] & ~wr_n_sync[1]; // debounced active-low write request
-    wire rd_active = ~rd_n_sync[2] & ~rd_n_sync[1]; // debounced active-low read request
+    wire wr_active = wr_sync[2] & wr_sync[1]; // debounced write request
+    wire rd_active = rd_sync[2] & rd_sync[1]; // debounced read request
 
     // =====================================================================
     // bus_clk -> clk_h request/ack handshake (same two-phase toggle
@@ -142,9 +173,11 @@ module odocrypt_gpio_wrapper #(
     reg [1:0]  req_op_bus;
     reg [31:0] req_data_bus;
 
-    reg req_sync1_h, req_sync2_h, req_sync3_h;
+    (* ASYNC_REG = "TRUE" *) reg req_sync1_h;
+    reg req_sync2_h, req_sync3_h;
     reg ack_toggle_h;
-    reg ack_sync1_bus, ack_sync2_bus, ack_sync3_bus;
+    (* ASYNC_REG = "TRUE" *) reg ack_sync1_bus;
+    reg ack_sync2_bus, ack_sync3_bus;
 
     wire req_pulse_h   = req_sync2_h ^ req_sync3_h;
     wire ack_pulse_bus = ack_sync2_bus ^ ack_sync3_bus;
@@ -185,13 +218,30 @@ module odocrypt_gpio_wrapper #(
     wire [31:0] golden_nonce_bus;
     reg         nonce_valid_clear_pulse;
 
-    always @(posedge bus_clk or negedge bus_rst_n) begin
+    // Synchronous reset deliberately -- see the sync-vs-async note above
+    // wr_sync/rd_sync's always block; same reasoning applies here.
+    always @(posedge bus_clk) begin
         if (!bus_rst_n) begin
             bus_state       <= S_IDLE;
             gpio_ready      <= 1'b0;
             gpio_data_oe    <= 1'b0;
             request_issued  <= 1'b0;
-            req_toggle_bus  <= 1'b0;
+            // NOTE: req_toggle_bus is deliberately NOT reset here.
+            //
+            // It is a toggle, not a state -- only its TRANSITIONS carry meaning,
+            // and the clk_h receiver detects them as req_sync2_h ^ req_sync3_h.
+            // Forcing it to 0 on reset creates an edge if it happened to be 1,
+            // which fires one spurious request on the clk_h side carrying stale
+            // req_op_bus/req_data_bus. Because odo_block_data is a plain 19-deep
+            // shift register with no word counter and no position reset, a single
+            // extra get_block_pulse_h shifts the entire header by one 32-bit word
+            // -- after which the miner runs normally and every result is wrong,
+            // with no recovery path (OP_SOFT_RESET clears the word counters but
+            // not the shift-register position).
+            //
+            // The clk_h synchroniser has no reset of its own, so leaving this
+            // undisturbed is what keeps the two sides consistent across a bus
+            // reset. Do not "tidy" this into the reset list.
             header_lo_stage <= 16'h0;
             target_lo_stage <= 16'h0;
             nonce_valid_clear_pulse <= 1'b0;
@@ -259,8 +309,10 @@ module odocrypt_gpio_wrapper #(
                         end
                     endcase
 
-                    if (gpio_ready && wr_n_sync[2]) begin
-                        // CM4 released WR_N after seeing READY.
+                    if (gpio_ready && !wr_sync[2]) begin
+                        // CM4 released WR_N after seeing READY (wr_sync is
+                        // active-high, so "released" is 0, not 1 -- see
+                        // its declaration comment).
                         gpio_ready <= 1'b0;
                         bus_state  <= S_IDLE;
                     end
@@ -280,8 +332,9 @@ module odocrypt_gpio_wrapper #(
                     gpio_data_oe <= 1'b1;
                     gpio_ready   <= 1'b1;
 
-                    if (gpio_ready && rd_n_sync[2]) begin
-                        // CM4 released RD_N after seeing READY.
+                    if (gpio_ready && !rd_sync[2]) begin
+                        // CM4 released RD_N after seeing READY (rd_sync is
+                        // active-high -- see wr_sync's declaration comment).
                         gpio_ready   <= 1'b0;
                         gpio_data_oe <= 1'b0;
                         bus_state    <= S_IDLE;
@@ -518,14 +571,18 @@ module odocrypt_gpio_wrapper #(
         end
     end
 
-    reg nonce_sync1_bus, nonce_sync2_bus, nonce_sync3_bus;
-    reg hash_active_sync1_bus, hash_active_sync2_bus;
+    (* ASYNC_REG = "TRUE" *) reg nonce_sync1_bus;
+    reg nonce_sync2_bus, nonce_sync3_bus;
+    (* ASYNC_REG = "TRUE" *) reg hash_active_sync1_bus;
+    reg hash_active_sync2_bus;
     reg [31:0] golden_nonce_reg;
     reg        nonce_valid_reg;
 
     wire nonce_new_pulse_bus = nonce_sync2_bus ^ nonce_sync3_bus;
 
-    always @(posedge bus_clk or negedge bus_rst_n) begin
+    // Synchronous reset deliberately -- see the sync-vs-async note above
+    // wr_sync/rd_sync's always block; same reasoning applies here.
+    always @(posedge bus_clk) begin
         if (!bus_rst_n) begin
             nonce_sync1_bus <= 1'b0;
             nonce_sync2_bus <= 1'b0;
