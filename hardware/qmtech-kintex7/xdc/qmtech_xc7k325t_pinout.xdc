@@ -50,6 +50,78 @@ set_property PACKAGE_PIN F22 [get_ports sys_clk_50m]
 set_property IOSTANDARD LVCMOS33 [get_ports sys_clk_50m]
 create_clock -period 20.000 -name sys_clk_50m [get_ports sys_clk_50m]
 
+# WARNING -- this constraint does NOT reach nextpnr/openXC7.
+#
+# xilinx/xdc.cc attaches a create_clock to the net found by
+# getNetByAlias(<port name>), i.e. literally the net "sys_clk_50m". The nets that
+# actually carry clocks in this design are bus_clk and clk_h, and nothing
+# propagates clkconstr through the IBUF/BUFG insertion. common/timing.cc then
+# finds no clkconstr on the net at each FF clock pin and falls back to
+# ctx->setting("target_freq") -- which is whatever --freq was passed.
+#
+# Verified in the P&R log: bus_clk IS the 50 MHz crystal, and it is reported
+# "PASS at 133.33 MHz" -- i.e. checked against --freq, not against this 20 ns.
+#
+# Consequence: under openXC7, --freq is the ONLY timing constraint, and it is
+# applied to EVERY domain. build.sh therefore refuses to run without FREQ set.
+# Under Vivado this constraint works normally.
+
+# ---------------------------------------------------------------------
+# CDC: sys_clk_50m (bus_clk, used raw -- see am01_qmtech_top.v) and
+# clk_h (clkout1_unbuf, the MMCM's CLKOUT1 -- see clk_gen_hash.v) come
+# off the same MMCM but at a non-integer ratio (50 : 133.33) with no
+# fixed phase relationship as seen from the bus side. Every signal that
+# crosses between them in odocrypt_gpio_wrapper.v already goes through a
+# real two-flop/toggle synchronizer (wr_n_sync/rd_n_sync, the
+# req_toggle_bus<->ack_toggle_h handshake, nonce_toggle_h, etc.) -- that
+# was always the design intent, not an oversight.
+#
+# Without this, Vivado's default STA times paths between the two clocks
+# as if they were synchronous, since it has no way to know a
+# synchronizer sits in between. First real build (2026-08-15) came back
+# "Timing constraints are not met": intra-clock WNS was clean on both
+# domains individually (clkout1_unbuf: +0.304ns; sys_clk_50m positive),
+# but the *inter*-clock paths reported -3.578ns / -1.858ns WNS -- the
+# synchronizer chains being timed as bogus single-clock paths. This
+# constraint tells Vivado those two clocks are intentionally
+# asynchronous, which is what the synchronizers are there for. See also
+# the ASYNC_REG attributes on the first-stage synchronizer flops in
+# odocrypt_gpio_wrapper.v (placement-side half of the same fix).
+# NOTE: VIVADO ONLY. nextpnr's XDC parser (xilinx/xdc.cc) understands exactly
+# three commands -- set_property, create_clock, set_multicycle_path -- and
+# everything else is discarded with a log_info("ignoring unsupported XDC
+# command"), i.e. at INFO level, not a warning. set_clock_groups is dropped.
+#
+# Under openXC7 the two domains are therefore still timed against each other.
+# That direction is CONSERVATIVE (paths get timed rather than ignored), so it is
+# not a correctness risk -- but do not add a set_false_path here expecting it to
+# take effect, and do not read an openXC7 inter-clock number as meaningful.
+#
+# The same applies to the ASYNC_REG attributes on the first-stage synchroniser
+# flops in odocrypt_gpio_wrapper.v: the string ASYNC_REG does not appear anywhere
+# in nextpnr's xilinx backend, so it has no effect on openXC7 placement. The
+# synchroniser stages can land arbitrarily far apart, degrading MTBF. If that
+# matters, constrain them with explicit BEL/LOC attributes instead.
+set_clock_groups -asynchronous \
+    -group [get_clocks sys_clk_50m] \
+    -group [get_clocks -of_objects [get_pins clk_gen_hash_inst/mmcm_inst/CLKOUT1]]
+
+# ---------------------------------------------------------------------
+# Pull-ups on the CM4 handshake strobes.
+#
+# gpio_wr_n and gpio_rd_n are active-low and driven by the CM4. Between FPGA
+# configuration and the CM4 configuring its GPIOs as outputs, both float. In
+# odocrypt_gpio_wrapper.v, wr_active = wr_sync[2] & wr_sync[1] -- two consecutive
+# samples of a floating input are enough to fire a bogus write, and a spurious
+# write can shift the header shift register (odo_block_data has no word counter
+# and no position reset), after which the miner runs and every result is wrong.
+#
+# Every IOB in the current bitstream carries PULLTYPE.NONE, so nothing holds
+# these high today. Board-level pull-ups would be better on a respin; this is the
+# free half of the fix.
+set_property PULLUP true [get_ports gpio_wr_n]
+set_property PULLUP true [get_ports gpio_rd_n]
+
 # ---------------------------------------------------------------------
 # GPIO parallel bus to the Raspberry Pi CM4 socket (see README.md for
 # the protocol). 24 of the 28 available CM4<->FPGA GPIO lines are used.
