@@ -23,7 +23,10 @@ NEXTPNR_TAG="${NEXTPNR_TAG:-0.9.2}"
 
 # bbasm turns the .bba text export into the binary chipdb. Any bbasm
 # works (it is a dumb assembler); apio ships one, or build from source.
-BBASM="${BBASM:-$(command -v bbasm || echo /root/.apio/packages/openxc7/bin/bbasm)}"
+# bbasm must match the nextpnr that will READ the chipdb: the binary format is
+# tied to the tool version. Prefer the local build we now run, then PATH.
+LOCAL_BBASM=/home/colin/src/nextpnr-xilinx-heatmap/build/bbasm
+BBASM="${BBASM:-$( [ -x "$LOCAL_BBASM" ] && echo "$LOCAL_BBASM" || command -v bbasm || echo /root/.apio/packages/openxc7/bin/bbasm )}"
 
 echo "==> device      : $DEVICE"
 echo "==> output dir  : $OUT_DIR"

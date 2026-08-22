@@ -10,7 +10,11 @@
 # touched at all will still be renamed.
 set -uo pipefail
 cd /tmp
-Y=~/oss-cad-suite/bin/yosys
+# Prefer the local patched v0.68 build (what build.sh now uses); fall back to
+# whatever is on PATH. The churn this test measures is a property of yosys's
+# name generation, so it should be run against the yosys the flow actually uses.
+Y="${YOSYS:-/home/colin/src/yosys-upstream/build/yosys}"
+[ -x "$Y" ] || Y="$(command -v yosys)"
 
 cat > m1.v <<'EOF'
 module m(input [7:0] a, input [7:0] b, input c, output [7:0] y, output z);

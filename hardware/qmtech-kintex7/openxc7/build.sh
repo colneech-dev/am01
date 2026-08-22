@@ -84,8 +84,23 @@ fi
 # having printed absolutely nothing, which is a miserable thing to debug.
 # `|| true` keeps the assignment succeeding so the explicit check below
 # can report which tool is missing.
-YOSYS="${YOSYS:-$(command -v yosys || true)}"
-NEXTPNR="${NEXTPNR:-$(command -v nextpnr-xilinx || true)}"
+# Prefer the locally built toolchain over whatever is on PATH.
+#
+# /opt/openxc7 ships yosys 0.62 and nextpnr 0.9.2, but openXC7's own
+# toolchain-installer pins yosys v0.68 and nextpnr-xilinx 0.9.3 -- the installed
+# copy was simply never refreshed. The local builds are those newer versions
+# plus the patches in patches/ and patches-yosys/, so they are what this flow
+# should use. An explicit YOSYS=/NEXTPNR= still wins.
+#
+# WARNING: switching yosys versions invalidates comparability with every
+# measurement taken before 2026-08-22. v0.68 produces a different netlist from
+# 0.62 on this design (~1500 fewer small LUTs, MUXF7 unchanged at ~292), so
+# numbers such as the 102.15 MHz striped result cannot be compared across the
+# boundary. Re-establish a baseline rather than carrying old figures forward.
+LOCAL_YOSYS=/home/colin/src/yosys-upstream/build/yosys
+LOCAL_NEXTPNR=/home/colin/src/nextpnr-xilinx-heatmap/build/nextpnr-xilinx
+YOSYS="${YOSYS:-$( [ -x "$LOCAL_YOSYS" ] && echo "$LOCAL_YOSYS" || command -v yosys || true )}"
+NEXTPNR="${NEXTPNR:-$( [ -x "$LOCAL_NEXTPNR" ] && echo "$LOCAL_NEXTPNR" || command -v nextpnr-xilinx || true )}"
 FASM2FRAMES="${FASM2FRAMES:-$(command -v fasm2frames || true)}"
 XC7FRAMES2BIT="${XC7FRAMES2BIT:-$(command -v xc7frames2bit || true)}"
 
