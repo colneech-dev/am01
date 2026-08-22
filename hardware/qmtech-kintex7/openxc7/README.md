@@ -40,6 +40,7 @@ still applies.
 | `README.md` | **current** — start here |
 | `SESSIONS.md` | **current** — session record, newest first |
 | `TESTS-TO-RUN.md` | **current**, with outcomes; most entries now refuted |
+| `CONGESTION-DRIVEN-PLACEMENT.md` | **current** — design note; the placer's missing congestion model and how to add one |
 | `QUARANTINED-BITSTREAMS.md` | **current** — do not program these |
 | `patches/README.md` | **current** — nextpnr patches, with what each is measured to do |
 | `patches-yosys/README.md` | **current** — yosys patches |
