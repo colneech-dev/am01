@@ -132,7 +132,21 @@ FLATTEN="${FLATTEN:-1}"
 # when a Windows reboot killed a run mid-route with no timestamp to
 # reconstruct how long it had actually been going).
 echo "==> [1/4] synthesis (yosys)${FLATTEN_ARG:+ , flattened} -- $(date -Is)"
-"$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG -json $OUT/$TOP.json" "${SRCS[@]}"
+# With GROUPS=1, recover the RTL scope onto every cell before writing the JSON.
+#
+# Synthesis destroys cell provenance: after synth_xilinx -flatten only 2 of 70774
+# cells on this design carry hdlname, because abc and the FF mapping create new
+# cells without it. hdlname_recover derives each cell's scope from the names of
+# the nets it touches, which do survive flattening. nextpnr then groups by that
+# with no external tooling.
+#
+# Off by default: it only adds attributes, but keeping the default byte-identical
+# means GROUPS=0 builds stay comparable with older ones.
+if [ "${GROUPS:-0}" = "1" ]; then
+    "$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG; hdlname_recover; write_json $OUT/$TOP.json" "${SRCS[@]}"
+else
+    "$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG -json $OUT/$TOP.json" "${SRCS[@]}"
+fi
 
 # Optional RTL-hierarchy floorplan. Opt-in: default behaviour is unchanged.
 #
@@ -157,11 +171,16 @@ echo "==> [1/4] synthesis (yosys)${FLATTEN_ARG:+ , flattened} -- $(date -Is)"
 # BRAMs. A design with no pre-placed cells gets regions for nothing and this is a
 # silent no-op, which the log will say plainly rather than implying it worked.
 if [ "${GROUPS:-0}" = "1" ]; then
-    echo "==> [2a/4] deriving RTL-hierarchy placement groups -- $(date -Is)"
-    python3 "$(dirname "$0")/derive_cell_groups.py" "$OUT/$TOP.json" \
-        --auto --emit "$OUT/cell_groups.json"
-    export GROUP_MAP="$OUT/cell_groups.json"
-    PNR_EXTRA=(--pre-place "$(dirname "$0")/preplace_group_regions.py")
+    # Native path: no scripts. yosys writes the RTL scope onto every cell
+    # (hdlname_recover), nextpnr groups by it, chooses the grouping depth, and
+    # derives each region from the chipdb (--floorplan-hierarchy).
+    #
+    # The synthesis step above adds hdlname_recover when GROUPS=1; nothing else
+    # is needed here. The former pipeline --
+    #     derive_cell_groups.py -> bake_regions_into_json.py -> --pre-place hook
+    # -- is superseded and kept only as reference tooling.
+    PNR_EXTRA=(--floorplan-hierarchy)
+    [ -n "${GROUP_PAD:-}" ] && PNR_EXTRA+=(--floorplan-pad "$GROUP_PAD")
 else
     PNR_EXTRA=()
 fi
