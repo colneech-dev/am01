@@ -1,0 +1,12 @@
+# Kintex-7 RAMB18E1 timing from Vivado
+# part=xc7k325tffg676-1 speed=-1 corner=slow
+
+RAMB18 cells in design: 840
+sample cell: odocrypt_gpio_wrapper_inst/g_miner[0].miner_top_inst/miner/worker/crypt/crypter/round0/sboxes/sbox11inst/a_out_reg
+  REF_NAME    : RAMB18E1
+  DOA_REG     : 0
+  DOB_REG     : 0
+  RAM_MODE    : TDP
+  READ_WIDTH_A: 18
+
+-- worst clock-to-out paths starting at a BRAM --
