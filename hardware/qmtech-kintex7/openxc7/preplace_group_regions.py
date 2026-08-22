@@ -259,6 +259,8 @@ if not bbox:
 constrained = 0
 skipped_small = skipped_free = 0
 made = 0
+region_boxes = {}   # region name -> [x0, y0, x1, y1], for the reusable dump
+cell_region = {}    # cell name   -> region name
 for g, names in sorted(members.items(), key=lambda kv: -len(kv[1])):
     if len(names) < MIN_CELLS:
         skipped_small += len(names)
@@ -273,11 +275,13 @@ for g, names in sorted(members.items(), key=lambda kv: -len(kv[1])):
     x1, y1 = b[2] + PAD, b[3] + PAD
     rname = "grp%d" % made
     ctx.createRectangularRegion(rname, x0, y0, x1, y1)  # noqa: F821
+    region_boxes[rname] = [x0, y0, x1, y1]
     made += 1
     ok = 0
     for cname in names:
         try:
             ctx.constrainCellToRegion(cname, rname)  # noqa: F821
+            cell_region[cname] = rname
             ok += 1
         except Exception:
             pass
@@ -288,3 +292,27 @@ for g, names in sorted(members.items(), key=lambda kv: -len(kv[1])):
 say("preplace_group_regions: %d regions, %d cells constrained" % (made, constrained))
 say("  left free (no anchor): %d cells" % skipped_free)
 say("  left free (group < %d): %d cells" % (MIN_CELLS, skipped_small))
+
+# Dump the computed floorplan in the form nextpnr can now read directly from a
+# design file (see apply_region_constraints() in common/place_common.cc).
+#
+# The boxes can only be computed in here, because turning a BEL name like
+# "RAMB18_X1Y18/RAMB18E1" into tile coordinates needs the chipdb. But once
+# computed they are just numbers, so baking them into the JSON removes the
+# dependency on Python bindings entirely -- which is what makes this usable on a
+# stock nextpnr rather than only on a build with bindings plus the local
+# getBelLocation patch.
+spec_path = os.environ.get("GROUP_SPEC", "regions_spec.json")
+try:
+    spec = {
+        "nextpnr_regions": ";".join(
+            "%s:%d,%d,%d,%d" % (rn, b[0], b[1], b[2], b[3]) for rn, b in region_boxes.items()
+        ),
+        "cell_region": cell_region,
+    }
+    with open(spec_path, "w") as fh:
+        json.dump(spec, fh)
+    say("  wrote reusable floorplan to %s (%d regions, %d cells)"
+        % (spec_path, len(region_boxes), len(cell_region)))
+except Exception as e:
+    say("  could not write %s: %s" % (spec_path, e))
