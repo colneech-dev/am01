@@ -147,9 +147,35 @@ def bel_attr(cell):
     return None
 
 
-# Bounding box per group, from whichever of its cells carry a BEL constraint.
-bbox = {}
-anchors = defaultdict(int)
+def robust_range(vals):
+    """min/max after discarding outliers by the 1.5*IQR rule.
+
+    A plain min/max is at the mercy of a single stray anchor. Measured: round0
+    came out with 21 anchors where every other round had 20, and a box 227 tiles
+    tall against ~40 for the rest -- so its logic was effectively unconstrained
+    while appearing to be handled. The extra anchor is a clock or IO cell, which
+    carries a BEL constraint from the pinout XDC and sits nowhere near the round's
+    BRAMs.
+
+    Rejecting by spread rather than by cell type keeps this design-independent:
+    it does not need to know which cell types are 'real' anchors.
+    """
+    s = sorted(vals)
+    n = len(s)
+    if n < 4:
+        return s[0], s[-1], 0
+    q1 = s[n // 4]
+    q3 = s[(3 * n) // 4]
+    iqr = q3 - q1
+    lo, hi = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+    keep = [v for v in s if lo <= v <= hi]
+    if not keep:
+        return s[0], s[-1], 0
+    return min(keep), max(keep), n - len(keep)
+
+
+# Anchor locations per group, from whichever of its cells carry a BEL constraint.
+anchor_locs = defaultdict(list)
 for g, names in members.items():
     for cname in names:
         cell = ctx.cells[cname]  # noqa: F821
@@ -163,13 +189,21 @@ for g, names in members.items():
             loc = ctx.getBelLocation(bn)  # noqa: F821
         except Exception:
             continue
-        anchors[g] += 1
-        if g not in bbox:
-            bbox[g] = [loc.x, loc.y, loc.x, loc.y]
-        else:
-            b = bbox[g]
-            b[0] = min(b[0], loc.x); b[1] = min(b[1], loc.y)
-            b[2] = max(b[2], loc.x); b[3] = max(b[3], loc.y)
+        anchor_locs[g].append((loc.x, loc.y))
+
+bbox = {}
+anchors = defaultdict(int)
+rejected_total = 0
+for g, locs in anchor_locs.items():
+    xs = [p[0] for p in locs]
+    ys = [p[1] for p in locs]
+    x0, x1, rx = robust_range(xs)
+    y0, y1, ry = robust_range(ys)
+    bbox[g] = [x0, y0, x1, y1]
+    anchors[g] = len(locs)
+    rejected_total += rx + ry
+say("preplace_group_regions: discarded %d outlying anchor coordinates (1.5*IQR)"
+    % rejected_total)
 
 say("preplace_group_regions: %d of %d groups have an anchor" % (len(bbox), len(members)))
 
