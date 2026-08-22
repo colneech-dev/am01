@@ -1,5 +1,17 @@
 `--placer-heap-alpha` and `--placer-heap-beta` are silently discarded on the xilinx arch
 
+> **RE-CHECKED 2026-08-22.** Still valid against the merged tree (nextpnr-xilinx
+> at openXC7 HEAD, 25 commits newer than when this was written) — the code this
+> describes is unchanged there. NOT YET FILED.
+>
+> Worth checking again immediately before filing: two other issues written the
+> same way turned out to be **already fixed upstream** (a nextpnr control-set bug,
+> and a `synth_xilinx` split-run bug fixed after v0.68). A stale tree reproduces
+> its own bugs perfectly, so verify against `YosysHQ/nextpnr` HEAD, not this fork.
+>
+> Related filings: YosysHQ/nextpnr#1784, YosysHQ/yosys#6144, YosysHQ/yosys#6145.
+
+
 ## Summary
 
 `Arch::place()` overwrites `cfg.alpha`, `cfg.beta` and `cfg.criticalityExponent`

@@ -1,5 +1,26 @@
 # Tests to run
 
+> **STATUS 2026-08-22.** Much of this list is now resolved or obsolete. Read the
+> outcomes below before running anything, and read `README.md` first — several
+> tests here assume a toolchain (yosys 0.62, nextpnr 0.9.2) this flow no longer
+> uses, and figures either side of that upgrade are not comparable.
+>
+> | test | outcome |
+> |---|---|
+> | region / floorplan placement | **refuted** — 3 runs, none converged; regions route worse than unconstrained |
+> | congestion pricing (`NEXTPNR_CONG_GROWTH`) | **refuted** — markedly worse early |
+> | LUT7 cost model / `-luts` | **refuted** — v0.68 still maps LUT6+LUT2; the mechanism was wrong |
+> | `hpwl_scale` variants | **refuted** — 89.93 / 90.46 vs 102.15 |
+> | `placer1_refine` reach | **refuted** — 84.42 |
+> | T15 drop dfflegalize workaround | still open; will not move Fmax (all FFs already CE=1/R=0) |
+> | Vivado place → nextpnr route | **done** — 158.81 MHz routed; the design meets spec |
+> | nextpnr place → Vivado route | **still open** — name mapping fixed (98.74%), never run |
+> | BRAM output register | still open; not required for spec now the target is met |
+>
+> The single most useful open item is **nextpnr place → Vivado route**: it is the
+> only experiment that cleanly separates our placer from our router, and Vivado
+> reaching 158.81 MHz on our netlist says one of the two is the gap.
+
 Everything built, changed, or claimed during the 2026-08-20/21 session that has
 **not** been verified by measurement. Ordered by value-per-effort, not by topic.
 

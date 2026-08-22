@@ -97,6 +97,25 @@ fi
 # 0.62 on this design (~1500 fewer small LUTs, MUXF7 unchanged at ~292), so
 # numbers such as the 102.15 MHz striped result cannot be compared across the
 # boundary. Re-establish a baseline rather than carrying old figures forward.
+# SRL: whether yosys may infer SRL16/SRLC32E shift-register LUTs.
+#
+# HISTORY, because the default here has flipped. An older nextpnr could not map
+# SRLC32E's cascade output and died in the ROUTER, after placement had already
+# succeeded:
+#     ERROR: No wire found for port Q31 on source cell ... fpga_srl_0
+# Any shift register deeper than 16 hit it, and encrypt.v has two (progress at
+# 172, period at 43), so the miner triggered it every time while the blinky
+# smoke test did not -- which is why it stayed hidden. The workaround was to
+# pass -nosrl and spend a few hundred flip-flops instead.
+#
+# That is FIXED on the nextpnr this flow now uses. Measured: the current
+# netlists contain 6 SRLC32E and 1 SRL16E and route to 0 unrouted, and no recent
+# log contains the Q31 error -- it appears only in logs from the old tool. So
+# SRLs are allowed by default again, and -nosrl is kept as an escape hatch for
+# anyone on an older nextpnr.
+SRL="${SRL:-1}"
+[ "$SRL" = "1" ] && SRL_ARG="" || SRL_ARG="-nosrl"
+
 LOCAL_YOSYS=/home/colin/src/yosys-upstream/build/yosys
 LOCAL_NEXTPNR=/home/colin/src/nextpnr-xilinx-heatmap/build/nextpnr-xilinx
 YOSYS="${YOSYS:-$( [ -x "$LOCAL_YOSYS" ] && echo "$LOCAL_YOSYS" || command -v yosys || true )}"
@@ -143,9 +162,9 @@ echo "==> [1/4] synthesis (yosys)${FLATTEN_ARG:+ , flattened} -- $(date -Is)"
 # Off by default: it only adds attributes, but keeping the default byte-identical
 # means GROUPS=0 builds stay comparable with older ones.
 if [ "${GROUPS:-0}" = "1" ]; then
-    "$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG; hdlname_recover; write_json $OUT/$TOP.json" "${SRCS[@]}"
+    "$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG $SRL_ARG; hdlname_recover; write_json $OUT/$TOP.json" "${SRCS[@]}"
 else
-    "$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG -json $OUT/$TOP.json" "${SRCS[@]}"
+    "$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG $SRL_ARG -json $OUT/$TOP.json" "${SRCS[@]}"
 fi
 
 # Optional RTL-hierarchy floorplan. Opt-in: default behaviour is unchanged.
