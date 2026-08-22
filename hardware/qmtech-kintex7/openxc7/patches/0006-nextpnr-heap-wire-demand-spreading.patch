@@ -1,5 +1,5 @@
 diff --git a/common/placer_heap.cc b/common/placer_heap.cc
-index 40c6ca05..d36d46c7 100644
+index 40c6ca05..f21a9fe0 100644
 --- a/common/placer_heap.cc
 +++ b/common/placer_heap.cc
 @@ -33,6 +33,8 @@
@@ -134,7 +134,7 @@ index 40c6ca05..d36d46c7 100644
              find_overused_regions();
              for (auto &r : regions) {
                  if (merged_regions.count(r.id))
-@@ -1521,6 +1610,70 @@ class HeAPPlacer
+@@ -1521,6 +1610,71 @@ class HeAPPlacer
              return int(fb.at(type)->at(x).at(y).size());
          }
  
@@ -163,11 +163,12 @@ index 40c6ca05..d36d46c7 100644
 +                    continue;
 +                if (ni->users.empty())
 +                    continue;
-+                // Skip global/clock nets: they ride dedicated resources, and
-+                // spreading their bounding box over the die would mark
-+                // everything congested. High fanout is the portable proxy --
-+                // there is no arch-neutral "is this a global net" query.
-+                if (int(ni->users.size()) > 256)
++                // Nets on dedicated global routing consume no general routing,
++                // and their bounding boxes span the die, so counting them would
++                // mark every tile congested. Ask the arch rather than guessing
++                // from fanout: a 300-fanout fabric net is real demand, and a
++                // lightly loaded clock net is not.
++                if (p->ctx->isGlobalNet(ni))
 +                    continue;
 +                int x0 = INT_MAX, y0 = INT_MAX, x1 = INT_MIN, y1 = INT_MIN;
 +                auto acc = [&](CellInfo *ci) {
@@ -205,7 +206,7 @@ index 40c6ca05..d36d46c7 100644
          void init()
          {
              occupancy.resize(p->max_x + 1,
-@@ -1668,7 +1821,14 @@ class HeAPPlacer
+@@ -1668,7 +1822,14 @@ class HeAPPlacer
                      if (groups.at(x).at(y) != -1)
                          continue;
                      bool overutilised = false;

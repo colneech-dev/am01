@@ -1,0 +1,55 @@
+diff --git a/xilinx/arch.cc b/xilinx/arch.cc
+index 44eed32a..410d3c32 100644
+--- a/xilinx/arch.cc
++++ b/xilinx/arch.cc
+@@ -1870,9 +1870,9 @@ void Arch::routeClock()
+ 
+         // check if we have a global clock net, skip otherwise
+         bool is_global = false;
+-        if ((driver_type == id_BUFGCTRL    || driver_type == id_BUFCE_BUFG_PS ||
+-             driver_type == id_BUFCE_BUFCE || driver_type == id_BUFGCE_DIV_BUFGCE_DIV) &&
+-            clk_driver.port == id_O)
++        // Same condition as Arch::isGlobalNet(), called rather than repeated so
++        // the two cannot drift apart.
++        if (isGlobalNet(clk_net))
+             is_global = true;
+         else if (no_users == 1 && from_pll_or_mmcm &&
+                  (clk_net_user_type == id_BUFGCTRL || clk_net_user_type == id_BUFCE_BUFCE ||
+@@ -2719,4 +2719,20 @@ const std::vector<std::string> Arch::availablePlacers = {"sa",
+ const std::string Arch::defaultRouter = "router2";
+ const std::vector<std::string> Arch::availableRouters = {"router1", "router2"};
+ 
++// True if this net rides dedicated global routing rather than the general
++// fabric. The condition is the driver being a global buffer output; the global
++// router's other cases (PLL/MMCM feeds, IBUFDS->BUFG inputs) concern which nets
++// it must route through the dedicated backbone, not which nets consume general
++// routing, so they are deliberately not folded in here.
++bool Arch::isGlobalNet(const NetInfo *net) const
++{
++    if (net == nullptr || net->driver.cell == nullptr)
++        return false;
++    IdString dt = net->driver.cell->type;
++    return (dt == id_BUFGCTRL || dt == id_BUFCE_BUFG_PS || dt == id_BUFCE_BUFCE ||
++            dt == id_BUFGCE_DIV_BUFGCE_DIV) &&
++           net->driver.port == id_O;
++}
++
++
+ NEXTPNR_NAMESPACE_END
+diff --git a/xilinx/arch.h b/xilinx/arch.h
+index 49b1daf2..2d648839 100644
+--- a/xilinx/arch.h
++++ b/xilinx/arch.h
+@@ -918,6 +918,12 @@ struct Arch : BaseCtx
+         return range;
+     }
+ 
++    // True if this net is carried on dedicated global routing rather than the
++    // general fabric. Consumers that reason about routing demand (e.g. the HeAP
++    // spreader's congestion estimate) must exclude such nets: they use no
++    // general routing, and their bounding boxes span the die.
++    bool isGlobalNet(const NetInfo *net) const;
++
+     Loc getBelLocation(BelId bel) const
+     {
+         NPNR_ASSERT(bel != BelId());
