@@ -1,5 +1,5 @@
 --- /home/colin/src/toolchain-installer/yosys/techlibs/xilinx/synth_xilinx.cc	2026-08-13 20:54:27.416866826 +0100
-+++ techlibs/xilinx/synth_xilinx.cc	2026-08-22 16:37:51.497987812 +0100
++++ techlibs/xilinx/synth_xilinx.cc	2026-08-22 18:21:07.178620373 +0100
 @@ -133,6 +133,11 @@
  		log("        run 'abc' with '-D 1' option to enable flip-flop retiming.\n");
  		log("        implies -dff.\n");
@@ -50,23 +50,3 @@
  					else
  						abc_opts += " -luts 2:2,3,6:5,10,20,40";
  				}
-@@ -683,8 +696,17 @@
- 			}
- 			run("clean");
- 
--			if (help_mode || !abc9)
--				run("techmap -map +/xilinx/ff_map.v", "(only if not '-abc9')");
-+			// Unconditional, and idempotent: after the map_ffs invocation on the
-+			// -abc9 path there are no $_DFF_/$_SDFFE_ cells left for these rules
-+			// to match, so this is a no-op there rather than a second mapping.
-+			//
-+			// Guarding it on !abc9 was correct for a full run but wrong for a
-+			// split one: with `-abc9 -run map_luts:` the map_ffs invocation is
-+			// skipped because its stage never executes, and this one is guarded
-+			// off because abc9 is set. Neither fires, synthesis reports success,
-+			// and $_SDFFE_* cells reach the place-and-route tool, which fails
-+			// with an error pointing nowhere near the cause.
-+			run("techmap -map +/xilinx/ff_map.v");
- 			// This shregmap call infers fixed length shift registers after abc
- 			//   has performed any necessary retiming
- 			if (!nosrl || help_mode)

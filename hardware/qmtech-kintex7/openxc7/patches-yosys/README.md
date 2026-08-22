@@ -96,58 +96,69 @@ identical pipeline rounds, cross-checked against an independent derivation.
   through every instance attribute cells at random — in the measured design a
   single such net pulled **8,786** unrelated cells into one scope.
 
-## `0002-synth-xilinx-ffmap-and-luts.patch`
+## `0002-synth-xilinx-luts-option.patch`
 
-Two independent changes to `synth_xilinx`; split before submitting.
+Adds `-luts <costs>` to `synth_xilinx`, exposing the LUT area cost tuple that is
+otherwise hardcoded as `2:2,3,6:5,10,20`.
 
-### (a) `-run map_luts:` with `-abc9` silently emits unmapped flip-flops
+### Why it is wanted
 
-`ff_map.v` is invoked from two mutually exclusive places:
+On the OdoCrypt design the hardcoded tuple makes abc prefer LUT6+LUT2 (two logic
+levels, two general-routing hops) over LUT7 (2xLUT6 + a MUXF7, one hop) wherever
+it sees slack: the shipped netlist has 13,732 LUT2 and only 294 MUXF7, where the
+640-bit x 21-round rotation network predicts ~13,440.
 
-```
-map_ffs  (~632):  techmap -map +/xilinx/ff_map.v    if  abc9
-map_luts (~687):  techmap -map +/xilinx/ff_map.v    if !abc9
-```
-
-Each is right for a full run. But `-abc9 -run map_luts:` skips the first (its
-stage never executes) and guards off the second, so neither fires: synthesis
-reports success with `$_SDFFE_*` cells still in the netlist, which then fail in
-the place-and-route tool with an error pointing nowhere near the cause.
-
-Splitting the run is not exotic — it is how you substitute a different `abc`
-invocation, which is exactly what (b) exists to avoid needing.
-
-Fix: run it unconditionally in `map_luts`. Idempotent, since after a previous
-`ff_map` there are no `$_DFF_`/`$_SDFFE_` cells left for its rules to match.
-
-### (b) `-luts <costs>` to override the LUT area costs
-
-The tuple is hardcoded as `2:2,3,6:5,10,20`. On the OdoCrypt design that makes
-abc prefer LUT6+LUT2 (two logic levels, two general-routing hops) over LUT7
-(2×LUT6 + a MUXF7, one hop) wherever it sees slack: the shipped netlist has
-13,732 LUT2 and only 294 MUXF7, where the 640-bit × 21-round rotation network
-predicts ~13,440.
-
-**The default is deliberately not changed.** It is not obviously wrong: a LUT2
-can share a 6-LUT site via O5/O6, so pricing it at 2 rather than 5 is a
-defensible packing heuristic, and abc already knows LUT7 is depth 1 against
-LUT6+LUT2's depth 2 — it takes the deeper form only where it believes there is
-slack.
+**The default is deliberately NOT changed.** It is not obviously wrong: a LUT2 can
+share a 6-LUT site via O5/O6, so pricing it at 2 rather than 5 is a defensible
+packing heuristic, and abc already knows LUT7 is depth 1 against LUT6+LUT2's
+depth 2 — it takes the deeper form only where it believes there is slack.
 
 The real weakness is that `abc.cc` writes the delay column as a constant:
 
 ```c
-fprintf(f, "%d %d.00 1.00\n", i+1, config.lut_costs.at(i));
+fprintf(f, "%d %d.00 1.00
+", i+1, config.lut_costs.at(i));
 ```
 
 so a unit-delay model cannot express that on this fabric an extra logic level
-costs a routing hop (~1.3 ns measured) dwarfing the LUT delay itself. Fixing that
-properly is what `abc9` is for.
+costs a routing hop (~1.3 ns measured) dwarfing the LUT delay itself. That is
+what `abc9` exists for and is not a one-line change.
 
-This just makes the tuple reachable, so the measurement that would justify
-changing a default is possible without hand-rolling the flow — which is precisely
-the split-run case that (a) fixes. Additive: without `-luts`, behaviour is
+This patch only makes the tuple reachable, so the measurement that would justify
+changing a default is possible at all. Additive: without `-luts`, behaviour is
 byte-identical.
+
+### Confirmed still missing upstream
+
+Checked against `YosysHQ/yosys` main: the `-luts` tuple is displayed in help mode
+but is not exposed as a user-configurable parameter; only the abc9 `-W` weight is
+settable via the scratchpad.
+
+## Withdrawn: `-run map_luts:` with `-abc9` emitting unmapped flip-flops
+
+In yosys 0.62, `ff_map.v` was invoked from two mutually exclusive places —
+`if abc9` in `map_ffs` and `if !abc9` in `map_luts` — so `-abc9 -run map_luts:`
+fired neither and completed "successfully" with `$_SDFFE_*` cells left in the
+netlist, which then failed much later in place-and-route.
+
+**Already fixed upstream.** Current main has exactly one invocation, unconditional:
+
+```
+run("dfflegalize -cell $_DFFE_?P?P_ 01 -cell $_SDFFE_?P?P_ 01 -cell $_DLATCH_?P?_ 01", ...);
+run("techmap -map +/xilinx/ff_map.v");
+```
+
+The patch was written against 0.62 and has been reverted rather than submitted.
+This is the second change today that turned out to be already fixed upstream —
+the first was a nextpnr control-set bug (`bf78fccf`).
+
+## Version currency
+
+These were developed against **yosys 0.62**; upstream is at **0.68**, six
+releases ahead. The local tree is not a git checkout, so it could not be diffed
+directly — the checks above were made against raw sources on `main`. Rebase onto
+current main before submitting; `hdlname_recover.cc` is a new file and should
+apply anywhere, but `0002` is a context diff against 0.62.
 
 ## Not submitted
 
