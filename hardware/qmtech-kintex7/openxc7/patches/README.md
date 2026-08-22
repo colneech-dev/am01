@@ -97,30 +97,64 @@ local `getBelLocation` patch can do.
 
 Not yet submitted. Needs `gh auth login` (or a manual PR) to file.
 
-## 0003 — derive a floorplan from `hdlname`
+## 0003 — derive a floorplan from `hdlname`, self-anchoring
 
 Adds `--floorplan-hierarchy`: nextpnr groups cells by RTL scope taken from the
 yosys `hdlname` attribute, picks the grouping depth itself, and confines each
-group to a region around whichever of its cells are already placed. Removes the
-external tooling entirely:
+group to a region. **No external tooling at any stage.**
 
 ```
-before:  yosys -> derive groups (script) -> bake attributes (script) -> nextpnr
+before:  yosys -> floorplan script -> group script -> bake script -> nextpnr
 after:   yosys -> nextpnr --floorplan-hierarchy
 ```
 
-Depth is derived, not constant: the shallowest whose largest group is under a
-fraction of the design. Coverage cannot be the criterion — every depth covers
-every cell, including one that puts 77% of the design in a single box.
+### Self-anchoring is what makes it standalone
 
-Anchors are filtered by the 1.5*IQR rule. Measured: a single clock/IO cell
-falling into a group stretched its region to 227 tiles against ~40 for its
-peers, leaving that group effectively unconstrained while appearing handled.
+An earlier version only created a region for a group that already had an
+*anchor* — a cell pinned by a `BEL` attribute — which in practice came from an
+external floorplanning script. That made an in-tool feature depend on out-of-tool
+geometry, and on a design with nothing pre-placed it silently produced **zero
+regions** while reporting success.
 
-Groups with no anchor are left free rather than boxed at an invented location.
+The dependency was never necessary. Such a script has to harvest a throwaway
+placement to discover where the usable bels are; nextpnr reads that from the
+chipdb (`getBels()` / `getBelType()` / `getBelLocation()`). The tool knows the
+device better than a script inferring it from a trial run.
 
-Depends on `../upstream-issue-3-yosys-hdlname-loss.md`. Without it, nextpnr
-reports `2 of 70774 cells carry hdlname` on a real design and correctly declines.
+When a group has no anchor, its region is now derived from the device: the Y
+extent from the chipdb, split one band per group, in pipeline order.
+Deterministic, no trial placement, works on a design that has never been placed.
+
+Anchors still win where they exist — an explicit `BEL` constraint is a stronger
+statement of intent than a derived band, so this is a fallback, not a
+replacement.
+
+### Design choices, each from a measured failure
+
+* **Depth is derived, not constant** — the shallowest whose largest group is
+  under a fraction of the design. Coverage cannot be the criterion: every depth
+  covers every cell, including one that puts 77% of the design in a single box.
+* **Groups ordered by trailing integer**, not lexically. `round10` would
+  otherwise sort between `round1` and `round2`, scattering adjacent pipeline
+  stages into non-adjacent bands.
+* **Anchors filtered by 1.5×IQR** — a single clock/IO cell falling into a group
+  stretched one region to 227 tiles against ~40 for its peers, leaving that group
+  effectively unconstrained while appearing handled.
+* **`BEL` read from attributes, not `cell->bel`** — this runs before placement,
+  so nothing is bound yet.
+
+### Honest status
+
+Depends on yosys preserving `hdlname` (see
+`../patches-yosys/`). Without it nextpnr reports `2 of 70774 cells carry hdlname`
+on a real design and correctly declines.
+
+**No timing benefit has been demonstrated.** Region-constrained placement was
+measured repeatedly on this design and routed worse than unconstrained placement
+every time — three runs, none converging, against a baseline that reached zero
+overuse in 22 iterations. The mechanism is sound and the geometry is derived
+rather than guessed; whether hierarchy regions *help* is unproven and on this
+design they hurt.
 
 ## 0004 — strict legalisation clamps its search into the region
 

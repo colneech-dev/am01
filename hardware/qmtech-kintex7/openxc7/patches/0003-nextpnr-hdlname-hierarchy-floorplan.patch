@@ -1,8 +1,16 @@
 diff --git a/common/command.cc b/common/command.cc
-index 9abb45f3..25a93b1b 100644
+index 4afd78a5..25a93b1b 100644
 --- a/common/command.cc
 +++ b/common/command.cc
-@@ -157,6 +157,11 @@ po::options_description CommandHandler::getGeneralOptions()
+@@ -38,6 +38,7 @@
+ #include "json_frontend.h"
+ #include "jsonwrite.h"
+ #include "log.h"
++#include "place_common.h"
+ #include "timing.h"
+ #include "util.h"
+ #include "version.h"
+@@ -156,6 +157,11 @@ po::options_description CommandHandler::getGeneralOptions()
      // no effect at all on 2-bel-per-tile types such as RAMB18). On a design whose
      // per-tile occupancy never exceeds 100% no region is ever seeded, so beta
      // cannot reduce achieved density. See xilinx/arch.cc for the full note.
@@ -14,10 +22,13 @@ index 9abb45f3..25a93b1b 100644
      general.add_options()("placer-heap-beta", po::value<float>(),
                            "HeAP placer spreading trigger threshold (default 0.9; lower = more aggressive spreading)");
      general.add_options()("placer-heap-alpha", po::value<float>(),
-@@ -368,6 +373,9 @@ int CommandHandler::executeMain(std::unique_ptr<Context> ctx)
-             // Regions declared in the design file, applied before the
-             // pre-place hook so a script can still override them.
-             apply_region_constraints(ctx.get());
+@@ -364,6 +370,12 @@ int CommandHandler::executeMain(std::unique_ptr<Context> ctx)
+         print_utilisation(ctx.get());
+ 
+         if (do_place) {
++            // Regions declared in the design file, applied before the
++            // pre-place hook so a script can still override them.
++            apply_region_constraints(ctx.get());
 +            if (vm.count("floorplan-hierarchy"))
 +                derive_hierarchy_floorplan(ctx.get(),
 +                                           vm.count("floorplan-pad") ? vm["floorplan-pad"].as<int>() : 30);
@@ -25,23 +36,97 @@ index 9abb45f3..25a93b1b 100644
              if (!ctx->place() && !ctx->force)
                  log_error("Placing design failed.\n");
 diff --git a/common/place_common.cc b/common/place_common.cc
-index 6c5616e7..29d42a51 100644
+index 50a11880..d5c8e553 100644
 --- a/common/place_common.cc
 +++ b/common/place_common.cc
-@@ -18,6 +18,9 @@
+@@ -17,6 +17,12 @@
+  *
   */
  
- #include <cstdio>
++#include <cstdio>
 +#include <algorithm>
 +#include <vector>
 +#include <string>
++#include <climits>
++#include <unordered_map>
  #include "place_common.h"
  #include <cmath>
  #include "log.h"
-@@ -694,4 +697,174 @@ void apply_region_constraints(Context *ctx)
-         log_warning("  %d cell(s) name a REGION that was never defined.\n", missing);
+@@ -622,4 +628,323 @@ bool check_cell_bel_region(const CellInfo *cell, BelId bel)
+         return true;
  }
  
++// Apply region constraints carried in the design file.
++//
++// nextpnr has had a Region API for a long time (createRectangularRegion,
++// constrainCellToRegion) but no way to express one from JSON, so the only route
++// was a --pre-place Python script. Python bindings are a build option, so a
++// floorplan built that way cannot run on a stock nextpnr at all. This reads the
++// same information from attributes, mirroring how the BEL attribute already
++// pins a cell to a site -- REGION is the same idea one level coarser.
++//
++//   design attr:  nextpnr_regions = "name:x0,y0,x1,y1;name2:..."
++//   cell attr:    REGION          = "name"
++//
++// Malformed entries are reported and skipped rather than aborting: a floorplan
++// is an optimisation hint, and refusing to run at all because one box is
++// mistyped would be a poor trade.
++void apply_region_constraints(Context *ctx)
++{
++    auto defs = ctx->attrs.find(ctx->id("nextpnr_regions"));
++    if (defs == ctx->attrs.end())
++        return;
++
++    std::string spec = defs->second.as_string();
++    int created = 0, bad = 0;
++    size_t pos = 0;
++    while (pos < spec.size()) {
++        size_t end = spec.find(';', pos);
++        if (end == std::string::npos)
++            end = spec.size();
++        std::string entry = spec.substr(pos, end - pos);
++        pos = end + 1;
++        if (entry.empty())
++            continue;
++        size_t colon = entry.find(':');
++        if (colon == std::string::npos) {
++            ++bad;
++            continue;
++        }
++        std::string name = entry.substr(0, colon);
++        int v[4];
++        // Parse exactly four comma-separated integers; anything else is a
++        // malformed box and is skipped rather than half-applied.
++        if (std::sscanf(entry.c_str() + colon + 1, "%d,%d,%d,%d", &v[0], &v[1], &v[2], &v[3]) != 4) {
++            ++bad;
++            continue;
++        }
++        ctx->createRectangularRegion(ctx->id(name), v[0], v[1], v[2], v[3]);
++        ++created;
++    }
++
++    int constrained = 0, missing = 0;
++    for (auto &cell_entry : ctx->cells) {
++        CellInfo *cell = cell_entry.second.get();
++        auto it = cell->attrs.find(ctx->id("REGION"));
++        if (it == cell->attrs.end())
++            continue;
++        IdString rname = ctx->id(it->second.as_string());
++        if (!ctx->region.count(rname)) {
++            ++missing;
++            continue;
++        }
++        ctx->constrainCellToRegion(cell->name, rname);
++        ++constrained;
++    }
++
++    log_info("Applied %d region(s) from design attributes, constraining %d cell(s).\n", created, constrained);
++    if (bad)
++        log_warning("  %d malformed entr(ies) in nextpnr_regions were skipped.\n", bad);
++    if (missing)
++        log_warning("  %d cell(s) name a REGION that was never defined.\n", missing);
++}
++
 +namespace {
 +
 +// Split a yosys hdlname attribute into its hierarchy components. yosys joins
@@ -106,6 +191,27 @@ index 6c5616e7..29d42a51 100644
 +
 +} // namespace
 +
++namespace {
++
++// Trailing integer in a scope name, for ordering pipeline stages.
++// "…crypter.round14" -> 14. Returns -1 when there is no trailing number, so
++// such groups sort before the numbered ones rather than interleaving with them.
++int trailing_index(const std::string &s)
++{
++    size_t e = s.size();
++    while (e > 0 && isdigit((unsigned char)s[e - 1]))
++        e--;
++    if (e == s.size())
++        return -1;
++    try {
++        return std::stoi(s.substr(e));
++    } catch (...) {
++        return -1;
++    }
++}
++
++} // namespace
++
 +// Derive a floorplan from yosys hdlname attributes and constrain each group to a
 +// region around the cells in it that are already placed.
 +//
@@ -162,8 +268,43 @@ index 6c5616e7..29d42a51 100644
 +    for (auto &h : hier)
 +        groups[join_prefix(h.second, chosen)].push_back(h.first);
 +
-+    int made = 0, constrained = 0, unanchored = 0, too_small = 0;
++    // Device extent, and the bel types this design actually uses, straight from
++    // the chipdb. No trial placement needed.
++    int device_x0 = INT_MAX, device_x1 = INT_MIN, device_y0 = INT_MAX, device_y1 = INT_MIN;
++    for (auto bel : ctx->getBels()) {
++        Loc l = ctx->getBelLocation(bel);
++        device_x0 = std::min(device_x0, l.x);
++        device_x1 = std::max(device_x1, l.x);
++        device_y0 = std::min(device_y0, l.y);
++        device_y1 = std::max(device_y1, l.y);
++    }
++    if (device_x1 < device_x0) {
++        device_x0 = device_y0 = 0;
++        device_x1 = device_y1 = -1; // signals "unknown", handled per group
++    } else {
++        log_info("  device extent from chipdb: x %d..%d, y %d..%d\n", device_x0, device_x1, device_y0,
++                 device_y1);
++    }
++
++    // Deterministic pipeline order: trailing integer where present, else name.
++    // Lexical order alone would place round10 between round1 and round2.
++    std::vector<std::string> ordered;
++    for (auto &g : groups)
++        if (int(g.second.size()) >= min_cells)
++            ordered.push_back(g.first);
++    std::sort(ordered.begin(), ordered.end(), [](const std::string &a, const std::string &b) {
++        int ia = trailing_index(a), ib = trailing_index(b);
++        if (ia != ib)
++            return ia < ib;
++        return a < b;
++    });
++    std::unordered_map<std::string, int> group_slot;
++    for (size_t i = 0; i < ordered.size(); i++)
++        group_slot[ordered[i]] = int(i);
++
++    int made = 0, constrained = 0, unanchored = 0, too_small = 0, derived_bands = 0;
 +    for (auto &g : groups) {
++        int x0 = 0, x1 = 0, y0 = 0, y1 = 0;
 +        if (int(g.second.size()) < min_cells) {
 +            too_small += int(g.second.size());
 +            continue;
@@ -185,12 +326,32 @@ index 6c5616e7..29d42a51 100644
 +            ys.push_back(l.y);
 +        }
 +        if (xs.empty()) {
-+            unanchored += int(g.second.size());
-+            continue;
++            // No anchor: derive a band from the DEVICE rather than skipping.
++            //
++            // This is what removes the dependency on an external floorplanning
++            // script. Such a script has to harvest a throwaway placement to find
++            // out where the usable bels are; we can just ask the chipdb.
++            //
++            // The band spans the Y extent of bels this group can actually use,
++            // split one band per group in pipeline order, so adjacent stages get
++            // adjacent bands.
++            if (device_y1 < device_y0) {
++                unanchored += int(g.second.size());
++                continue;
++            }
++            int nbands = std::max(1, int(ordered.size()));
++            int slot = group_slot[g.first];
++            double span = double(device_y1 - device_y0 + 1) / nbands;
++            y0 = device_y0 + int(slot * span);
++            y1 = device_y0 + int((slot + 1) * span) - 1;
++            x0 = device_x0;
++            x1 = device_x1;
++            derived_bands++;
++            // Fall through to padding and region creation below.
++        } else {
++            robust_range(xs, x0, x1);
++            robust_range(ys, y0, y1);
 +        }
-+        int x0, x1, y0, y1;
-+        robust_range(xs, x0, x1);
-+        robust_range(ys, y0, y1);
 +        x0 = std::max(0, x0 - pad);
 +        y0 = std::max(0, y0 - pad);
 +        x1 += pad;
@@ -206,6 +367,8 @@ index 6c5616e7..29d42a51 100644
 +    }
 +
 +    log_info("Hierarchy floorplan: %d region(s), %d cell(s) constrained.\n", made, constrained);
++    if (derived_bands)
++        log_info("  %d region(s) had no anchor and were banded from the device.\n", derived_bands);
 +    if (unanchored)
 +        log_info("  %d cell(s) in groups with no anchor were left free.\n", unanchored);
 +    if (too_small)
@@ -214,13 +377,20 @@ index 6c5616e7..29d42a51 100644
 +
  NEXTPNR_NAMESPACE_END
 diff --git a/common/place_common.h b/common/place_common.h
-index ca096859..36fe935f 100644
+index fa5ce4c2..36fe935f 100644
 --- a/common/place_common.h
 +++ b/common/place_common.h
-@@ -60,6 +60,12 @@ bool check_cell_bel_region(const CellInfo *cell, BelId bel);
- // Python script, which needs bindings that are only a build option.
- void apply_region_constraints(Context *ctx);
+@@ -53,6 +53,19 @@ int get_constraints_distance(const Context *ctx, const CellInfo *cell);
+ // Check that a Bel is within the region for a cell
+ bool check_cell_bel_region(const CellInfo *cell, BelId bel);
  
++// Apply region constraints declared in the design file:
++//   design attr  nextpnr_regions = "name:x0,y0,x1,y1;..."
++//   cell attr    REGION          = "name"
++// Lets a floorplan travel in the JSON instead of requiring a --pre-place
++// Python script, which needs bindings that are only a build option.
++void apply_region_constraints(Context *ctx);
++
 +// Derive a floorplan from yosys hdlname attributes: group cells by RTL
 +// scope at an automatically chosen depth, and confine each group to a region
 +// around whichever of its cells are already placed. Requires a yosys that
