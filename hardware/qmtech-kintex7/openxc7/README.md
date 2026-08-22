@@ -367,9 +367,10 @@ unrouted signals despite reporting zero errors. Check with:
 grep -c 'SKIP_FAILED_ARCS' build.log     # how many arcs never routed
 grep 'iter=' out/*.pnr.log                # overused-wire trend per iteration
 ```
-If `overused` converges to near-zero across iterations (it does, reliably,
-in this design -- see the actual iteration-by-iteration numbers in git
-history/session logs) but `SKIP_FAILED_ARCS` stays large, that's two
+If `overused` converges to near-zero across iterations (it does for the
+default, unconstrained flow -- the baseline reaches 0 by iteration 22; it
+does **not** hold once cells are confined to regions, see "The placer has
+no congestion model" below) but `SKIP_FAILED_ARCS` stays large, that's two
 *different* router2 failure modes: congestion (resolved) vs. individual
 arcs exhausting their `NEXTPNR_ARC_MAX_VISIT` search budget before finding
 *any* path (not resolved). Raising `NEXTPNR_ARC_MAX_VISIT` (e.g.
@@ -577,3 +578,112 @@ generator (the file is ~15,000 generated lines with the value baked in,
 and is regenerated per 10-day epoch anyway). Per ../README.md's table,
 total rate stays `~0.5 x Fmax` at any `THROUGHPUT`, so the win comes
 entirely from the higher clock a shallower pipeline permits.
+
+## The ceiling, measured: the design meets its target
+
+Vivado placing and routing **our yosys netlist** (not its own synthesis):
+
+```
+clk_h   period 7.500 ns   WNS +1.203  ->  6.297 ns = 158.81 MHz   PASS @ 133.33
+Number of Unrouted Nets = 0     Number of Node Overlaps = 0
+```
+
+Two things follow, and they close questions that were open for a long time.
+
+**Yosys synthesis is not the bottleneck.** Our netlist reaches 158.81 MHz where
+Vivado's own synthesis reaches 162 — ~2% apart, and that comparison favours
+Vivado, whose run was NUM_MINERS=2. The rotation network is a genuine 7-input XOR
+per bit, so two LUT levels is the arithmetic floor, not fat to be removed.
+
+**The design meets 133.33 MHz on this part with this RTL.** So the RTL rework in
+"What would actually raise it" is not required to hit spec — it is a
+place-and-route gap, not a design one. openXC7 reaching ~102 MHz against 158.81
+on identical input is a **1.55x tool gap**.
+
+## The placer has no congestion model
+
+This is the best single explanation for why placement tuning kept refuting.
+
+`common/placer_heap.cc` minimises wirelength subject to **BEL capacity**. Every
+occurrence of "congestion" in that file is a comment; `common/router2.cc` has 22
+real congestion terms, the placer none. The spreader fires only on strict tile
+overflow:
+
+```cpp
+if (occ_at(x, y, t) > bels_at(x, y, t)) { overutilised = true; break; }
+```
+
+On this design BEL utilisation is **9%** (40710/407600 LUTs), so tiles
+essentially never overflow, the spreader is close to inert, and routing is
+congested anyway.
+
+The practical consequence: **placement metrics do not predict routability here.**
+Wirelength and the post-placement timing estimate measure what the placer
+optimises, which is not what limits this design. Confining each pipeline stage's
+logic to a band around its own BRAMs improved both metrics (post-place 121.88 MHz
+vs 97.47) and made the design unroutable — three runs, none converging, against a
+baseline that reached zero overuse in 22 iterations:
+
+```
+iter | unconstrained | regions
+  12 |          39   |    695
+  17 |           4   |    638
+  22 |           0   |    548   (still falling ~15/iter, oscillating)
+```
+
+`floorplan_stripe.py`'s own header records the same effect from an earlier
+experiment: the N=1 block floorplan had the best wirelength of anything tried and
+routing collapsed, because ~200 BRAM outputs leaving one 10-tile region saturate
+local egress. Concentrating logic re-creates that at the LUT level.
+
+**So: do not trust a placement improvement that has only been measured
+post-placement.** Route it.
+
+`NEXTPNR_WIRE_DEMAND=<cap>` (patch 0006, off by default) adds a RUDY routing-demand
+estimate as a second spreader trigger, so the placer can react to congestion at
+all. It is unmeasured — it addresses only the spreading trigger, not the analytic
+solve.
+
+## Hierarchy-aware floorplanning without external scripts
+
+`GROUPS=1` groups cells by RTL scope and confines each group to a region, with no
+Python anywhere in the flow:
+
+```sh
+GROUPS=1 FREQ=133.33 ./build.sh ...
+```
+
+```
+yosys    synth_xilinx ... ; hdlname_recover ; write_json
+nextpnr  --floorplan-hierarchy
+```
+
+It needs the local patched toolchain (see `patches/` and `patches-yosys/`).
+Synthesis destroys cell provenance — after `synth_xilinx -flatten` only **2 of
+70774** cells carry `hdlname`, because abc and the FF mapping create cells
+without it — so yosys runs `hdlname_recover` to rebuild each cell's scope from
+net names, which do survive flattening. nextpnr then groups by that, chooses the
+grouping depth itself, and derives each region from the chipdb.
+
+Filed upstream: YosysHQ/yosys#6144 (issue), YosysHQ/yosys#6145 (PR),
+YosysHQ/nextpnr#1784 (issue).
+
+**This does not currently improve timing on this design** — see the congestion
+section above. It is committed because the mechanism is sound and the geometry is
+derived rather than guessed, not because it is a win.
+
+## Toolchain versions matter more than they look
+
+`/opt/openxc7` shipped yosys 0.62 and nextpnr 0.9.2, while openXC7's own
+`toolchain-installer` pins **yosys v0.68** and **nextpnr-xilinx 0.9.3** — the
+installed copy had simply never been refreshed. `build.sh` now prefers locally
+built newer versions; explicit `YOSYS=`/`NEXTPNR=` still win.
+
+Two bugs chased during this work turned out to be **already fixed upstream** (a
+nextpnr control-set bug, and a `synth_xilinx` split-run bug fixed after v0.68).
+A stale tree reproduces its own bugs perfectly, so check upstream before
+diagnosing — and check the meta-repo that pins versions, not just the tool repos.
+
+Upgrading yosys 0.62 -> 0.68 changes the netlist (~1500 fewer small LUTs; MUXF7
+unchanged at ~292), so **figures either side of that boundary are not
+comparable**. Re-baseline rather than carrying old numbers forward.
