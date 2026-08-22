@@ -73,8 +73,19 @@ run() {
     grep "clk_h" "$OUT/am01_qmtech_top_$tag.pnr.log" | grep MHz | tail -1 || true
 }
 
-run base_ctl
+# B before A deliberately.
+#
+# Execution order does not affect the control's validity -- both runs use the
+# same binary, the same input and the same environment, so which one goes first
+# is irrelevant to the comparison. But only B runs the --pre-place hook, and a
+# bug there surfaces within ~10 minutes of packing. Running A first would mean
+# waiting out a full hour before finding out the experiment cannot run at all.
+#
+# (Validating the hook separately with --no-place does NOT work: nextpnr skips
+# --pre-place entirely when placement is disabled, so it exits 0 having run
+# nothing. Verified -- the hook produced no output at all.)
 run rgn --pre-place preplace_round_regions.py
+run base_ctl
 
 echo
 echo "=== comparison ==="
