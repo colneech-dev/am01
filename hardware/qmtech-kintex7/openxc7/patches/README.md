@@ -10,18 +10,16 @@ floorplan that then fails to legalise, which is worse than not having it:
 
 | patch | makes floorplans... |
 |---|---|
-| `0002` | expressible from a design file, and derivable from `hdlname` |
-| `0003` | survivable — legalisation can reach the region |
-| `0004` | stable — post-place repair stops undoing them |
+| `0002` | expressible from a design file |
+| `0003` | derivable automatically from `hdlname` |
+| `0004` | survivable — legalisation can reach the region |
+| `0005` | stable — post-place repair stops undoing them |
 
-`0002` contains **two logically separate changes** that happen to touch the same
-files (`place_common.cc/h`, `command.cc`). Split them before submitting:
+All four apply cleanly in sequence to a clean tree (verified with `git apply`).
+They share `place_common.cc/h` and `command.cc`, so apply them in order.
 
-1. `nextpnr_regions` / `REGION` attribute support — `apply_region_constraints()`
-2. `--floorplan-hierarchy`, deriving a floorplan from `hdlname` —
-   `derive_hierarchy_floorplan()`
-
-The second depends on yosys preserving `hdlname` (see
+`0002` and `0003` are separate submissions: the attribute path is useful on its
+own, while `0003` depends on yosys preserving `hdlname` (see
 `../upstream-issue-3-yosys-hdlname-loss.md`). Measured on this design, nextpnr
 reports:
 
@@ -99,7 +97,32 @@ local `getBelLocation` patch can do.
 
 Not yet submitted. Needs `gh auth login` (or a manual PR) to file.
 
-## 0003 — strict legalisation clamps its search into the region
+## 0003 — derive a floorplan from `hdlname`
+
+Adds `--floorplan-hierarchy`: nextpnr groups cells by RTL scope taken from the
+yosys `hdlname` attribute, picks the grouping depth itself, and confines each
+group to a region around whichever of its cells are already placed. Removes the
+external tooling entirely:
+
+```
+before:  yosys -> derive groups (script) -> bake attributes (script) -> nextpnr
+after:   yosys -> nextpnr --floorplan-hierarchy
+```
+
+Depth is derived, not constant: the shallowest whose largest group is under a
+fraction of the design. Coverage cannot be the criterion — every depth covers
+every cell, including one that puts 77% of the design in a single box.
+
+Anchors are filtered by the 1.5*IQR rule. Measured: a single clock/IO cell
+falling into a group stretched its region to 227 tiles against ~40 for its
+peers, leaving that group effectively unconstrained while appearing handled.
+
+Groups with no anchor are left free rather than boxed at an invented location.
+
+Depends on `../upstream-issue-3-yosys-hdlname-loss.md`. Without it, nextpnr
+reports `2 of 70774 cells carry hdlname` on a real design and correctly declines.
+
+## 0004 — strict legalisation clamps its search into the region
 
 `legalise_placement_strict()` (`common/placer_heap.cc`) centres its random search
 on the cell's **current** location and only clamps the **radius** to half the
@@ -114,11 +137,11 @@ narrower the search, so the hardest case gets the least reach.
 Fix: clamp the sample into the region bounds.
 
 Honest sizing: on its own this moved stranded cells only 13862 → 13626 (1.7%),
-because the dominant relocation happens later, in the pass `0004` addresses. It
-did improve post-place Fmax 116.75 → 121.88 MHz. Worth having, but `0004` is the
+because the dominant relocation happens later, in the pass `0005` addresses. It
+did improve post-place Fmax 116.75 → 121.88 MHz. Worth having, but `0005` is the
 bigger effect.
 
-## 0004 — post-place cluster repair respects regions
+## 0005 — post-place cluster repair respects regions
 
 `xilinx/arch_place.cc` relocates clusters whose placement came out invalid,
 checking bel type, availability, `isValidBelForCell` and `cluster_bels` — but
