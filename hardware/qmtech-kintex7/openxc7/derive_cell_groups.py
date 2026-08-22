@@ -48,8 +48,26 @@ control granularity. Cells with no hierarchical net at all fall back to a
 counter-stripped generated name, which still groups all cells of one yosys pass
 together and is stable as long as the pass and source line are.
 
+CHOOSING THE DEPTH
+------------------
+Depth must not be a hand-tuned constant, or this stops working the moment the RTL
+gains a hierarchy level and stops being usable on any other design. It was picked
+by eye once (depth 7 put all 21 rounds in one 53874-cell group -- 77% of the
+design in a single box -- while depth 8 separated them), which is exactly the kind
+of constant that silently rots.
+
+--auto picks it from the netlist instead. A useful floorplan wants groups that are
+big enough to be worth placing and small enough to constrain anything, so it takes
+the shallowest depth at which the largest group falls below --max-frac of the
+design. Shallowest, because deeper than necessary fragments cells that belong
+together and gives the placer more boxes than the fabric has room to honour.
+
+Note that coverage is NOT the criterion: every depth here resolves 100% of cells,
+including the useless depth-7 blob. Coverage alone would rate them identical.
+
 USAGE
-    ./derive_cell_groups.py design.json [--depth 7] [--emit groups.json]
+    ./derive_cell_groups.py design.json [--depth 8 | --auto] [--emit groups.json]
+                            [--max-frac 0.10] [--min-cells 64]
 """
 import json
 import re
@@ -80,11 +98,90 @@ def generated_group(netname):
     return base[:60] if base else None
 
 
+def assign_at_depth(cells, bit_scope, bit_fallback, depth):
+    """cell -> group label, plus a breakdown of how each was resolved."""
+    assigned = {}
+    how = Counter()
+    per_type = defaultdict(lambda: [0, 0])
+
+    for cname, cell in cells.items():
+        ctype = cell["type"]
+        if ctype == "$scopeinfo":
+            continue
+        per_type[ctype][1] += 1
+        dirs = cell.get("port_directions", {})
+        conns = cell.get("connections", {})
+
+        def scan(want_output):
+            best = None
+            for port, bits in conns.items():
+                if (dirs.get(port) == "output") != want_output:
+                    continue
+                for b in bits:
+                    if isinstance(b, int) and b in bit_scope:
+                        sc = bit_scope[b]
+                        if best is None or len(sc) > len(best):
+                            best = sc
+            return best
+
+        # Output first: the output net names what the cell computes, whereas an
+        # input may belong to the previous stage and would pull it backwards.
+        sc = scan(True) or scan(False)
+        if sc:
+            group = ".".join(sc[:depth])
+            how["RTL hierarchy"] += 1
+        else:
+            fb = None
+            for port, bits in conns.items():
+                for b in bits:
+                    if isinstance(b, int) and b in bit_fallback:
+                        fb = bit_fallback[b]
+                        break
+                if fb:
+                    break
+            if not fb:
+                how["UNRESOLVED"] += 1
+                continue
+            group = fb
+            how["generated (counter-stripped)"] += 1
+        assigned[cname] = group
+        per_type[ctype][0] += 1
+
+    return assigned, how, per_type
+
+
+def choose_depth(cells, bit_scope, bit_fallback, max_frac, lo=2, hi=14):
+    """Shallowest depth whose largest group is under max_frac of the design."""
+    total = sum(1 for c in cells.values() if c["type"] != "$scopeinfo")
+    print("auto-depth: target largest group < %.0f%% of %d cells" % (max_frac * 100, total))
+    best = None
+    for d in range(lo, hi + 1):
+        a, _, _ = assign_at_depth(cells, bit_scope, bit_fallback, d)
+        if not a:
+            continue
+        hist = Counter(a.values())
+        big = hist.most_common(1)[0][1]
+        frac = big / total
+        print("   depth %-3d groups %5d   largest %6d (%5.1f%%)%s"
+              % (d, len(hist), big, frac * 100, "  <-- chosen" if best is None and frac < max_frac else ""))
+        if best is None and frac < max_frac:
+            best = d
+    if best is None:
+        # Nothing met the target: fall back to the depth with the most groups
+        # rather than silently returning an arbitrary one.
+        print("   no depth met the target -- falling back to most-groups")
+        best = max(range(lo, hi + 1),
+                   key=lambda d: len(Counter(assign_at_depth(cells, bit_scope, bit_fallback, d)[0].values())))
+    return best
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
     path = sys.argv[1]
-    depth = int(sys.argv[sys.argv.index("--depth") + 1]) if "--depth" in sys.argv else 7
+    auto = "--auto" in sys.argv
+    depth = int(sys.argv[sys.argv.index("--depth") + 1]) if "--depth" in sys.argv else 8
+    max_frac = float(sys.argv[sys.argv.index("--max-frac") + 1]) if "--max-frac" in sys.argv else 0.10
     emit = sys.argv[sys.argv.index("--emit") + 1] if "--emit" in sys.argv else None
 
     d = json.load(open(path))
@@ -112,54 +209,12 @@ def main():
     print("bits with only generated names: %d" % len(bit_fallback))
 
     cells = mod["cells"]
-    assigned = {}
-    how = Counter()
-    per_type = defaultdict(lambda: [0, 0])
 
-    for cname, cell in cells.items():
-        ctype = cell["type"]
-        if ctype == "$scopeinfo":
-            continue
-        per_type[ctype][1] += 1
-        dirs = cell.get("port_directions", {})
-        conns = cell.get("connections", {})
+    if auto:
+        depth = choose_depth(cells, bit_scope, bit_fallback, max_frac)
+        print("auto-depth: using %d\n" % depth)
 
-        def scan(want_output):
-            best = None
-            for port, bits in conns.items():
-                is_out = dirs.get(port) == "output"
-                if is_out != want_output:
-                    continue
-                for b in bits:
-                    if isinstance(b, int) and b in bit_scope:
-                        sc = bit_scope[b]
-                        if best is None or len(sc) > len(best):
-                            best = sc
-            return best
-
-        # Output first: the output net names what the cell computes, whereas an
-        # input may belong to the previous stage and would pull it backwards.
-        sc = scan(True) or scan(False)
-        if sc:
-            group = ".".join(sc[:depth])
-            how["RTL hierarchy"] += 1
-        else:
-            fb = None
-            for port, bits in conns.items():
-                for b in bits:
-                    if isinstance(b, int) and b in bit_fallback:
-                        fb = bit_fallback[b]
-                        break
-                if fb:
-                    break
-            if fb:
-                group = fb
-                how["generated (counter-stripped)"] += 1
-            else:
-                how["UNRESOLVED"] += 1
-                continue
-        assigned[cname] = group
-        per_type[ctype][0] += 1
+    assigned, how, per_type = assign_at_depth(cells, bit_scope, bit_fallback, depth)
 
     total = sum(t for _, t in per_type.values())
     print("\nresolved %d / %d cells (%.2f%%)" % (len(assigned), total, 100.0 * len(assigned) / total))

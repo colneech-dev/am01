@@ -24,6 +24,14 @@
 #              flattened), so set FLATTEN=0 if your tristates are already
 #              at the top level, or if you have none.
 #
+#   GROUPS     1 = derive a placement group for every cell from RTL
+#              hierarchy and constrain each anchored group to a region
+#              (default 0, unchanged behaviour). Without it the floorplan
+#              reaches only pre-placed cells -- 420 of 69869 on this
+#              design, 0.6%. Depth is chosen per-netlist, not hardcoded.
+#              Only groups with an anchor are constrained, so on a design
+#              with nothing pre-placed this does nothing and says so.
+#
 # router2 (the P&R phase's routing step) reads its own env vars directly
 # -- nothing here needs to pass them through, just export before calling
 # this script. See README.md "router2 bounded termination" for what they
@@ -111,10 +119,43 @@ FLATTEN="${FLATTEN:-1}"
 echo "==> [1/4] synthesis (yosys)${FLATTEN_ARG:+ , flattened} -- $(date -Is)"
 "$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG -json $OUT/$TOP.json" "${SRCS[@]}"
 
+# Optional RTL-hierarchy floorplan. Opt-in: default behaviour is unchanged.
+#
+# Without it the floorplan can address only the cells something else has already
+# constrained -- on this design 420 BRAMs out of 69869, i.e. 0.6%, with 99.4% of
+# the netlist anonymous ($abc$...parse_blif$N LUTs, $auto$ff.cc:...$N FFs). That
+# is the best available explanation for why so much placer tuning refuted: global
+# cost knobs were being turned while almost the whole design floated free.
+#
+# GROUPS=1 derives a placement group for every cell from durable RTL hierarchy
+# (100% coverage on this design) and confines each anchored group to a region.
+# Keyed on RTL paths, NOT yosys cell names -- the latter are pure counters
+# ($abc$493613$auto$blifparse.cc:557:parse_blif$493614) and two netlists differing
+# by one unrelated gate share ZERO of them, so anything keyed on them dies at the
+# next edit. See tools_name_churn_test.sh.
+#
+# Depth is chosen per-netlist by --auto rather than hardcoded, so this does not
+# rot when the RTL gains a hierarchy level or get used on a different design.
+#
+# NOTE: groups are only CONSTRAINED where they have an anchor -- a cell already
+# placed by something else. On this design those come from floorplan_stripe.py's
+# BRAMs. A design with no pre-placed cells gets regions for nothing and this is a
+# silent no-op, which the log will say plainly rather than implying it worked.
+if [ "${GROUPS:-0}" = "1" ]; then
+    echo "==> [2a/4] deriving RTL-hierarchy placement groups -- $(date -Is)"
+    python3 "$(dirname "$0")/derive_cell_groups.py" "$OUT/$TOP.json" \
+        --auto --emit "$OUT/cell_groups.json"
+    export GROUP_MAP="$OUT/cell_groups.json"
+    PNR_EXTRA=(--pre-place "$(dirname "$0")/preplace_group_regions.py")
+else
+    PNR_EXTRA=()
+fi
+
 echo "==> [2/4] place & route (nextpnr-xilinx) -- $(date -Is)"
 "$NEXTPNR" --chipdb "$CHIPDB" \
     --json "$OUT/$TOP.json" --xdc "$XDC" \
     --fasm "$OUT/$TOP.fasm" --freq "$FREQ" \
+    ${PNR_EXTRA[@]+"${PNR_EXTRA[@]}"} \
     --log "$OUT/$TOP.pnr.log"
 echo "    place & route finished -- $(date -Is)"
 
