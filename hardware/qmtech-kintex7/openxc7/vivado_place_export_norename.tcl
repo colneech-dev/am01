@@ -1,7 +1,42 @@
 # Place the -norename netlist in Vivado and export name + LOC + BEL for EVERY cell.
 #
-# WHY THIS SUPERSEDES THE NET-NAME HEURISTIC
-# ------------------------------------------
+# SCOPE: DIAGNOSTIC ONLY -- THIS MAP CANNOT BE COMMITTED AND REUSED
+# -----------------------------------------------------------------
+# The exported map is keyed on yosys cell names, and those are built entirely
+# from volatile counters:
+#
+#     $abc$493613$auto$blifparse.cc:557:parse_blif$493614
+#           ^^^^^^        ^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^
+#           ABC counter   yosys source file:line   autoidx
+#
+# Measured, not assumed. Two 8-bit modules identical except for ONE extra
+# unrelated gate at the end of the file:
+#
+#     v1 abc-named cells : 15
+#     v2 abc-named cells : 17
+#     names in BOTH      :  0
+#
+# The ABC counter shifted 1611 -> 1613 and renamed every cell, including the 15
+# whose logic was untouched. So any RTL edit, yosys upgrade or synthesis-option
+# change invalidates 100% of this map -- it is a snapshot of one netlist, never a
+# floorplan for future builds of this board.
+#
+# The net-name round index (derive_round_index.py) has lower coverage (51621 vs
+# 70011) but is DURABLE: 'crypter.round14.sboxes.sbox35inst' comes from RTL
+# structure, not counters, and was verified identical across files (1260 sbox
+# paths, all matching). That is the mechanism to commit.
+#
+# Use this export to LEARN the geometry -- where each round actually belongs and
+# how large its box should be, taken from a placement that meets timing -- then
+# encode that geometry in the durable net-name script. Vivado teaches the
+# floorplan; the net-name script ships it.
+#
+# Safety: check_placement_names.py refuses below a 90% match rate. Since a changed
+# netlist scores ~0% rather than 89%, a stale map fails loudly instead of
+# half-applying, which would be far more dangerous.
+#
+# WHY THE NET-NAME HEURISTIC IS NOT ENOUGH ON ITS OWN
+# ---------------------------------------------------
 # derive_round_index.py recovers a round index for 51621 of 71632 cells by parsing
 # NET names, then preplace_round_regions.py invents a bounding box per round. Both
 # steps are inference. This is measurement: Vivado's own placement gives an exact
