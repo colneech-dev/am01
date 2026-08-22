@@ -228,6 +228,195 @@ nextpnr: 69,366 cells flattened
          router2:           converging (1.7M wires)
 ```
 
+The one attempt so far at a full route on the real (2-instance, 840-BRAM)
+design placed cleanly (HeAP 300.41s, SA 202.19s -- slower than the table
+above, which predates NUM_MINERS=2) and got 4 iterations into router2
+before dying with the rest of a Windows reboot that killed the WSL2 VM.
+**That was not router2 hanging** -- see below.
+
+### router2 bounded termination -- it will not actually run forever
+
+Checked directly in the installed binary's source (`common/router2.cc`,
+currently-built commit `b608fd2c`, all genuinely upstream -- verified via
+`git log --format='%an <%ae>'` on the file, not a local patch): router2's
+negotiated-congestion loop has a real, env-overridable exit condition,
+not an infinite `while(true)`:
+
+```
+int max_stall = 50;   // NEXTPNR_ROUTER2_MAX_STALL -- give up if overused-wire
+                       // count doesn't improve for this many iterations
+int max_iter  = 600;  // NEXTPNR_ROUTER2_MAX_ITER  -- hard iteration cap
+```
+
+Past either limit it `log_error`s out (aborting the build) **unless**
+`NEXTPNR_SKIP_FAILED_ARCS=1` is set, in which case it accepts the
+partial/overused route and lets `[3/4]`/`[4/4]` run anyway, producing a
+`.bit` for inspection -- explicitly not one to program a board with,
+since overused wires mean two nets are sharing a resource that can only
+carry one signal.
+
+Practical read: the "2+ day" prior run was never observed to actually
+hit either cap or the loud failure message -- it was 4 iterations in
+when the host rebooted, with no way from the log alone to say whether it
+was close to converging, close to giving up, or neither. **The honest
+status is "unknown, not yet re-attempted with a bounded run,"** not
+"router2 doesn't work on this design." router2 is also internally
+multithreaded (`std::thread`, not OpenMP) -- WSL2's `processors=` setting
+in `.wslconfig` bounds how much of that it can use.
+
+Recommended for the next attempt: run with `NEXTPNR_SKIP_FAILED_ARCS=1`
+set so the flow completes end-to-end (through a possibly-overused `.bit`)
+within the 600-iteration cap regardless of outcome, rather than an
+unbounded wait -- then read the final `overused=` count in
+`build.sh`'s new per-phase timestamps (see its header) to judge whether
+a from-scratch full convergence run (unset the env var, let it run to
+either 0 overuse or the loud failure) is worth the wall-clock time.
+
+### `NEXTPNR_ARC_MAX_VISIT` -- the actual fix for the "2+ day" hang
+
+Re-attempted per the above. Confirmed the "recommended" advice wrong in
+one way: without `NEXTPNR_ARC_MAX_VISIT` set, router2 doesn't converge
+*or* fail within any practical time -- it ran **5+ hours** on this
+design's first outer iteration alone, never printing so much as an
+`iter=1` summary line. Root cause, found directly in
+`common/router2.cc`'s own comment: a failing arc's search is unbounded
+by default and "drains the whole device graph before failing" --
+`NEXTPNR_ARC_MAX_VISIT=20000` caps that, and the exact same design then
+finished router2 in **35-40 minutes**, repeatably. Set this for any
+attempt on a design with real congestion; it costs nothing on designs
+that route cleanly.
+
+### Why every reset in `../hdl/odocrypt_gpio_wrapper.v` is synchronous
+
+With `NEXTPNR_ARC_MAX_VISIT` set, router2 reliably reaches the end --
+and reliably then hits a real, different bug: nextpnr's own late-stage
+legality check throws
+
+```
+ERROR: FASM: FF '...' at bel SLICE_XxYy/xFF disagrees with its
+half-slice on 'is_sync'/'is_srused' -- control-set contention
+in the placement
+```
+
+Xilinx 7-series half-slices share one physical SR (set/reset) network
+per pair of flip-flops, and every flop sharing it must agree on: (a)
+sync vs. async (`FDRE`/`FDSE` vs. `FDCE`/`FDPE`), and, less obviously,
+(b) reset-vs-set polarity (`FDRE` vs. `FDSE`) even though both are
+sync. nextpnr-xilinx's placer does not enforce either constraint during
+placement -- it only notices at FASM-export time, and by default just
+aborts (it does *not* silently ship a bad bitstream, despite how that
+might read from the log). Vivado handles a mixed-primitive design fine;
+this is purely an open-source-placer gap.
+
+Traced with `select t:FDCE t:FDPE; dump` (or `t:FDSE`) after a normal
+synth run -- yosys preserves `src` file:line attributes through
+synthesis, so every offending cell's RTL origin was directly
+identifiable, not guessed at. Both root causes turned out to be
+`odocrypt_gpio_wrapper.v`-local, not in the shared `hdl/odocrypt/` hash
+core:
+
+1. **Async reset.** Three `always @(posedge bus_clk or negedge
+   bus_rst_n)` blocks (all 84 `FDCE`/`FDPE` cells traced to exactly
+   these three). `bus_rst_n` is already deasserted synchronously
+   upstream (`am01_qmtech_top.v`'s `rst_stretch` counter), so nothing
+   here needed true async behaviour -- dropping ` or negedge bus_rst_n`
+   from the sensitivity list is a no-op functionally and removes the
+   async cells entirely. (Tried first: forcing this via yosys's
+   `dfflegalize -cell $_SDFFE_?P?P_ ...` instead of editing RTL --
+   confirmed **not possible**, `dfflegalize`'s own supported-transforms
+   list has no case for "convert async set/reset to sync".)
+2. **Reset-to-1 polarity.** With (1) fixed, a *second*, different
+   contention appeared: `FDRE` vs. `FDSE`. Traced to `wr_n_sync`/
+   `rd_n_sync`, whose reset value is `3'b111` (correct -- these are
+   active-low signals, so all-one is the safe idle state) -- but a
+   reset-to-1 register synthesizes to `FDSE`, not `FDRE`, and that
+   turns out to be just as half-slice-incompatible as async-vs-sync.
+   Fix: store them inverted (active-high, `wr_sync`/`rd_sync`, idle =
+   all-zero -> `FDRE`), un-inverting only at the two points that read
+   them (`wr_active`/`rd_active`, and the two "CM4 released WR_N/RD_N"
+   checks). Functionally identical, different bit polarity only.
+
+After both fixes, `odocrypt_gpio_wrapper.v`'s own registers are 100%
+`FDRE` -- but this did **not** turn out to be the whole story. Tracing
+the *remaining* `FDSE` cells (same `select t:FDSE; dump` technique,
+`src` attributes) after these two fixes found more, elsewhere:
+`am01_qmtech_top.v`'s `rst_stretch` counter (same reset-to-1 pattern,
+easy fix, still board-local) -- but also `hdl/odocrypt/keccak800.v` and
+`hdl/odocrypt/encrypt.v`, the shared/generated hash-core RTL, with no
+identifiable single-line cause (no explicit reset-to-1 pattern visible
+in the RTL; these look like ABC-optimization-driven cell choices, not
+something written explicitly). Full root-cause writeup and the
+`dfflegalize`-level fix that closed it out **without** touching either
+shared file: see `nextpnr-xilinx-control-set-bug.md` in this directory.
+See also that file for a full six-attribute list (`negedge_ff`,
+`is_latch`, `is_sync`, `is_clkinv`, `is_srused`, `is_ceused`) -- `is_sync`
+and reset-value/`is_srused` are only two of the axes nextpnr-xilinx's
+placer doesn't enforce; `is_ceused` (clock-enable used or not) is a
+real third one, fixed the same way (`dfflegalize -mince`).
+
+### Reducing routing congestion: placer/router density knobs
+
+Once control-set contention was closed, P&R started completing
+placement+routing cleanly (`0 errors`) but with a large `SKIP_FAILED_ARCS`
+count buried in the warnings -- **do not trust an "0 errors" run without
+also checking the warning content.** `NEXTPNR_SKIP_FAILED_ARCS=1` turns
+what would be fatal unroutable-arc errors into warnings so the run can
+finish; a bitstream built that way can have thousands of genuinely
+unrouted signals despite reporting zero errors. Check with:
+```sh
+grep -c 'SKIP_FAILED_ARCS' build.log     # how many arcs never routed
+grep 'iter=' out/*.pnr.log                # overused-wire trend per iteration
+```
+If `overused` converges to near-zero across iterations (it does, reliably,
+in this design -- see the actual iteration-by-iteration numbers in git
+history/session logs) but `SKIP_FAILED_ARCS` stays large, that's two
+*different* router2 failure modes: congestion (resolved) vs. individual
+arcs exhausting their `NEXTPNR_ARC_MAX_VISIT` search budget before finding
+*any* path (not resolved). Raising `NEXTPNR_ARC_MAX_VISIT` (e.g.
+20000 -> 200000) directly addresses the second one, at the cost of a
+much slower run -- worth it for a design where congestion is real
+(`overused` starts high) but transient.
+
+The failures cluster hard around `RAMB18` (BRAM S-box) output/address
+pins specifically, not randomly across the design -- consistent with
+local placement density near the BRAM columns being the root cause, on
+a chip that's otherwise only ~9% utilised overall. Two further,
+untested-as-of-writing levers for relieving that local congestion at
+the source (spread cells out more, so router2 needs less search depth
+in the first place, rather than just giving it a bigger budget):
+
+- **`placerHeap/beta`** (`common/placer_heap.cc`, default `0.9`): the
+  HeAP placer's spreading trigger -- a region is treated as overfull
+  (and cells get pushed out to less-dense neighbouring bins) once
+  `cells > beta * bels`. Lowering it triggers spreading earlier/more
+  aggressively.
+- Also present in the same file, same access method: `placerHeap/alpha`
+  (0.1), `placerHeap/criticalityExponent` (2), `placerHeap/timingWeight`
+  (10). SA refinement (`placer1.cc`) has its own set:
+  `placer1/constraintWeight` (10, CLI: `--cstrweight`),
+  `placer1/netShareWeight` (0), `placer1/startTemp` (1, CLI:
+  `--starttemp`). router2 itself has several more beyond
+  `NEXTPNR_ARC_MAX_VISIT`/`NEXTPNR_ROUTER2_MAX_ITER`/`MAX_STALL`:
+  `router2/bbMargin/x` and `/y` (3, per-net routing bounding-box
+  slack), `router2/ipinCostAdder` (0.0), `router2/biasCostFactor`
+  (0.25), `router2/initCurrCongWeight` (0.5), `router2/histCongWeight`
+  (1.0), `router2/currCongWeightMult` (2.0), `router2/estimateWeight`
+  (1.75).
+
+**Important correction, checked directly rather than assumed:** searching
+for these turns up `--placer-heap-beta`, `--placer-heap-critexp`, and a
+`--router2-heatmap` congestion-visualisation flag -- but those are
+**mainline YosysHQ/nextpnr** (the generic/ECP5/iCE40 architectures),
+not this fork. Checked every `add_options()` call in
+`common/command.cc` and `xilinx/main.cc` in the actual checkout this
+binary was built from: none of those flags exist here. In this fork,
+`placerHeap/*`/`placer1/*` (beyond the few with dedicated CLI flags
+above) are reachable only via `ctx.settings['placerHeap/beta'] = 0.7`
+in a `--pre-place <script.py>` hook (not yet tried/verified end-to-end).
+router2's own heatmap-writing code (`write_heatmap()` in `router2.cc`)
+exists but its only call site is compiled out (`#if 0`) -- using it
+means patching the source and rebuilding, not a flag to flip.
+
 ### The measured timing, which is the real headline
 
 ```
