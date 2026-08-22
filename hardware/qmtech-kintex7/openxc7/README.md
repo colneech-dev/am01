@@ -30,6 +30,47 @@ tiered pricing in 2026.1). The flow below costs nothing.
 >    That is a real measurement, and it is *lower* than the estimate in
 >    ../README.md. See "Status vs. the real design" at the bottom.
 
+## Documents in this directory
+
+Status at a glance, so you do not have to open each file to find out whether it
+still applies.
+
+| document | status |
+|---|---|
+| `README.md` | **current** — start here |
+| `SESSIONS.md` | **current** — session record, newest first |
+| `TESTS-TO-RUN.md` | **current**, with outcomes; most entries now refuted |
+| `QUARANTINED-BITSTREAMS.md` | **current** — do not program these |
+| `patches/README.md` | **current** — nextpnr patches, with what each is measured to do |
+| `patches-yosys/README.md` | **current** — yosys patches |
+| `upstream-issue-1-placer-flags.md` | valid, **not filed** |
+| `upstream-issue-2-router2-relaxation.md` | valid, **not filed** |
+| `upstream-issue-3-yosys-hdlname-loss.md` | **FILED** — YosysHQ/yosys#6144, PR #6145 |
+| `upstream-issue-4-nextpnr-region-legalisation.md` | **FILED** — YosysHQ/nextpnr#1784 |
+| `nextpnr-xilinx-control-set-bug.md` | **already fixed upstream** — reference only |
+| `nextpnr-xilinx-router2-threadsafety-bug.md` | **already fixed upstream** — reference only |
+| `router2_mt_partition.proposed.cc` | proposal, **not applied** |
+
+### Check upstream before writing anything up
+
+Four separate items in this directory were each written up as upstream
+candidates and each turned out to be **already fixed upstream**:
+
+| written up as a bug | actually |
+|---|---|
+| nextpnr control-set contention | fixed upstream (`bf78fccf`) |
+| router2 backward-BFS thread safety | fixed upstream (`c42f87b3`, 2020-12-01) |
+| `synth_xilinx` `-run` drops `ff_map` | fixed upstream after v0.68 |
+| nextpnr cannot route `SRLC32E` | fixed; current netlists route with SRLs present |
+
+The cause is the same every time: **a stale tree reproduces its own bugs
+perfectly.** Local testing cannot detect that a bug is already fixed elsewhere,
+because the local tool still has it. The check that finds these is comparing
+against upstream HEAD — and against the meta-repo that pins versions
+(`toolchain-installer`), not just the tool repos, since that is what revealed
+this project was running yosys 0.62 and nextpnr 0.9.2 when openXC7 already
+pinned v0.68 and 0.9.3.
+
 ## The flow
 
 ```
