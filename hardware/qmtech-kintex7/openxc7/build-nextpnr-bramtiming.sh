@@ -51,6 +51,15 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC_DIR="${1:-$HERE/.openxc7-src}"
 REPO="$SRC_DIR/nextpnr-xilinx"
+# Keep this identical to build-chipdb.sh: the chipdb encodes nextpnr's internal
+# ID table, so the tree that generates it and the binary that reads it must be
+# the same revision, or loading aborts with
+#     internal IDs of nextpnr are inconsistent with the supplied chip database
+#
+# NEXTPNR_TAG is only a fallback for when there is no local tree. 0.9.2 cannot
+# route -- it fails even the blinky smoke test, on a flip-flop output feeding a
+# LUT input in the same slice -- so do not pin to it.
+LOCAL_NEXTPNR_SRC=/home/colin/src/nextpnr-xilinx-heatmap
 NEXTPNR_TAG="${NEXTPNR_TAG:-0.9.2}"
 JOBS="${JOBS:-$(nproc)}"
 

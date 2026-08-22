@@ -19,6 +19,21 @@ set -euo pipefail
 DEVICE="${DEVICE:-xc7k325tffg676-1}"
 OUT_DIR="${OUT_DIR:-$PWD/chipdb}"
 SRC_DIR="${SRC_DIR:-$PWD/.openxc7-src}"
+# The chipdb encodes nextpnr's internal ID table, so the chipdb and the binary
+# that reads it MUST come from the SAME revision. Mixing them aborts at load:
+#     internal IDs of nextpnr are inconsistent with the supplied chip database
+#
+# So prefer the locally built tree for the generator scripts too, not just for
+# bbasm -- otherwise this generates a chipdb with one revision's Python and feeds
+# it to another revision's binary.
+#
+# NEXTPNR_TAG is only the fallback for when there is no local tree. Note 0.9.2
+# specifically CANNOT route: it fails even the blinky smoke test with
+#     ERROR: Failed to route arc 0 of net 'ctr[19]',
+#            from SITEWIRE/SLICE_X4Y83/DQ to SITEWIRE/SLICE_X4Y83/D1
+# -- a flip-flop output feeding a LUT input in the same slice, which main routes
+# without complaint. Do not pin to it.
+LOCAL_NEXTPNR_SRC=/home/colin/src/nextpnr-xilinx-heatmap
 NEXTPNR_TAG="${NEXTPNR_TAG:-0.9.2}"
 
 # bbasm turns the .bba text export into the binary chipdb. Any bbasm
@@ -43,6 +58,14 @@ mkdir -p "$OUT_DIR" "$SRC_DIR"
 # We only need the repo for xilinx/python/bbaexport.py plus its two
 # submodules (prjxray-db for the fuzzed device data, nextpnr-xilinx-meta
 # for site metadata). No compilation needed for chipdb generation.
+# Use the local tree when it is there, so bbasm and the generator agree.
+if [ -d "$LOCAL_NEXTPNR_SRC/xilinx/python" ] && [ -z "${NEXTPNR_SRC_OVERRIDE:-}" ]; then
+    echo "==> using local nextpnr-xilinx tree ($LOCAL_NEXTPNR_SRC)"
+    echo "    revision: $(git -C "$LOCAL_NEXTPNR_SRC" log --oneline -1 2>/dev/null || echo unknown)"
+    SRC_DIR="$(dirname "$LOCAL_NEXTPNR_SRC")"
+    ln -sfn "$LOCAL_NEXTPNR_SRC" "$SRC_DIR/nextpnr-xilinx" 2>/dev/null || true
+fi
+
 if [ ! -d "$SRC_DIR/nextpnr-xilinx/.git" ]; then
     echo "==> cloning nextpnr-xilinx ($NEXTPNR_TAG) + submodules"
     git clone --depth 1 --branch "$NEXTPNR_TAG" \
