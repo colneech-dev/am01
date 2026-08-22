@@ -148,19 +148,41 @@ checking bel type, availability, `isValidBelForCell` and `cluster_bels` — but
 **not** regions. `check_cell_bel_region()` is referenced only from
 `common/placer1.cc`; nothing in the xilinx placement path consults it.
 
-So on a region-constrained design:
+So a region-constrained cell can be moved out of its region by a pass that never
+looks at the constraint. That is a defect regardless of how often it fires.
+
+### Measured effect on this design: NONE
+
+Stated plainly, because an earlier draft of this file claimed the opposite.
+
+With and without the patch, on a 21-region / 50,972-cell floorplan:
 
 ```
-HeAP places with regions           honoured
-post-place repair relocates cells  REGIONS IGNORED   <-- 13626 of 50972 cells (27%)
-placer1 refinement                 honoured again
-routing                            fails on intra-site arcs
+relocated 13626 stranded cluster(s)/cell(s)     <- identical
+post-place clk_h 121.88 MHz                     <- identical
 ```
 
-A quarter of the floorplan is undone immediately after being built, which is why
-the subsequent route failed on an intra-site `CARRY4_CO1 → CFFMUX_OUT` arc.
+The placement is bit-for-bit the same. `check_cell_bel_region()` returns true for
+cells with no region, and the cells this pass relocates turn out not to be
+region-constrained ones.
 
-Fix: check the region for the cluster root and for every member. Members can have
-different regions from the root — a LUT/FF pair can straddle two RTL scopes.
-`check_cell_bel_region()` returns true for cells with no region, so unconstrained
-designs are unaffected.
+The earlier claim — that repair was "undoing a quarter of the floorplan", 13626
+of 50972 cells being 27% — was inference from a coincidental ratio. It was never
+verified, and the measurement contradicts it.
+
+### Why it is a no-op here, and when it would not be
+
+Repair searches outward from the cluster's current position and takes the first
+valid candidate, typically a tile or two away. With the regions used here
+(BRAM extent + 30 tiles of padding) such a short move stays inside the box, so
+the region check passes trivially.
+
+It would bite with tight regions — but the tight geometry (pad 12) fails
+legalisation before reaching repair, so the case where this patch matters is
+currently the case that does not run.
+
+### Status
+
+Submit as a correctness fix, not a performance one. No benchmark supports it.
+Instrumenting the reject count would turn "no effect" from inference into
+measurement, and is worth doing before submission.
