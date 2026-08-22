@@ -1,10 +1,14 @@
---- /home/colin/src/toolchain-installer/yosys/passes/cmds/Makefile.inc	2026-08-13 20:54:27.280866818 +0100
-+++ passes/cmds/Makefile.inc	2026-08-22 16:01:10.477092415 +0100
-@@ -2,6 +2,7 @@
- ifeq ($(DISABLE_SPAWN),0)
- OBJS += passes/cmds/exec.o
- endif
-+OBJS += passes/cmds/hdlname_recover.o
- OBJS += passes/cmds/add.o
- OBJS += passes/cmds/delete.o
- OBJS += passes/cmds/design.o
+diff --git a/passes/cmds/CMakeLists.txt b/passes/cmds/CMakeLists.txt
+index 64cf330..efe0c61 100644
+--- a/passes/cmds/CMakeLists.txt
++++ b/passes/cmds/CMakeLists.txt
+@@ -8,6 +8,9 @@ yosys_pass(exec
+ yosys_pass(add
+ 	add.cc
+ )
++yosys_pass(hdlname_recover
++	hdlname_recover.cc
++)
+ yosys_pass(delete
+ 	delete.cc
+ )
