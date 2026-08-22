@@ -1,0 +1,43 @@
+diff --git a/xilinx/arch_place.cc b/xilinx/arch_place.cc
+index c8774b40..c343b1af 100644
+--- a/xilinx/arch_place.cc
++++ b/xilinx/arch_place.cc
+@@ -22,6 +22,7 @@
+ #include "design_utils.h"
+ #include "log.h"
+ #include "nextpnr.h"
++#include "place_common.h"
+ #include "timing.h"
+ #include "util.h"
+ NEXTPNR_NAMESPACE_BEGIN
+@@ -1177,8 +1178,30 @@ void Arch::fixupPlacement()
+                             if (getBelType(rb) != root->type || !checkBelAvail(rb) ||
+                                 !isValidBelForCell(root, rb))
+                                 continue;
++                            // Respect region constraints. Without this, repair
++                            // silently relocates region-constrained cells out of
++                            // their regions -- measured at 13626 of 50972 cells
++                            // (27%) on a 21-region design, i.e. a quarter of the
++                            // floorplan undone immediately after it was built.
++                            // check_cell_bel_region() returns true for cells with
++                            // no region, so unconstrained designs are unaffected.
++                            if (!check_cell_bel_region(root, rb))
++                                continue;
+                             if (!cluster_bels(rb, mbels))
+                                 continue;
++                            // Members have their own regions, which need not be
++                            // the root's: a LUT/FF pair can straddle two RTL
++                            // scopes and therefore two regions.
++                            {
++                                bool region_ok = true;
++                                for (size_t i = 0; i < members.size(); i++)
++                                    if (!check_cell_bel_region(members[i], mbels[i])) {
++                                        region_ok = false;
++                                        break;
++                                    }
++                                if (!region_ok)
++                                    continue;
++                            }
+                             for (size_t i = 0; i < members.size(); i++)
+                                 bindBel(mbels[i], members[i], STRENGTH_STRONG);
+                             bool allok = true;

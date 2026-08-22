@@ -1,0 +1,119 @@
+diff --git a/common/placer_heap.cc b/common/placer_heap.cc
+index c0fb6e85..5edf9c28 100644
+--- a/common/placer_heap.cc
++++ b/common/placer_heap.cc
+@@ -776,15 +776,78 @@ class HeAPPlacer
+                     if (other == &port)
+                         return;
+                     int o_pos = cell_pos(other->cell);
+-                    double weight = 1.0 / (ni->users.size() *
+-                                           std::max<double>(1, (yaxis ? cfg.hpwl_scale_y : cfg.hpwl_scale_x) *
+-                                                                       std::abs(o_pos - this_pos)));
++                    // AM01/openXC7 (env-gated NEXTPNR_HPWL_SCALE_FIX=1): hpwl_scale is
++                    // applied INVERTED here relative to the objective it is meant to
++                    // optimise.
++                    //
++                    // total_hpwl(), the thing actually being measured, does:
++                    //     hpwl += hpwl_scale_x * dx + hpwl_scale_y * dy
++                    // so with hpwl_scale_y = 2 (set by xilinx/arch.cc) a vertical tile
++                    // costs DOUBLE a horizontal one.
++                    //
++                    // But bound2bound energy is w*d^2, and with w = 1/(N*k*d) that comes
++                    // out as d/(N*k) -- i.e. the y axis is weighted by 1/k = 0.5, not by
++                    // k = 2. A factor of k^2 = 4 in the wrong direction, on the axis the
++                    // arch's own delay model charges at 2x per tile.
++                    //
++                    // For energy to be k*d/N the weight must be k/(N*d), so the numerator
++                    // needs k^2: at large d, k^2/(N*k*d) = k/(N*d). The change of
++                    // variables was applied to the denominator but not the numerator.
++                    //
++                    // This is UPSTREAM, not a fork regression -- nextpnr 0.6
++                    // common/place/placer_heap.cc carries the identical expression.
++                    //
++                    // Left off by default: it rescales every y weight by 4, which shifts
++                    // the balance against the alpha legalisation anchor. Expect to
++                    // re-tune alpha alongside it.
++                    static const bool hpwl_fix = getenv("NEXTPNR_HPWL_SCALE_FIX") != nullptr;
++                    const double _scale = (yaxis ? cfg.hpwl_scale_y : cfg.hpwl_scale_x);
++                    double weight = (hpwl_fix ? (_scale * _scale) : 1.0) /
++                                    (ni->users.size() *
++                                     std::max<double>(1, _scale * std::abs(o_pos - this_pos)));
+ 
+                     if (user_idx != -1 && net_crit.count(ni->name)) {
+                         auto &nc = net_crit.at(ni->name);
+-                        if (user_idx < int(nc.criticality.size()))
+-                            weight *= (1.0 + cfg.timingWeight *
+-                                                     std::pow(nc.criticality.at(user_idx), cfg.criticalityExponent));
++                        if (user_idx < int(nc.criticality.size())) {
++                            float crit = nc.criticality.at(user_idx);
++                            weight *= (1.0 + cfg.timingWeight * std::pow(crit, cfg.criticalityExponent));
++
++                            // AM01/openXC7 (env-gated NEXTPNR_CRIT_DIST_EXP=<0..1>):
++                            // partially undo the 1/distance linearisation for critical nets.
++                            //
++                            // The base weight above is 1/(users * distance). That is the
++                            // standard bound2bound trick for approximating linear HPWL from a
++                            // quadratic solver -- but it means a LONG net gets LESS pull, not
++                            // more. Measured on this design:
++                            //
++                            //   375-tile critical net : 1/(7*375) * 11  ~= 0.0042
++                            //   5-tile slack net      : 1/(7*5)   *  1  ~= 0.029
++                            //
++                            // so the short net that does not matter has ~7x more weight than
++                            // the critical one crossing the die. The criticality boost caps at
++                            // (1 + timingWeight) = 11x and cannot overcome a 375x distance
++                            // discount. It compounds with hpwl_scale_y = 2 on this arch: our
++                            // critical net spans 268 tiles in y vs 107 in x, so the axis most
++                            // needing correction is discounted twice.
++                            //
++                            // The 1/distance term is a WIRELENGTH approximation. For timing we
++                            // want the opposite -- length penalised superlinearly. Scale the
++                            // weight back up by distance^(k*crit):
++                            //     crit = 0 -> unchanged, HPWL behaviour, wirelength-efficient
++                            //     crit = 1, k = 1 -> distance cancels entirely, i.e. quadratic
++                            //                        behaviour: aggressively shortened
++                            // k = 0 disables (bit-identical to before).
++                            static const float crit_dist_exp = []{
++                                const char *e = getenv("NEXTPNR_CRIT_DIST_EXP");
++                                return e ? float(atof(e)) : 0.0f;
++                            }();
++                            if (crit_dist_exp > 0.0f && crit > 0.0f) {
++                                double dist = std::max<double>(
++                                        1, (yaxis ? cfg.hpwl_scale_y : cfg.hpwl_scale_x) *
++                                                   std::abs(o_pos - this_pos));
++                                weight *= std::pow(dist, crit_dist_exp * crit);
++                            }
++                        }
+                     }
+ 
+                     // If cell 0 is not fixed, it will stamp +w on its equation and -w on the other end's equation,
+@@ -995,6 +1058,29 @@ class HeAPPlacer
+                 int nx = ctx->rng(2 * rx + 1) + std::max(cell_locs.at(ci->name).x - rx, 0);
+                 int ny = ctx->rng(2 * ry + 1) + std::max(cell_locs.at(ci->name).y - ry, 0);
+ 
++                // Keep the sample INSIDE the region the cell is constrained to.
++                //
++                // Without this the window is centred on the cell's current
++                // location and merely has its RADIUS clamped by the region size,
++                // so a cell the spreader has moved outside its own region
++                // samples points that are then rejected below
++                // (!ci->region->bels.count(sz) -> continue) until the attempts
++                // budget runs out:
++                //
++                //   ERROR: Unable to find legal placement for cell '...'
++                //
++                // The radius clamp alone is inverted with respect to difficulty:
++                // the smaller the region, the narrower the window, so the harder
++                // it is to get back to it. Measured on a 21-region xc7k325t
++                // design, failure was strictly monotonic in region tightness --
++                // the signature of a search that cannot reach its target rather
++                // than of a utilisation limit.
++                if (ci->region != nullptr && ci->region->constr_bels) {
++                    const auto &rb = constraint_region_bounds[ci->region->name];
++                    nx = std::min(std::max(nx, rb.x0), rb.x1);
++                    ny = std::min(std::max(ny, rb.y0), rb.y1);
++                }
++
+                 iter++;
+                 iter_at_radius++;
+                 attempts++;
