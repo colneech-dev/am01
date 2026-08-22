@@ -84,22 +84,59 @@ say("preplace_group_regions: %d cell->group entries" % len(cell_group))
 # `idstring in dict_of_str` is False for every cell however correct the names
 # are -- which is exactly how the first attempt matched nothing while looking
 # like it had run.
+import re
+
+# nextpnr splits a LUT6 into LUT5 pairs during packing and names the halves after
+# the cell they came from:
+#
+#     $flatten\...crypter.round3...S[5]$LUT$1492
+#
+# The parent is still in the name, so these are recoverable -- and they are real
+# datapath logic, so leaving them unconstrained would be a hole in the floorplan
+# exactly where it matters. 478 cells on this design.
+SPLIT_SUFFIX = re.compile(r"\$LUT\$\d+$")
+
+# $PACKER_GND_NET$..., $PACKER_VCC_NET$... are constant/tie drivers nextpnr
+# invents. They have no RTL parent and no natural home; boxing them would
+# constrain the placer for no benefit. Left free on purpose, not by omission.
+PACKER_RE = re.compile(r"^\$PACKER_")
+
 present = {}
 n_ctx = 0
 sample_keys = []
+recovered = 0
+packer = 0
+unmatched_other = []
 for cname, cell in ctx.cells:  # noqa: F821  (ctx injected by nextpnr)
     n_ctx += 1
     key = str(cname)
     if len(sample_keys) < 3:
         sample_keys.append(key)
     g = cell_group.get(key)
+    if g is None and not PACKER_RE.match(key):
+        # Try the pre-split parent name.
+        parent = SPLIT_SUFFIX.sub("", key)
+        if parent != key:
+            g = cell_group.get(parent)
+            if g is not None:
+                recovered += 1
     if g is not None:
         present[key] = g
+    elif PACKER_RE.match(key):
+        packer += 1
+    elif len(unmatched_other) < 5:
+        unmatched_other.append(key)
 frac = 100.0 * len(present) / max(1, n_ctx)
 say("preplace_group_regions: matched %d of %d nextpnr cells (%.1f%%)"
     % (len(present), n_ctx, frac))
+say("  recovered via pre-split parent name : %d" % recovered)
+say("  $PACKER tie cells, left free on purpose: %d" % packer)
 say("  sample nextpnr keys: %s" % sample_keys)
 say("  sample map keys    : %s" % list(cell_group)[:3])
+if unmatched_other:
+    # Anything here is a genuine gap rather than an expected packing artefact,
+    # so name it instead of letting it hide inside a percentage.
+    say("  UNEXPECTED unmatched (not packer, not a split): %s" % unmatched_other)
 
 # Refuse to continue silently on a null match. A no-op hook produces a run
 # indistinguishable from the control, which reads as a clean experimental result
