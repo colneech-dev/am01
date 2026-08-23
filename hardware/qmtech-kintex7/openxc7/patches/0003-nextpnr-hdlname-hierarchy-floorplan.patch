@@ -36,7 +36,7 @@ index 4afd78a5..25a93b1b 100644
              if (!ctx->place() && !ctx->force)
                  log_error("Placing design failed.\n");
 diff --git a/common/place_common.cc b/common/place_common.cc
-index 50a11880..d5c8e553 100644
+index 50a11880..bb5ede52 100644
 --- a/common/place_common.cc
 +++ b/common/place_common.cc
 @@ -17,6 +17,12 @@
@@ -52,7 +52,7 @@ index 50a11880..d5c8e553 100644
  #include "place_common.h"
  #include <cmath>
  #include "log.h"
-@@ -622,4 +628,323 @@ bool check_cell_bel_region(const CellInfo *cell, BelId bel)
+@@ -622,4 +628,326 @@ bool check_cell_bel_region(const CellInfo *cell, BelId bel)
          return true;
  }
  
@@ -326,28 +326,32 @@ index 50a11880..d5c8e553 100644
 +            ys.push_back(l.y);
 +        }
 +        if (xs.empty()) {
-+            // No anchor: derive a band from the DEVICE rather than skipping.
++            // No anchor: leave the group FREE.
 +            //
-+            // This is what removes the dependency on an external floorplanning
-+            // script. Such a script has to harvest a throwaway placement to find
-+            // out where the usable bels are; we can just ask the chipdb.
++            // An earlier version banded such groups uniformly across the device,
++            // so that a design with nothing pre-placed would still get regions.
++            // That was a mistake, and it turned "does nothing" into "fails":
 +            //
-+            // The band spans the Y extent of bels this group can actually use,
-+            // split one band per group in pipeline order, so adjacent stages get
-+            // adjacent bands.
-+            if (device_y1 < device_y0) {
-+                unanchored += int(g.second.size());
-+                continue;
-+            }
-+            int nbands = std::max(1, int(ordered.size()));
-+            int slot = group_slot[g.first];
-+            double span = double(device_y1 - device_y0 + 1) / nbands;
-+            y0 = device_y0 + int(slot * span);
-+            y1 = device_y0 + int((slot + 1) * span) - 1;
-+            x0 = device_x0;
-+            x1 = device_x1;
-+            derived_bands++;
-+            // Fall through to padding and region creation below.
++            //   ERROR: Unable to find legal placement for cell
++            //          '$auto$abc_ops_reintegrate.cc:652:reintegrate$...'
++            //
++            // A band derived from the chipdb is still an invented box. It is
++            // sized by GROUP COUNT rather than by what the group's cells
++            // physically need, so a cell that must sit near its own BRAMs gets
++            // confined to a band chosen without reference to where they are.
++            //
++            // An invented box constrains the placer harder than no box at all,
++            // and an unconstrained placement plus a clear log line is a much
++            // better outcome than an error naming a cell that has nothing to do
++            // with the real problem.
++            //
++            // Deriving real anchors from a first unconstrained placement is the
++            // principled way to serve this case, and is deliberately not done
++            // here: it doubles placement time, and on the design this was
++            // measured against, region constraints routed worse than no regions
++            // in every configuration tried.
++            unanchored += int(g.second.size());
++            continue;
 +        } else {
 +            robust_range(xs, x0, x1);
 +            robust_range(ys, y0, y1);
@@ -367,8 +371,7 @@ index 50a11880..d5c8e553 100644
 +    }
 +
 +    log_info("Hierarchy floorplan: %d region(s), %d cell(s) constrained.\n", made, constrained);
-+    if (derived_bands)
-+        log_info("  %d region(s) had no anchor and were banded from the device.\n", derived_bands);
++
 +    if (unanchored)
 +        log_info("  %d cell(s) in groups with no anchor were left free.\n", unanchored);
 +    if (too_small)
