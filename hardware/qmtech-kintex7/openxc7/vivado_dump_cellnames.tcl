@@ -15,7 +15,7 @@
 # Run:  vivado -mode batch -source vivado_dump_cellnames.tcl
 # Out:  vivado_cellnames.txt     <name>\t<ref_name>
 
-set nl   out_nm1_nosr/netlist_norename.v
+set nl   out_nm1_nosr/netlist_norename_v68.v
 set part xc7k325tffg676-1
 set top  am01_qmtech_top
 set out  vivado_cellnames.txt

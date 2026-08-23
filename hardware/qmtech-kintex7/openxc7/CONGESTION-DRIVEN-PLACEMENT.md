@@ -3,6 +3,18 @@
 Design note. Nothing here is implemented beyond patch 0006, which is a partial
 first step and is off by default.
 
+> **SUPERSEDED IN PART, 2026-08-23.** The "Level 2" recommendation below — folding
+> congestion into HeAP's bound2bound solve — was independently advised against by
+> two investigations (VPR/VTR and nextpnr-upstream). HeAP minimises a quadratic
+> system, so there is no cost delta to add a term to, and VPR's own analytic flow
+> handles density in the **legaliser**. Spindler's move force (DATE'07 Eq. 8) is
+> algebraically the same object as HeAP's existing alpha anchor at
+> `placer_heap.cc:961`, so a congestion term belongs as a **second anchor**, not
+> inside the objective. See `CONGESTION-RESEARCH-PLAN.md` §1.3 and §3 Step 4.
+>
+> Also note: VPR's ablation puts congestion-aware placement at **0.979× critical
+> path** — it buys routability and runtime, not Fmax.
+
 ## The problem
 
 `common/placer_heap.cc` minimises **wirelength subject to BEL capacity**. It has

@@ -13,8 +13,9 @@
 > | `hpwl_scale` variants | **refuted** — 89.93 / 90.46 vs 102.15 |
 > | `placer1_refine` reach | **refuted** — 84.42 |
 > | T15 drop dfflegalize workaround | still open; will not move Fmax (all FFs already CE=1/R=0) |
-> | Vivado place → nextpnr route | **done** — 158.81 MHz routed; the design meets spec |
-> | nextpnr place → Vivado route | **still open** — name mapping fixed (98.74%), never run |
+> | Vivado place + Vivado route | **done** — 158.81 MHz, 0 unrouted; the design meets spec |
+> | Vivado place → nextpnr route (T5) | **still open** — was wrongly recorded here as done; 158.81 was all-Vivado (`SESSIONS.md` §1), so the router is **not** exonerated |
+> | nextpnr place → Vivado route | **running 2026-08-23** — name mapping fixed (98.71%) |
 > | BRAM output register | still open; not required for spec now the target is met |
 >
 > The single most useful open item is **nextpnr place → Vivado route**: it is the

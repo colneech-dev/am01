@@ -122,8 +122,12 @@ SRL="${SRL:-1}"
 . "$(dirname "$0")/toolchain.sh"
 resolve_tool YOSYS   yosys          || true
 resolve_tool NEXTPNR nextpnr-xilinx || true
-FASM2FRAMES="${FASM2FRAMES:-$(command -v fasm2frames || true)}"
-XC7FRAMES2BIT="${XC7FRAMES2BIT:-$(command -v xc7frames2bit || true)}"
+# These two went through `command -v` alone, which only searches $PATH -- so a
+# stock /opt/openxc7 install failed discovery even though resolve_tool already
+# checks there. That is the whole point of routing every tool through the same
+# function, and these two were the exceptions.
+resolve_tool FASM2FRAMES   fasm2frames   || true
+resolve_tool XC7FRAMES2BIT xc7frames2bit || true
 
 for t in YOSYS:"$YOSYS" NEXTPNR:"$NEXTPNR" \
          FASM2FRAMES:"$FASM2FRAMES" XC7FRAMES2BIT:"$XC7FRAMES2BIT"; do

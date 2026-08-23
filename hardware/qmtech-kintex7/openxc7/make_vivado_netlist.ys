@@ -39,5 +39,5 @@
 #
 # Run:  yosys -s make_vivado_netlist.ys
 
-read_json out_nm1_nosr/am01_qmtech_top_st.json
-write_verilog -norename out_nm1_nosr/netlist_norename.v
+read_json out_nm1_nosr/am01_qmtech_top_v68.json
+write_verilog -norename out_nm1_nosr/netlist_norename_v68.v
