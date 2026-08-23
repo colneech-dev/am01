@@ -9,6 +9,41 @@ item, something this tree already contains. The research did not produce a new
 thing to build; it produced a reason to run what is already built, and a strong
 argument that congestion-driven *placement* is not where the missing 1.55× lives.
 
+> **RESOLVED 2026-08-23 22:15 — Step 1 has run, and it selects the PLACER branch.**
+>
+> | place | route | clk_h |
+> |---|---|---|
+> | nextpnr `v68base` | nextpnr | 89.30 MHz (iter 45, 0 unrouted) |
+> | nextpnr `v68base` | **Vivado** | **63.55 MHz** (0 unrouted, 0 node overlaps) |
+> | Vivado | Vivado | 158.81 MHz |
+>
+> Vivado's router, given the *identical* nextpnr placement (68266/68450 cells
+> LOC-fixed, 99.7%), came in **29% below nextpnr's own router**. The critical
+> path is a flop-to-flop net with **no logic between the endpoints**:
+>
+> ```
+> start  $auto$ff.cc:337:slice$466022/C     (flop clock pin)
+> end    $auto$ff.cc:337:slice$226497/D     (flop data pin)
+> logic 0.322 ns   net 15.104 ns
+> ```
+>
+> 0.322 ns is clock-to-Q alone. Fifteen nanoseconds of pure routing to join two
+> directly-wired registers is not a routing failure — the two flops are placed
+> too far apart for any router to rescue, and the best commercial router
+> available did worse than ours when handed the problem.
+>
+> **Consequence: Step 3 (the router branch) is retired.** The nine ranked
+> RWRoute changes, and the untested `NEXTPNR_CRIT_WEIGHT` / `NEXTPNR_SHARE_EXP`
+> knobs, all target a component this experiment exonerates. Go to Step 4.
+>
+> Caveat, stated rather than buried: Vivado's router was handed a fully
+> constrained foreign placement, which is not the case it is tuned for. But it
+> had exactly the freedom router2 had — routing only — and used it less well.
+>
+> Method note: the SRL cells must be excluded from the constraint set
+> (`vivado_route_nextpnr_handplaced.tcl`). nextpnr packs four SRLC32E into one
+> SLICEM and Vivado's LUTRAM packer refuses; pinning them harder cannot help.
+
 ---
 
 ## 1. What the research actually changed

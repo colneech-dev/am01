@@ -1,0 +1,11 @@
+# Vivado ROUTER on nextpnr PLACEMENT (SRL cells left free)
+# constraints applied: 136575 / 136624, skipped 12 SRL lines
+# LOC-fixed cells after place_design: 68266
+# timing recovered from vivado_routed_nextpnr_placement.dcp
+
+  CLOCK sys_clk_50m                        period  20.000  WNS   14.544  -> 5.456 ns = 183.28 MHz
+      logic 0.375 ns  net 4.697 ns
+  clk_gen_hash_inst.clkfb: no intra-clock paths
+  CLOCK clk_gen_hash_inst.clkout1_unbuf    period   7.500  WNS   -8.236  -> 15.736 ns = 63.55 MHz
+      logic 0.322 ns  net 15.104 ns
+
