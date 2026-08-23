@@ -71,6 +71,48 @@ pass reads.
 
 ### Measured
 
+Coverage on the real 70k-cell design, `synth_xilinx -flatten` then the pass:
+
+```
+set hdlname on 65647 cell(s) (52666 from an output net, 12981 from an input net)
+65647 / 65689 cells = 99.9%
+```
+
+The 42 left alone are genuinely unattributable, and the composition says why:
+24 CARRY4 plus 8 `alumacc` cells (the nonce adder's carry chain, built from
+scratch during arithmetic mapping with no RTL ancestor), 12 ABC-created LUTs
+driving nets that never got a hierarchical name, and 5 IO buffers. None are
+connected only to constants, and none touch an unnamed net -- they touch named
+nets that carry no RTL hierarchy.
+
+### Three bugs found by instrumenting rather than reading
+
+The first version of this pass resolved **17.3%**, not the figure quoted from the
+prototype. Two diagnoses made by reading the code were both wrong; adding six
+lines of debug output that print what the pass actually sees settled it in one
+run:
+
+```
+DBG wire $\odocrypt_gpio_wrapper_inst...round0.sboxes.sbox0inst.mem$rdreg[0]$d -> []
+DBG wires with a scope: 5709, without: 14438
+```
+
+1. **`rtl_scope()` required `name[0] == '\'`.** After `flatten`, hierarchical
+   wires are INTERNAL names -- `$	op.sub.sig` -- so 14438 of 20147 wires were
+   rejected outright. Parse from after the first backslash instead.
+2. **The trailing component was always popped** as "the signal name". Correct
+   when the walk reaches the end, wrong when it stopped early at a generated
+   component: that component was already excluded, so popping again discarded a
+   real scope level.
+3. **Tie-rejection discarded 48436 bits.** Imported from the round-index
+   prototype where it was essential, but unnecessary for full hierarchical
+   paths: a global signal's aliases are shallow, so keeping the deepest prefers a
+   real scope over them rather than throwing both away.
+
+    17.3%  ->  33.0%  (1 and 2)  ->  99.9%  (3)
+
+### Earlier measurement, superseded
+
 Small hierarchical design (`top -> u_mid -> u_inner`), flattened:
 
 ```

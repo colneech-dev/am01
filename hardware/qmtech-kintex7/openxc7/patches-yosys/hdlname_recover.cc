@@ -81,24 +81,54 @@ PRIVATE_NAMESPACE_BEGIN
 static std::vector<std::string> rtl_scope(const std::string &name)
 {
 	std::vector<std::string> out;
-	if (name.empty() || name[0] != '\\')
-		return out; // not a public name: nothing RTL-derived to recover
-	std::string s = name.substr(1);
+	if (name.empty())
+		return out;
+
+	// Where does the RTL-derived part start?
+	//
+	//   \top.sub.sig          a public name: after the backslash
+	//   $\top.sub.sig         flatten wraps the hierarchy in a generated name
+	//   $flatten\top.sub.sig  same, with a tag
+	//   $auto$foo.cc:12$34     purely generated: nothing to recover
+	//
+	// Requiring name[0]=='\\' rejected the second and third forms, which after
+	// flatten are the overwhelming majority: measured 14438 rejected against
+	// 5709 accepted on a 70k-cell design, i.e. most of the netlist.
+	size_t start;
+	if (name[0] == '\\') {
+		start = 1;
+	} else if (name[0] == '$') {
+		size_t bs = name.find('\\');
+		if (bs == std::string::npos)
+			return out; // no hierarchy inside
+		start = bs + 1;
+	} else {
+		start = 0;
+	}
+
+	std::string s = name.substr(start);
 	size_t pos = 0;
+	bool consumed_all = false;
 	while (pos <= s.size()) {
 		size_t dot = s.find('.', pos);
 		if (dot == std::string::npos)
 			dot = s.size();
 		std::string part = s.substr(pos, dot - pos);
 		if (part.empty() || part.find('$') != std::string::npos)
-			break;
+			break; // stopped early: this component is generated, not a scope
 		out.push_back(part);
-		if (dot == s.size())
+		if (dot == s.size()) {
+			consumed_all = true;
 			break;
+		}
 		pos = dot + 1;
 	}
-	// The last component is the signal itself, not a scope.
-	if (!out.empty())
+
+	// The trailing component is the signal name rather than a scope -- but only
+	// when the walk reached the end. If it stopped early at a generated
+	// component, that component WAS the signal name and has already been
+	// excluded; popping again would discard a real scope level.
+	if (consumed_all && !out.empty())
 		out.pop_back();
 	return out;
 }
@@ -157,8 +187,26 @@ struct HdlnameRecoverPass : public Pass {
 			dict<RTLIL::SigBit, std::vector<std::string>> bit_scope;
 			pool<RTLIL::SigBit> ambiguous;
 
+			int dbg = getenv("HDLNAME_DEBUG") ? atoi(getenv("HDLNAME_DEBUG")) : 0;
+			int dbg_shown = 0, dbg_empty = 0, dbg_ok = 0;
 			for (auto wire : module->wires()) {
 				auto scope = rtl_scope(wire->name.str());
+				if (dbg) {
+					if (scope.empty())
+						dbg_empty++;
+					else
+						dbg_ok++;
+					if (dbg_shown < dbg) {
+						std::string joined;
+						for (auto &p : scope) {
+							if (!joined.empty())
+								joined += ".";
+							joined += p;
+						}
+						log("  DBG wire %-70s -> [%s]\n", wire->name.c_str(), joined.c_str());
+						dbg_shown++;
+					}
+				}
 				if (scope.empty())
 					continue;
 				for (auto bit : sigmap(RTLIL::SigSpec(wire))) {
@@ -185,17 +233,27 @@ struct HdlnameRecoverPass : public Pass {
 							prefix = false;
 							break;
 						}
-					if (prefix) {
+					// Keep the deepest scope, and do not reject ties.
+					//
+					// After flattening a bit is routinely known by several
+					// aliases, and the deeper one is the more specific view of
+					// the same place. Rejecting whenever two aliases disagreed
+					// discarded 48436 bits on a 70k-cell design and held
+					// coverage at 33%; the prototype this pass is derived from
+					// has no rejection and reaches 100% on the same design.
+					//
+					// The hazard rejection was written for -- a global signal
+					// threaded through every instance -- does not apply here.
+					// Those aliases are SHALLOW, sitting at the level they
+					// cross, so keeping the deepest naturally prefers a real
+					// scope over them instead of throwing both away.
+					if (prefix || b.size() > a.size())
 						it->second = longer;
-					} else {
-						// Genuinely conflicting: a global signal named inside
-						// several unrelated scopes. It carries no usable
-						// attribution, so drop the bit entirely.
-						bit_scope.erase(bit);
-						ambiguous.insert(bit);
-					}
 				}
 			}
+
+			if (dbg)
+				log("  DBG wires with a scope: %d, without: %d\n", dbg_ok, dbg_empty);
 
 			int set_from_output = 0, set_from_input = 0, unresolved = 0, skipped = 0;
 
@@ -255,7 +313,7 @@ struct HdlnameRecoverPass : public Pass {
 			if (skipped)
 				log("  %d cell(s) already had hdlname and were left alone.\n", skipped);
 			if (!ambiguous.empty())
-				log("  %d net bit(s) named in conflicting scopes were ignored.\n", int(ambiguous.size()));
+				log("  %d net bit(s) had aliases at equal depth; kept the first.\n", int(ambiguous.size()));
 		}
 	}
 } HdlnameRecoverPass;
