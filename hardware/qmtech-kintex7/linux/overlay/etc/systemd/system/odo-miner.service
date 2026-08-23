@@ -1,0 +1,65 @@
+# AM01 OdoCrypt Mining Daemon (GPIO-connected FPGA variant)
+#
+# Systemd unit to run the mining daemon on Raspberry Pi CM4.
+#
+# Installation:
+#   - This file is deployed by Buildroot overlay
+#   - Enable: systemctl enable odo-miner
+#   - Start: systemctl start odo-miner
+#   - Status: systemctl status odo-miner
+#   - Logs: journalctl -u odo-miner -f
+
+[Unit]
+Description=AM01 OdoCrypt Mining Daemon (GPIO FPGA)
+Documentation=https://github.com/colneech-dev/am01
+After=network-online.target local-fs.target syslog.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Runtime configuration from /etc/default/odo-miner
+EnvironmentFile=-/etc/default/odo-miner
+
+# Run as dedicated user (create with: useradd --system --no-create-home --shell /nologin miner)
+User=${MINER_USER:-miner}
+Group=${MINER_GROUP:-miner}
+
+# Working directory
+WorkingDirectory=${WORK_DIR:-/opt/odo-miner}
+
+# Pre-start check: ensure binary exists
+ExecStartPre=/usr/bin/test -x ${EXECUTABLE:-/usr/local/bin/odo-miner}
+
+# Runtime directory for status files (odo-ui, odo-webd read from here)
+RuntimeDirectory=odod
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+
+# Main command: run the daemon with optional config
+ExecStart=${EXECUTABLE:-/usr/local/bin/odo-miner} ${DAEMON_OPTS:-}
+
+# Restart policy: restart on exit, with backoff
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Resource limits
+Nice=5
+IOSchedulingClass=2
+IOSchedulingPriority=4
+LimitNOFILE=65536
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=odo-miner
+
+# Shutdown behavior
+KillMode=control-group
+TimeoutStartSec=120
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

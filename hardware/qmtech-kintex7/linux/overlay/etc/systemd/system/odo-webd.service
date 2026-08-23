@@ -1,0 +1,47 @@
+# AM01 OdoCrypt Web Dashboard Server
+#
+# Serves mining status JSON and web UI on HTTP (port 8080)
+# Depends on odo-miner daemon (reads status files from /run/odod/)
+
+[Unit]
+Description=AM01 Web Dashboard Server
+Documentation=https://github.com/colneech-dev/am01
+After=network-online.target local-fs.target
+BindsTo=odo-miner.service
+Before=odo-ui.service
+
+[Service]
+Type=simple
+
+# Configuration
+EnvironmentFile=-/etc/default/odo-webd
+
+# User/group (same as miner)
+User=${WEBD_USER:-miner}
+Group=${WEBD_GROUP:-miner}
+
+# Working directory
+WorkingDirectory=${WEBD_DIR:-/opt/odo-webd}
+
+# Binary
+ExecStart=${WEBD_BIN:-/usr/local/bin/odo-webd} ${WEBD_OPTS:--p 8080}
+
+# Restart on failure
+Restart=on-failure
+RestartSec=2
+
+# Resource limits
+Nice=10
+LimitNOFILE=4096
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=odo-webd
+
+# Graceful shutdown
+KillMode=mixed
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

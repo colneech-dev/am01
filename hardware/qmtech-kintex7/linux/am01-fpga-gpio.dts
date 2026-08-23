@@ -1,0 +1,64 @@
+/*
+ * Device-tree overlay for AM01 FPGA GPIO interface on Raspberry Pi CM4
+ *
+ * Defines the 28-pin GPIO parallel bus used to communicate with the
+ * QMTECH Kintex-7 FPGA running the OdoCrypt miner. This overlay adds:
+ * - GPIO pin reservations (prevents kernel from using them for other purposes)
+ * - Optional UIO device node (for interrupt-driven mining)
+ * - Pin function definitions
+ *
+ * Apply with: dtoverlay=am01-fpga-gpio
+ * Or copy to /boot/overlays/ and edit /boot/config.txt to include the line above.
+ */
+
+/dts-v1/;
+/plugin/;
+
+/{
+    compatible = "brcm,bcm2711";
+
+    fragment@0 {
+        target = <&gpio>;
+        __overlay__ {
+            /* Reserve GPIO0-23 for the FPGA bus. These are the 28 lines:
+             * GPIO0-15: data bus (16 bits)
+             * GPIO16-19: address bus (4 bits)
+             * GPIO20: WR_N (write strobe, active low)
+             * GPIO21: RD_N (read strobe, active low)
+             * GPIO22: READY (handshake ready signal)
+             * GPIO23: IRQ (found nonce interrupt)
+             *
+             * The kernel gpio-ranges mechanism reserves them from other drivers.
+             */
+            am01_gpio: am01_gpio {
+                pins = "gpio0 gpio1 gpio2 gpio3 gpio4 gpio5 gpio6 gpio7 "
+                       "gpio8 gpio9 gpio10 gpio11 gpio12 gpio13 gpio14 gpio15 "
+                       "gpio16 gpio17 gpio18 gpio19 "
+                       "gpio20 gpio21 gpio22 gpio23";
+                function = "gpio";
+            };
+        };
+    };
+
+    /* Optional: UIO device node for interrupt-driven mining.
+     * Uncomment if the FPGA's IRQ line is wired and you want kernel-level
+     * interrupt handling instead of polling from userspace. */
+    /*
+    fragment@1 {
+        target-path = "/";
+        __overlay__ {
+            uio_fpga_miner {
+                compatible = "generic-uio";
+                interrupts = <23 IRQ_TYPE_LEVEL_HIGH>;
+                interrupt-names = "fpga_nonce_ready";
+                status = "okay";
+            };
+        };
+    };
+    */
+
+    /* Fragment @2: disable UART0 if you want GPIO pins 14/15 for other use.
+     * (Raspberry Pi defaults to UART on GPIO14/15 for console, which can
+     * conflict with mining-specific GPIO requirements -- this is typically
+     * not needed since GPIO20-23 provide the IRQ/control signals.) */
+};

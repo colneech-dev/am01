@@ -1,0 +1,171 @@
+# AM01 OdoCrypt Mining Stack — Buildroot Cross-Compile Makefile
+#
+# Builds the complete AM01 mining stack for Raspberry Pi CM4 + Kintex-7 FPGA:
+#   - odo-miner (mining daemon, core)
+#   - odo-webd (web dashboard server)
+#   - odo-ui (touch screen UI, optional)
+#
+# Usage:
+#   make                                    # Build all binaries
+#   make odo-miner                          # Build daemon only
+#   make odo-webd                           # Build web server only
+#   make odo-ui                             # Build UI only
+#   make install DESTDIR=/path/to/rootfs   # Install to overlay
+#   make clean                              # Clean artifacts
+#
+# Assumes odo-miner-cyclonev is at ../../../odo-miner-cyclonev,
+# or set ODO_REPO=/path/to/odo-miner-cyclonev before calling make.
+
+# =========================================================================
+# Configuration
+# =========================================================================
+
+# Location of repositories
+ODO_REPO ?= $(abspath ../../../../odo-miner-cyclonev)
+ODO_HPS := $(ODO_REPO)/hps
+ODO_HDL := $(ODO_REPO)/hdl/odocrypt
+ODO_SW := $(ODO_REPO)/sw
+ODO_CRYPTO := $(ODO_REPO)/third_party/odo-miner/src/crypto
+GPIO_BUS := ../cm4-firmware
+
+# Installation prefix
+PREFIX ?= /usr/local
+DESTDIR ?=
+
+# Compiler toolchain (set by Buildroot, or use system defaults)
+CC ?= gcc
+PKG_CONFIG ?= pkg-config
+CFLAGS ?= -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
+LDFLAGS ?=
+
+# Base compiler flags
+# Include paths: local, odo-miner-cyclonev sources, AM01 gpio bus, and keccak headers
+override CFLAGS += -I. -I$(ODO_HPS) -I$(ODO_HDL) -I$(ODO_CRYPTO) -I$(GPIO_BUS)
+
+# Base libraries (for all binaries)
+LIBS_BASE := -lpthread
+
+# am01_gpio_bus.c talks to the FPGA through libgpiod
+LIBS_MINER := $(LIBS_BASE) $(shell $(PKG_CONFIG) --libs libgpiod 2>/dev/null || echo "-lgpiod")
+
+# =========================================================================
+# Source file groups
+# =========================================================================
+
+# Crypto (OdoCrypt + Keccak SHA-3)
+SOURCES_CRYPTO := \
+	$(ODO_HPS)/odocrypt_state.c \
+	$(ODO_HPS)/odocrypt_header.c
+
+SOURCES_KECCAK := \
+	$(ODO_CRYPTO)/KeccakP-800-reference.c
+
+# Stratum (pool communication)
+SOURCES_STRATUM := \
+	$(ODO_HPS)/stratum.c \
+	$(ODO_HPS)/job.c
+
+# =====================================================================
+# Binary: odo-miner (core mining daemon)
+# =====================================================================
+
+SOURCES_DAEMON := \
+	$(ODO_HPS)/miner_pipe.c \
+	$(ODO_HPS)/thermal.c \
+	miner_io_gpio.c \
+	$(GPIO_BUS)/am01_gpio_bus.c
+
+OBJECTS_DAEMON := $(SOURCES_DAEMON:.c=.o) \
+	$(SOURCES_CRYPTO:.c=.o) \
+	$(SOURCES_KECCAK:.c=.o) \
+	$(SOURCES_STRATUM:.c=.o)
+
+# =====================================================================
+# Binary: odo-webd (HTTP status server)
+# =====================================================================
+
+SOURCES_WEBD := $(ODO_SW)/odo-webd/odo_webd.c
+
+OBJECTS_WEBD := $(SOURCES_WEBD:.c=.o)
+
+LIBS_WEBD := $(LIBS_BASE)
+
+# =====================================================================
+# Binary: odo-ui (touch screen UI, optional)
+# =====================================================================
+
+SOURCES_UI := \
+	$(ODO_SW)/odo-ui/odo_ui.c \
+	$(ODO_SW)/odo-ui/odoui_gfx.c
+
+OBJECTS_UI := $(SOURCES_UI:.c=.o)
+
+# UI needs: libpng, freetype2, fontconfig for font/image rendering
+override CFLAGS += $(shell $(PKG_CONFIG) --cflags libgpiod libpng freetype2 fontconfig 2>/dev/null || echo "")
+LIBS_UI := $(LIBS_BASE) $(shell $(PKG_CONFIG) --libs libpng freetype2 fontconfig 2>/dev/null || echo "-lpng -lfreetype -lfontconfig")
+
+# =====================================================================
+# Targets
+# =====================================================================
+
+.PHONY: all clean install help
+.PHONY: odo-miner odo-webd odo-ui
+
+# Default: build all
+all: odo-miner odo-webd odo-ui
+
+# Mining daemon (core)
+odo-miner: $(OBJECTS_DAEMON)
+	@echo "[LD] $@"
+	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS_MINER)
+	@echo "✓ Built: $@"
+
+# Web status server
+odo-webd: $(OBJECTS_WEBD)
+	@echo "[LD] $@"
+	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS_WEBD)
+	@echo "✓ Built: $@"
+
+# Touch UI (framebuffer + touch input)
+odo-ui: $(OBJECTS_UI)
+	@echo "[LD] $@"
+	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS_UI)
+	@echo "✓ Built: $@"
+
+%.o: %.c
+	@echo "[CC] $<"
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+clean:
+	rm -f odo-miner odo-webd odo-ui
+	find . $(ODO_REPO) -name "*.o" -delete 2>/dev/null || true
+	@echo "Cleaned."
+
+# Install binaries to rootfs overlay
+install: all
+	install -D -m 0755 odo-miner $(DESTDIR)$(PREFIX)/bin/odo-miner
+	install -D -m 0755 odo-webd $(DESTDIR)$(PREFIX)/bin/odo-webd
+	install -D -m 0755 odo-ui $(DESTDIR)$(PREFIX)/bin/odo-ui
+	@echo "✓ Installed binaries to $(DESTDIR)$(PREFIX)/bin/"
+
+# Help
+help:
+	@echo "AM01 Mining Stack Makefile"
+	@echo ""
+	@echo "Targets:"
+	@echo "  all               Build all binaries (odo-miner, odo-webd, odo-ui)"
+	@echo "  odo-miner         Mining daemon (GPU I/O)"
+	@echo "  odo-webd          Web dashboard HTTP server"
+	@echo "  odo-ui            Touch UI (requires framebuffer + touch driver)"
+	@echo "  install           Install to DESTDIR+PREFIX"
+	@echo "  clean             Remove build artifacts"
+	@echo ""
+	@echo "Variables:"
+	@echo "  ODO_REPO          Path to odo-miner-cyclonev"
+	@echo "  PREFIX            Install prefix (default /usr/local)"
+	@echo "  DESTDIR           Root for installation (cross-compile)"
+	@echo ""
+	@echo "Dependencies:"
+	@echo "  odo-miner:  libpthread, libgpiod"
+	@echo "  odo-webd:   libpthread"
+	@echo "  odo-ui:     libpng, freetype2, fontconfig, framebuffer, touch driver"

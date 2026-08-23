@@ -1,0 +1,43 @@
+# AM01 Mining Daemon Configuration
+#
+# Source: Buildroot overlay (edit on the running system or add to overlay)
+# Location: /etc/default/odo-miner
+# Used by: systemd odo-miner.service
+#
+# To apply changes:
+#   systemctl restart odo-miner
+
+# Miner user and group (must exist; create with: useradd --system miner)
+MINER_USER=miner
+MINER_GROUP=miner
+
+# Working directory
+WORK_DIR=/opt/odo-miner
+
+# Path to the odo-miner binary
+EXECUTABLE=/usr/local/bin/odo-miner
+
+# Daemon options: stratum server, worker, optional password
+# Format: --host POOL_HOST --port POOL_PORT --worker WALLET.WORKER [--pass PASSWORD]
+#
+# Example for mining testnet (public pool):
+#   DAEMON_OPTS="--host test-pool.example.com --port 3333 --worker YOUR_WALLET.am01-cm4"
+#
+# Example for mainnet:
+#   DAEMON_OPTS="--host mainnet-pool.example.com --port 3334 --worker YOUR_WALLET.am01"
+#
+# Leave empty to disable mining (useful for testing):
+#   DAEMON_OPTS=""
+
+DAEMON_OPTS="--host test-pool.example.com --port 3333 --worker YOUR_WALLET.am01"
+
+# Optional: DS18B20 temperature sensor for fan control
+# Leave empty if not connected
+TEMP_SENSOR_ID=
+
+# Optional: GPIO pin for fan PWM control (BCM GPIO number)
+# Leave empty to disable fan control
+FAN_PWM_GPIO=
+
+# Logging level (if supported by build)
+LOG_LEVEL=INFO

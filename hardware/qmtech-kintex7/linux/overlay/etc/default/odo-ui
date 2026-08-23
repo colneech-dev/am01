@@ -1,0 +1,44 @@
+# AM01 Touch Screen UI Configuration
+#
+# Source: Buildroot overlay
+# Location: /etc/default/odo-ui
+# Used by: systemd odo-ui.service
+#
+# REQUIREMENTS:
+#   - Framebuffer device (/dev/fb0) — HDMI or parallel LCD display
+#   - Touch input device (/dev/input/eventN) — capacitive/resistive touch screen
+#   - libpng, freetype2, fontconfig libraries (included in Buildroot)
+#
+# If no display/touch hardware: disable this service
+#   systemctl disable odo-ui
+#   Use odo-webd (web dashboard) instead
+
+# UI user/group (needs access to /dev/fb0 and /dev/input/)
+# Typically 'root' or a group with input permissions
+UI_USER=root
+UI_GROUP=root
+
+# Working directory
+UI_DIR=/opt/odo-ui
+
+# Path to binary
+UI_BIN=/usr/local/bin/odo-ui
+
+# Command-line options:
+#   -fb PATH      Framebuffer device (default: /dev/fb0)
+#   -touch PATH   Touch input device (default: /dev/input/event0)
+#   -bg PATH      Background image (PNG)
+#   -font PATH    Font file (TTF)
+#
+# Common display mappings:
+#   Raspberry Pi HDMI (1920x1080):     /dev/fb0
+#   Parallel LCD on GPIO:              depends on driver; often /dev/fb0
+#   Touch input:                       /dev/input/event0 (adjust if multiple inputs)
+
+UI_OPTS="-fb /dev/fb0 -touch /dev/input/event0"
+
+# Optional: Background image (path on rootfs)
+# UI_BG=/etc/odo-ui/bg.png
+
+# Optional: Font (path to TTF)
+# UI_FONT=/usr/share/fonts/dejavu/DejaVuSans.ttf

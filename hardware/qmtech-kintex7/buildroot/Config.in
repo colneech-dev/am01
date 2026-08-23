@@ -1,0 +1,1 @@
+source "$BR2_EXTERNAL_AM01_PATH/package/odo-mining-stack/Config.in"

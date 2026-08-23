@@ -1,0 +1,82 @@
+# AM01 Miner on Raspberry Pi Compute Module 4 (CM4), aarch64
+#
+# Build with the AM01 BR2_EXTERNAL tree, which supplies the odo-mining-stack
+# package (odo-miner, odo-webd, odo-ui):
+#
+#   make BR2_EXTERNAL=<repo>/hardware/qmtech-kintex7/buildroot \
+#        defconfig BR2_DEFCONFIG=<repo>/hardware/qmtech-kintex7/linux/buildroot_cm4_defconfig
+#   make
+
+# Architecture
+BR2_aarch64=y
+BR2_cortex_a72=y
+
+# Toolchain
+BR2_TOOLCHAIN_BUILDROOT=y
+BR2_TOOLCHAIN_BUILDROOT_GLIBC=y
+BR2_TOOLCHAIN_BUILDROOT_CXX=y
+
+# Kernel headers must be pinned to the Raspberry Pi kernel series below.
+# The "custom kernel headers series" choice otherwise defaults to 2.6.x and
+# the toolchain aborts with "expected 2.6.x, got 6.6.x".
+BR2_KERNEL_HEADERS_AS_KERNEL=y
+BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_6=y
+
+# Kernel: the Raspberry Pi tree; mainline has no bcm2711 defconfig.
+# BR2_LINUX_KERNEL_DEFCONFIG omits the _defconfig suffix -- Buildroot appends it.
+BR2_LINUX_KERNEL=y
+BR2_LINUX_KERNEL_CUSTOM_TARBALL=y
+BR2_LINUX_KERNEL_CUSTOM_TARBALL_LOCATION="https://github.com/raspberrypi/linux/archive/refs/heads/rpi-6.6.y.tar.gz"
+BR2_LINUX_KERNEL_DEFCONFIG="bcm2711"
+BR2_LINUX_KERNEL_IMAGE=y
+BR2_LINUX_KERNEL_DTS_SUPPORT=y
+BR2_LINUX_KERNEL_INTREE_DTS_NAME="broadcom/bcm2711-rpi-cm4"
+
+# Filesystem
+BR2_TARGET_ROOTFS_TAR_GZIP=y
+
+# System
+BR2_TARGET_GENERIC_HOSTNAME="am01-miner"
+BR2_TARGET_GENERIC_ISSUE=y
+BR2_TARGET_GENERIC_ROOT_PASSWD="changeme"
+BR2_SYSTEM_BIN_SH_BASH=y
+
+# Busybox
+BR2_PACKAGE_BUSYBOX=y
+
+# Essential utilities
+BR2_PACKAGE_COREUTILS=y
+BR2_PACKAGE_GREP=y
+BR2_PACKAGE_SED=y
+BR2_PACKAGE_FINDUTILS=y
+BR2_PACKAGE_UTIL_LINUX=y
+BR2_PACKAGE_WHICH=y
+BR2_PACKAGE_SCREEN=y
+
+# Networking
+BR2_PACKAGE_OPENSSH=y
+BR2_PACKAGE_NETCAT=y
+BR2_PACKAGE_WGET=y
+
+# Debugging
+BR2_PACKAGE_STRACE=y
+BR2_PACKAGE_NANO=y
+BR2_PACKAGE_LESS=y
+BR2_PACKAGE_HTOP=y
+
+# Hardware abstraction
+BR2_PACKAGE_LIBGPIOD=y
+BR2_PACKAGE_LIBGPIOD_TOOLS=y
+BR2_PACKAGE_I2C_TOOLS=y
+
+# JSON parsing
+BR2_PACKAGE_JANSSON=y
+
+# Systemd
+BR2_INIT_SYSTEMD=y
+
+# AM01 mining stack (pulls in libgpiod, libpng, freetype, fontconfig)
+BR2_PACKAGE_ODO_MINING_STACK=y
+
+# Rootfs overlay: systemd units and /etc/default templates
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_AM01_PATH)/../linux/overlay"
