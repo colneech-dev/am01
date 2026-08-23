@@ -50,7 +50,8 @@ done
 
 # ---------------------------------------------------------------- step 1
 log "STEP 1: hdlname_recover coverage on the real netlist"
-YOSYS=/home/colin/src/yosys-upstream/build/yosys
+. "$(dirname "$0")/toolchain.sh"
+resolve_tool YOSYS yosys || true
 $YOSYS -p "read_verilog -sv ../hdl/am01_qmtech_top_nm1.v; \
            read_verilog -sv ../hdl/clk_gen_hash.v; \
            read_verilog -sv ../hdl/odocrypt_gpio_wrapper.v; \
@@ -83,7 +84,7 @@ PY
 
 # ---------------------------------------------------------------- step 2
 log "STEP 2: native floorplan on the real netlist (no scripts)"
-NEXTPNR=/home/colin/src/nextpnr-xilinx-heatmap/build/nextpnr-xilinx
+resolve_tool NEXTPNR nextpnr-xilinx || true
 NEXTPNR_ISO_HEURISTIC=1 $NEXTPNR \
     --chipdb "$PWD/chipdb/xc7k325tffg676-1.bin" \
     --json out_nm1_nosr/am01_qmtech_top_hdl.json \

@@ -33,15 +33,16 @@ SRC_DIR="${SRC_DIR:-$PWD/.openxc7-src}"
 #            from SITEWIRE/SLICE_X4Y83/DQ to SITEWIRE/SLICE_X4Y83/D1
 # -- a flip-flop output feeding a LUT input in the same slice, which main routes
 # without complaint. Do not pin to it.
-LOCAL_NEXTPNR_SRC=/home/colin/src/nextpnr-xilinx-heatmap
+. "$(dirname "$0")/toolchain.sh"
+LOCAL_NEXTPNR_SRC="${NEXTPNR_SRC:-}"
 NEXTPNR_TAG="${NEXTPNR_TAG:-0.9.2}"
 
 # bbasm turns the .bba text export into the binary chipdb. Any bbasm
 # works (it is a dumb assembler); apio ships one, or build from source.
 # bbasm must match the nextpnr that will READ the chipdb: the binary format is
 # tied to the tool version. Prefer the local build we now run, then PATH.
-LOCAL_BBASM=/home/colin/src/nextpnr-xilinx-heatmap/build/bbasm
-BBASM="${BBASM:-$( [ -x "$LOCAL_BBASM" ] && echo "$LOCAL_BBASM" || command -v bbasm || echo /root/.apio/packages/openxc7/bin/bbasm )}"
+# bbasm must match the nextpnr that reads the chipdb -- see the note above.
+resolve_tool BBASM bbasm "${LOCAL_NEXTPNR_SRC:+$LOCAL_NEXTPNR_SRC/build/bbasm}" || true
 
 echo "==> device      : $DEVICE"
 echo "==> output dir  : $OUT_DIR"

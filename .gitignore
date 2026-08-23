@@ -6,3 +6,6 @@ webtalk*
 *.jou
 vivado*.log
 vivado*.str
+
+# Per-machine tool locations (see hardware/qmtech-kintex7/openxc7/toolchain.sh)
+toolchain.local

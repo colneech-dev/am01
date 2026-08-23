@@ -59,7 +59,8 @@ REPO="$SRC_DIR/nextpnr-xilinx"
 # NEXTPNR_TAG is only a fallback for when there is no local tree. 0.9.2 cannot
 # route -- it fails even the blinky smoke test, on a flip-flop output feeding a
 # LUT input in the same slice -- so do not pin to it.
-LOCAL_NEXTPNR_SRC=/home/colin/src/nextpnr-xilinx-heatmap
+. "$(dirname "$0")/toolchain.sh"
+LOCAL_NEXTPNR_SRC="${NEXTPNR_SRC:-}"
 NEXTPNR_TAG="${NEXTPNR_TAG:-0.9.2}"
 JOBS="${JOBS:-$(nproc)}"
 

@@ -116,10 +116,12 @@ fi
 SRL="${SRL:-1}"
 [ "$SRL" = "1" ] && SRL_ARG="" || SRL_ARG="-nosrl"
 
-LOCAL_YOSYS=/home/colin/src/yosys-upstream/build/yosys
-LOCAL_NEXTPNR=/home/colin/src/nextpnr-xilinx-heatmap/build/nextpnr-xilinx
-YOSYS="${YOSYS:-$( [ -x "$LOCAL_YOSYS" ] && echo "$LOCAL_YOSYS" || command -v yosys || true )}"
-NEXTPNR="${NEXTPNR:-$( [ -x "$LOCAL_NEXTPNR" ] && echo "$LOCAL_NEXTPNR" || command -v nextpnr-xilinx || true )}"
+# Tool discovery lives in toolchain.sh: explicit env var, then toolchain.local
+# (gitignored, per-machine), then PATH, then conventional install locations.
+# No machine-specific path belongs in a committed script.
+. "$(dirname "$0")/toolchain.sh"
+resolve_tool YOSYS   yosys          || true
+resolve_tool NEXTPNR nextpnr-xilinx || true
 FASM2FRAMES="${FASM2FRAMES:-$(command -v fasm2frames || true)}"
 XC7FRAMES2BIT="${XC7FRAMES2BIT:-$(command -v xc7frames2bit || true)}"
 

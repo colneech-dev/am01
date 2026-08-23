@@ -42,7 +42,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-NEXTPNR="${NEXTPNR:-/home/colin/src/nextpnr-xilinx-heatmap/build/nextpnr-xilinx}"
+. "$(dirname "$0")/toolchain.sh"
+resolve_tool NEXTPNR nextpnr-xilinx || true
 PART="${PART:-xc7k325tffg676-1}"
 CHIPDB="${CHIPDB:-$PWD/chipdb/$PART.bin}"
 XDC="${XDC:-../xdc/qmtech_xc7k325t_pinout.xdc}"

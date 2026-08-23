@@ -26,7 +26,9 @@
 set -u
 cd "$(dirname "$0")"
 
-NPNR=/home/colin/src/nextpnr-xilinx-heatmap/build/nextpnr-xilinx
+. "$(dirname "$0")/toolchain.sh"
+resolve_tool NEXTPNR nextpnr-xilinx || true
+NPNR="$NEXTPNR"
 CHIPDB=chipdb/xc7k325tffg676-1.bin
 JSON=out_nm1_nosr/am01_qmtech_top.json
 XDC=../xdc/qmtech_xc7k325t_pinout.xdc
