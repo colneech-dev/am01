@@ -39,14 +39,33 @@ CFLAGS ?= -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
 LDFLAGS ?=
 
 # Base compiler flags
-# Include paths: local, odo-miner-cyclonev sources, AM01 gpio bus, and keccak headers
-override CFLAGS += -I. -I$(ODO_HPS) -I$(ODO_HDL) -I$(ODO_CRYPTO) -I$(GPIO_BUS)
+# Include paths: local, odo-miner-cyclonev sources, AM01 gpio bus, keccak
+# headers, and the stb single-header libs vendored alongside odo-ui.
+override CFLAGS += -I. -I$(ODO_HPS) -I$(ODO_HDL) -I$(ODO_CRYPTO) -I$(GPIO_BUS) \
+	-I$(ODO_SW)/odo-ui/stb
 
 # Base libraries (for all binaries)
 LIBS_BASE := -lpthread
 
 # am01_gpio_bus.c talks to the FPGA through libgpiod
 LIBS_MINER := $(LIBS_BASE) $(shell $(PKG_CONFIG) --libs libgpiod 2>/dev/null || echo "-lgpiod")
+
+# =========================================================================
+# Object layout
+# =========================================================================
+#
+# Objects are built into OBJ_DIR, never alongside their sources. The sources
+# live in sibling repositories (odo-miner-cyclonev, cm4-firmware); writing
+# .o files there pollutes those trees, and worse, a stale object from an
+# earlier build for a different architecture gets silently reused -- which
+# is how an x86-64 odo_webd.o ended up being fed to the aarch64 linker
+# ("Relocations in generic ELF (EM: 62)").
+#
+# Basenames across all source groups are unique, so flattening is safe.
+
+OBJ_DIR ?= obj
+
+objects = $(addprefix $(OBJ_DIR)/,$(notdir $(1:.c=.o)))
 
 # =========================================================================
 # Source file groups
@@ -75,10 +94,8 @@ SOURCES_DAEMON := \
 	miner_io_gpio.c \
 	$(GPIO_BUS)/am01_gpio_bus.c
 
-OBJECTS_DAEMON := $(SOURCES_DAEMON:.c=.o) \
-	$(SOURCES_CRYPTO:.c=.o) \
-	$(SOURCES_KECCAK:.c=.o) \
-	$(SOURCES_STRATUM:.c=.o)
+OBJECTS_DAEMON := $(call objects,$(SOURCES_DAEMON) $(SOURCES_CRYPTO) \
+	$(SOURCES_KECCAK) $(SOURCES_STRATUM))
 
 # =====================================================================
 # Binary: odo-webd (HTTP status server)
@@ -86,7 +103,7 @@ OBJECTS_DAEMON := $(SOURCES_DAEMON:.c=.o) \
 
 SOURCES_WEBD := $(ODO_SW)/odo-webd/odo_webd.c
 
-OBJECTS_WEBD := $(SOURCES_WEBD:.c=.o)
+OBJECTS_WEBD := $(call objects,$(SOURCES_WEBD))
 
 LIBS_WEBD := $(LIBS_BASE)
 
@@ -98,11 +115,12 @@ SOURCES_UI := \
 	$(ODO_SW)/odo-ui/odo_ui.c \
 	$(ODO_SW)/odo-ui/odoui_gfx.c
 
-OBJECTS_UI := $(SOURCES_UI:.c=.o)
+OBJECTS_UI := $(call objects,$(SOURCES_UI))
 
 # UI needs: libpng, freetype2, fontconfig for font/image rendering
 override CFLAGS += $(shell $(PKG_CONFIG) --cflags libgpiod libpng freetype2 fontconfig 2>/dev/null || echo "")
-LIBS_UI := $(LIBS_BASE) $(shell $(PKG_CONFIG) --libs libpng freetype2 fontconfig 2>/dev/null || echo "-lpng -lfreetype -lfontconfig")
+# -lm: stb_truetype's rasteriser pulls in sqrt()
+LIBS_UI := $(LIBS_BASE) $(shell $(PKG_CONFIG) --libs libpng freetype2 fontconfig 2>/dev/null || echo "-lpng -lfreetype -lfontconfig") -lm
 
 # =====================================================================
 # Targets
@@ -132,13 +150,21 @@ odo-ui: $(OBJECTS_UI)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS_UI)
 	@echo "✓ Built: $@"
 
-%.o: %.c
+# Let make find the sources by basename, wherever they live.
+ALL_SOURCES := $(SOURCES_DAEMON) $(SOURCES_CRYPTO) $(SOURCES_KECCAK) \
+	$(SOURCES_STRATUM) $(SOURCES_WEBD) $(SOURCES_UI)
+vpath %.c $(sort $(dir $(ALL_SOURCES)))
+
+$(OBJ_DIR):
+	@mkdir -p $@
+
+$(OBJ_DIR)/%.o: %.c | $(OBJ_DIR)
 	@echo "[CC] $<"
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
 	rm -f odo-miner odo-webd odo-ui
-	find . $(ODO_REPO) -name "*.o" -delete 2>/dev/null || true
+	rm -rf $(OBJ_DIR)
 	@echo "Cleaned."
 
 # Install binaries to rootfs overlay
