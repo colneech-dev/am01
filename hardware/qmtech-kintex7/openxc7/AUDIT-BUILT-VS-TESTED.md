@@ -103,6 +103,45 @@ placement-only. Baseline 13045 / 4260448.
 
 ---
 
+## 2a. Complete placer-knob screen (2026-08-24)
+
+Placement-only (`--no-route`), SA refinement final `timing cost` / `wirelen`,
+same netlist `out_nm1_nosr/am01_qmtech_top_v68.json` throughout. Produced by
+`screen_placer_knobs.sh`, `screen_linear_delay.sh`, `screen_wire_demand.sh`.
+
+**These rank candidates. They decide nothing.** `CRIT_DIST_EXP=1.0` tops this
+table and then failed to route, sitting at `overused≈1595` at iteration 31 where
+the baseline was at 6. Only a routed number is a result.
+
+| config | timing cost | wirelen | note |
+|---|---|---|---|
+| `NEXTPNR_CRIT_DIST_EXP=1.0` | **8685** | 4106478 | best screen, **failed to route** |
+| `NEXTPNR_WIRE_DEMAND=1.0` | 10836 | 4180296 | best that also improves both vs baseline; **queued for full route** |
+| `NEXTPNR_HPWL_SCALE_FIX=1` | 11299 | **3986156** | best wirelength; **full route in flight** |
+| `NEXTPNR_SMALL_BETA=0.4` | 11646 | 4249226 | BRAM density; unrouted |
+| `NEXTPNR_WIRE_DEMAND=2.0` | 12894 | 4222197 | threshold too loose |
+| *baseline (no knobs)* | *13045* | *4260448* | reference |
+| `CRIT_DIST_EXP=1.0 + SMALL_BETA=0.4` | 13600 | 4112566 | worse than either alone |
+| `LINEAR_DELAY=1 + CRIT_DIST_EXP=1.0` | 13579 | 4291046 | worse than CDE alone |
+| `NEXTPNR_WIRE_DEMAND=0.5` | 16120 | 4207329 | threshold too tight |
+| `NEXTPNR_CRIT_DIST_EXP=0.5` | 16561 | 4195033 | half-strength worse than baseline |
+| `CRIT_DIST_EXP=1.0 + HPWL_SCALE_FIX=1` | 18027 | 4066191 | worse than either alone |
+| `NEXTPNR_LINEAR_DELAY=1` | 22522 | 4198320 | **worst of all**; refuted |
+
+Two patterns hold across the whole set:
+
+1. **Every combination is worse than its better half alone.** `CDE+HPWL_FIX`
+   18027 against 8685 and 11299; `CDE+SMALL_BETA` 13600 against 8685. These
+   knobs interact destructively, so do not assume additivity when tuning.
+2. **`WIRE_DEMAND` has a real optimum at 1.0**, not a monotonic trend — 2.0 is
+   too loose for any tile to trip, 0.5 tight enough that the spreader thins the
+   whole die.
+
+> **Correction:** `wd05` was reported as 13977 in conversation. That was read
+> mid-run before SA converged; the final value is **16120**. Ranking unchanged.
+
+---
+
 ## 3. Built and BROKEN
 
 | defect | file:line | status |
@@ -183,18 +222,21 @@ must never be reported as a result.
    specific lesson from `CRIT_DIST_EXP`, which won on timing cost and then
    failed to route.
 
-   **Promoted 2026-08-24 on evidence.** Screen so far, against baseline
-   13045 / 4260448:
+   **Promoted 2026-08-24 on evidence.** Full screen table in §2a. Summary,
+   against baseline 13045 / 4260448:
 
    | threshold | timing cost | wirelen |
    |---|---|---|
    | `WIRE_DEMAND=2.0` | 12894 | 4222197 |
    | **`WIRE_DEMAND=1.0`** | **10836** | **4180296** |
+   | `WIRE_DEMAND=0.5` | 16120 | 4207329 |
 
-   `1.0` is the first configuration all session to improve **both** metrics
-   over baseline. It is also the only candidate that is congestion-aware by
-   construction, so unlike `CRIT_DIST_EXP` it should improve routability
-   rather than trade it away. **Full-route `WIRE_DEMAND=1.0` next.**
+   A real optimum at 1.0, not a monotonic trend: 2.0 is too loose for any tile
+   to trip, 0.5 tight enough that the spreader thins the whole die. It is also
+   the only candidate that is congestion-aware by construction, so unlike
+   `CRIT_DIST_EXP` it should improve routability rather than trade it away.
+   **Queued via `queue_wire_demand.sh`**, which waits on the `hpwlfix` FASM
+   (an artefact, not `pgrep` — see the script header for why).
 
 ## Stage B — free measurements that can invalidate later work (hours, no code)
 
