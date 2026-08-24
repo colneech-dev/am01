@@ -177,11 +177,24 @@ must never be reported as a result.
    Gate: does `overused` track the baseline's trajectory (single digits by
    iter 25)? If it sits in the hundreds at iter 30 it will not converge, as
    `CRIT_DIST_EXP` did not. Compare routed Fmax against **89.30**.
-2. **`WIRE_DEMAND` screen at 2.0 / 1.0 / 0.5.** In flight. First ever exercise
-   of in-placement congestion estimation. Read **wirelength** as the
-   routability proxy, not timing cost — that is the specific lesson from
-   `CRIT_DIST_EXP`, which won on timing cost and then failed to route.
-   Full-route the best threshold only.
+2. **`WIRE_DEMAND` screen at 2.0 / 1.0 / 0.5, then FULL-ROUTE the best.**
+   First ever exercise of in-placement congestion estimation. Read
+   **wirelength** as the routability proxy, not timing cost — that is the
+   specific lesson from `CRIT_DIST_EXP`, which won on timing cost and then
+   failed to route.
+
+   **Promoted 2026-08-24 on evidence.** Screen so far, against baseline
+   13045 / 4260448:
+
+   | threshold | timing cost | wirelen |
+   |---|---|---|
+   | `WIRE_DEMAND=2.0` | 12894 | 4222197 |
+   | **`WIRE_DEMAND=1.0`** | **10836** | **4180296** |
+
+   `1.0` is the first configuration all session to improve **both** metrics
+   over baseline. It is also the only candidate that is congestion-aware by
+   construction, so unlike `CRIT_DIST_EXP` it should improve routability
+   rather than trade it away. **Full-route `WIRE_DEMAND=1.0` next.**
 
 ## Stage B — free measurements that can invalidate later work (hours, no code)
 
@@ -247,14 +260,25 @@ must never be reported as a result.
      datapath gets the same broadcast.
 
    Order of attack:
-   1. **Check whether `dfflegalize` needed to do this at all.** `TESTS-TO-RUN.md`
-      T15 records "all FFs already CE=1/R=0". If accurate, this legalisation may
-      be avoidable work, and not creating the 640-load net beats replicating it.
-   2. **A `maxfanout`-style yosys pass**: replicate any driver above a fanout
-      threshold and partition its loads. Self-contained, well-understood, not
-      AM01-specific, and absent from both yosys and nextpnr. Vivado's
-      `phys_opt_design` does exactly this, which is consistent with it reaching
-      158.81 MHz on our netlist.
+
+   **9a. Check whether `dfflegalize` needed to do this at all.** The 640 loads
+   are LUT3 `I2` pins implementing an enable that `FDRE` has a native `CE` pin
+   for. If that layer is avoidable, it removes a whole logic level from the
+   critical path, and **not creating** the net beats replicating it.
+
+   > `TESTS-TO-RUN.md` T15 records "all FFs already CE=1/R=0". **Re-verify that
+   > claim before relying on it** — `fanout_probe.py` shows this net driving
+   > **2 FDREs on port `R`**, so not every FF has `R=0`. The T15 note is at
+   > least incomplete.
+
+   **9b. A `maxfanout`-style yosys pass**: replicate any driver above a fanout
+   threshold and partition its loads. Self-contained, well-understood, not
+   AM01-specific, and absent from both yosys and nextpnr. Vivado's
+   `phys_opt_design` does exactly this, which is consistent with it reaching
+   158.81 MHz on our netlist.
+
+   **9b is still required even if 9a lands** — removing the LUT3 layer removes
+   a logic level but does not reduce the fanout.
 
    **Caveat to hold:** 644 fanout is *Vivado's* bottleneck. nextpnr's own
    89.30 MHz run is limited by a different net (BRAM -> LUT,
@@ -327,3 +351,19 @@ must never be reported as a result.
   optimisation with no Fmax effect either way.
 - **Chase `budget 0.000000`.** The HeAP placer never reads budgets;
   `assign_budget` runs at the first line of `Arch::route()`, after placement.
+- **Edit `encrypt.v` or `odo_gen` to fix the 644-fanout net.** The fanout does
+  not exist in the RTL — it is manufactured by `dfflegalize` during synthesis
+  (§7 item 9). An RTL change would measure no effect.
+
+---
+
+## Ordering changes since first draft
+
+Kept so the reasoning is auditable rather than silently rewritten.
+
+| change | why |
+|---|---|
+| item 9 recast from an RTL edit to a **tool fix**, split 9a/9b | `fanout_probe.py` showed the 644 fanout is created by `dfflegalize`; RTL fanout is 1 |
+| 9a (`dfflegalize` necessity) **moved ahead of** 9b (replication pass) | cheap, and if the LUT3 layer is avoidable the net is never created |
+| `WIRE_DEMAND` promoted from screen curiosity to **next full route** | `WIRE_DEMAND=1.0` is the first config to beat baseline on timing cost *and* wirelength |
+| T15's "all FFs already CE=1/R=0" flagged as **unverified** | contradicted by the probe: 2 FDREs take the net on port `R` |
