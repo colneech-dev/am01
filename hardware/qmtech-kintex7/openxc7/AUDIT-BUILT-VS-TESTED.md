@@ -399,6 +399,28 @@ must never be reported as a result.
 
 ---
 
+## Parked — upstream contribution (not on the Fmax path)
+
+**yosys#6144 has a maintainer reply (widlarizer, 2026-08-24).** `hdlname` is in
+scope for their `src` attribute-transfer work; ABC is confirmed lossy and they
+plan to route around it via `abc9 &verify` rather than through it. Their
+in-flight PR **#5902** is a draft, stacked on #5804, three months stale.
+
+Consequence: **do not push `hdlname_recover` upstream** — it is a name
+heuristic against an in-progress structural fix, and PR #6145 was already
+correctly retracted. Keep it local; `--floorplan-hierarchy` depends on it.
+
+What we can offer instead is **data, not code**: a real 70k-cell benchmark, the
+quantified failure modes (14438 names rejected vs 5709 accepted before the fix),
+and a measured negative result on ABC propagation that supports their position.
+
+Full notes, the maintainer quote, and the pre-posting checklist are in
+**`upstream-issue-3-yosys-hdlname-loss.md`** under "STATUS 2026-08-24".
+**Nothing is to be posted without explicit approval** — it is public, permanent
+and under the user's identity.
+
+---
+
 ## Ordering changes since first draft
 
 Kept so the reasoning is auditable rather than silently rewritten.
