@@ -426,6 +426,74 @@ must never be reported as a result.
 
 ---
 
+## Plan revision 2 — 2026-08-25, after the budget/seed matrix and T6
+
+### Items REMOVED from the list (settled by measurement, not opinion)
+
+| item | why it is off |
+|---|---|
+| **All placer knobs** | `CRIT_DIST_EXP`, `WIRE_DEMAND`, `SMALL_BETA`, `HPWL_SCALE_FIX`, `LINEAR_DELAY` — none beats the 89.30 MHz baseline, across arc budgets **200k / 2M / unbounded** and **two seeds**. Only `HPWL_SCALE_FIX` converged at all, at 84.42 MHz |
+| **MT partitioner** (`router2_mt_partition.proposed.cc`) | **`refail_nets=0` on every iteration**, and the serial phase is <1% of runtime (44.7 s against 2780+2526 s parallel). It optimises a bottleneck that does not exist. **Delete the proposal** |
+| **Item 12** — port upstream `crit_weight` | blocked: see T6 below |
+| **Item 13** — criticality-driven selective rip-up | blocked: see T6 below |
+| **`NEXTPNR_CRIT_WEIGHT` / `NEXTPNR_SHARE_EXP`** | faithful PathFinder/RWRoute implementations multiplying a signal that is 8–30x wrong. Not worth running until item 11 lands |
+
+### T6 RESULT — criticality during negotiation is fiction
+
+`NEXTPNR_LOG_CRIT_GAP=1`, routed vs predicted delay per arc:
+
+```
+iter 1   27697 arcs   mean 29.88   worst 663.09 (routed 99.46 ns vs predicted 0.15 ns)
+iter 2   26048 arcs   mean 11.88
+iter 3                mean  7.64   (overused had fallen 127623 -> 5894)
+```
+
+Congestion fell **22x** between iterations 1 and 3; the delay ratio fell only **4x**
+and is still 7.64x. That looks like a **floor**, not congested detours — a
+persistent gap independent of congestion. Watch the value at `overused=0`;
+that is the number that decides item 11's priority.
+
+Mechanism: router2 binds wires only at final apply, so during negotiation
+`net->wires` is empty and `getNetinfoRouteDelay` (`common/nextpnr.cc:303-304`)
+falls back to `predictDelay`, a Manhattan estimate of the PLACEMENT.
+`get_criticalities` is called inside the negotiation loop (`router2.cc:2195`).
+
+> This does NOT contradict the earlier timing-model retraction. That measured
+> `predictDelay` against **final routed** delays on a converged design and found
+> 0.78x, flat. This measures it against routes chosen **mid-negotiation**, which
+> are heavily detoured. The model describes an idealised direct route well and
+> describes what the router is actually doing badly — at exactly the moment the
+> router consults it.
+
+### A sixth silently-nonfunctional mechanism
+
+`ad.routed_delay` was assigned **only** on the constant-net path
+(`router2.cc:935`) while `ad.routed = true` is set at 936, 1099, 1311, 1336.
+Every arc routed by the ordinary forward A* kept its `-1` initialiser, and the
+crit-gap loop skips exactly those — so T6 **could never have produced output**.
+Fixed at `:1099`; the backward-BFS and bidir-stitch sites are deliberately left
+unset because `visit.score` there is not the committed path's delay.
+
+Joins the congestion feedback loop, `unrouted_arcs`, `test_criticality_knobs.sh`,
+and the empty calibration CSV. **The recurring defect in this codebase is not
+bad code — it is code that was never once executed.**
+
+### Revised order
+
+1. **Item 11 — `update_route_delays`.** Now the highest-value structural item:
+   it is the only thing that replaces the estimate with measured routed delay,
+   and `routed_delay` now exists to feed it. Unblocks 12 and 13.
+2. **Item 9a — is `dfflegalize`'s LUT layer necessary?** Every failure names a
+   BRAM-egress net, and the 644-fanout net is a `dfflegalize` artefact.
+3. **BRAM egress** — is it a PHYSICAL limit (RAMB18 tile egress wire count) or a
+   TOOL limit? This distinction decides whether any placer work is worthwhile at
+   all. **New item, ahead of 9b.**
+4. **Item 9b — `maxfanout` replication pass.** Still required even if 9a lands:
+   removing the LUT layer drops a logic level, not the fanout.
+5. Items 10, 14–20 unchanged.
+
+---
+
 ## Parked — upstream contribution (not on the Fmax path)
 
 **yosys#6144 has a maintainer reply (widlarizer, 2026-08-24).** `hdlname` is in
