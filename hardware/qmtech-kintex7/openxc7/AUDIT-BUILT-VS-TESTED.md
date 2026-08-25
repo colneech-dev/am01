@@ -296,16 +296,73 @@ must never be reported as a result.
 
 ## Stage D — the strongest open lead (the only item with a large expected gain)
 
-9. **High-fanout driver replication — a TOOL fix, not a design change.**
+9. **High-fanout driver replication.**
 
-   **Corrected 2026-08-24.** An earlier version of this item called for editing
-   `encrypt.v` to replicate `crypt.progress[1]`. That was wrong, and measuring
-   the netlist rather than reading the RTL is what showed it.
+   > ### CORRECTION 2026-08-25 — the 2026-08-24 correction below was itself WRONG
+   >
+   > I claimed the 644 fanout was a `dfflegalize` artefact absent from the RTL.
+   > **It is in the RTL.** `encrypt.v:15317-15329`, the block the `hdlname`
+   > attribute named all along:
+   >
+   > ```verilog
+   > always @(posedge clk) begin
+   >     if (read)
+   >         begin period[0] <= 0;            state[0] <= in;       end
+   >     else
+   >         begin period[0] <= period[42]+1; state[0] <= next[21]; end
+   > ```
+   >
+   > `state[0]` is **640 bits**, so one `read` bit selects between two 640-bit
+   > sources: 640 × LUT3 with `read` on `I2`, plus 2 × `FDRE.R` for `period[0]`
+   > and 1 × `SRLC32E.D` for the shift register. That is the measured 643 loads,
+   > exactly.
+   >
+   > I read the module header, the parent module, and the lines *after* this
+   > block, and never opened the block itself — despite the sink `hdlname` being
+   > literally `encrypt.v:15317.5-15329.8`.
+   >
+   > **`dfflegalize` is exonerated.** Control case: net bit 67259
+   > (`get_block_pulse_h`) has **608 loads, all native `FDRE.CE`, zero LUTs**. It
+   > uses hardware pins wherever it legitimately can. There is no Xilinx FF pin
+   > that selects between two non-constant data inputs, so the LUT layer is
+   > unavoidable and correct.
+   >
+   > **Item 9a is REFUTED — do not pursue it.** No `dfflegalize` argument,
+   > `-family`, pass ordering or `-nosrl` change removes this. `-mince` /
+   > `-minsrst` only make it worse.
+   >
+   > **Item 9b (replication) is the ONLY lever, and is confirmed necessary.**
+   > The fanout is set by the RTL and survives any cell-mapping change. The
+   > 15.104 ns is net delay across 640 sinks, not the ~0.1 ns LUT delay.
+   >
+   > **A second, larger instance exists:** net bit 1936, fanout **809**, from
+   > `keccak800.v:248-258` — the same `if (read) state[0] <= …` idiom. So this
+   > needs a **threshold-based pass, not a one-net fix**. Full distribution:
+   > 4 nets ≥500 (one is the BUFG clock), 2 in 200-499, 1 in 100-199, 1 in
+   > 50-99, 111 in 20-49, out of 76,534 nets. A threshold of F=100 touches
+   > 8 nets.
+   >
+   > **`TESTS-TO-RUN.md` T15's "all FFs already CE=1/R=0" cites the WRONG
+   > netlist** — it was measured on `out_nm1_fdreonly/`, built by
+   > `synth_fdre_only.ys:40` with `-mince 999999999 -minsrst 999999999`, which
+   > forcibly unmaps every CE and sync reset. Real census of the netlist we
+   > actually place (`out_nm1_nosr/`): 27,550 FDRE + 57 FDSE, of which **1,162
+   > have a real CE** and **420 a real R**. T15 itself is still worth running
+   > (recovers ~1,100 CE LUTs and ~420 reset LUTs) but is unrelated to this net.
+   >
+   > **yosys has no high-fanout replication pass** — confirmed by enumerating
+   > every registered pass name. Nearest miss is `extract -mine_max_fanout`, a
+   > subcircuit-mining filter. `insbuf` inserts buffers but does not partition
+   > loads.
 
-   In RTL that signal has **fanout 1**: `encrypt.v:15519` passes it as the
+   ---
+
+   *Superseded text from 2026-08-24, kept so the error is auditable:*
+
+   ~~In RTL that signal has **fanout 1**: `encrypt.v:15519` passes it as the
    `read` port of `encrypt_4encrypt_loop`, and inside that module `read` drives
    only `progress[0]` of a pure 172-stage shift register whose sole consumer is
-   `assign write = progress[171]`. There is nothing in the source to replicate.
+   `assign write = progress[171]`. There is nothing in the source to replicate.~~
 
    What the netlist actually contains (`scratchpad/fanout_probe.py`):
 
