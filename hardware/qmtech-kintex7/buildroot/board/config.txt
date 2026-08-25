@@ -1,0 +1,25 @@
+# Raspberry Pi firmware config for the AM01 miner (CM4, 64-bit).
+# Installed to the boot partition as config.txt.
+
+start_file=start4.elf
+fixup_file=fixup4.dat
+
+kernel=Image
+arm_64bit=1
+
+# Serial console on ttyAMA0. Keep this: the miner is headless, and the UART is
+# the only way to see why a boot failed.
+enable_uart=1
+dtoverlay=miniuart-bt
+
+# The FPGA parallel bus claims GPIO 0-23, so nothing else may drive them.
+# Disable the I2C/SPI peripherals that would otherwise take those pins.
+dtparam=i2c_arm=off
+dtparam=spi=off
+dtparam=i2s=off
+
+# No display attached by default; odo-ui is skipped when /dev/fb0 is absent.
+# Raise this and attach a screen if you want the touch UI.
+gpu_mem=64
+
+disable_overscan=1

@@ -1,0 +1,37 @@
+# Program the Kintex-7 before the miner starts.
+#
+# Uses openFPGALoader over a USB-JTAG adapter plugged into the CM4. Direct
+# CM4-GPIO-to-J1 wiring is not viable on this board -- see
+# hardware/qmtech-kintex7/cm4-firmware/README.md.
+#
+# Drop the bitstream on the boot partition as /boot/am01.bit and set the cable
+# type in /etc/default/am01-fpga. With no bitstream staged this unit is skipped,
+# so programming the FPGA externally over JTAG keeps working unchanged.
+#
+#   journalctl -u am01-fpga
+
+[Unit]
+Description=Load AM01 bitstream into the Kintex-7
+Documentation=https://github.com/colneech-dev/am01
+Requires=boot.mount
+After=boot.mount
+Before=odo-miner.service
+ConditionPathExists=/boot/am01.bit
+
+[Service]
+Type=oneshot
+# The FPGA stays programmed once loaded; this must not look "inactive" and be
+# re-run on every dependency start.
+RemainAfterExit=yes
+EnvironmentFile=-/etc/default/am01-fpga
+
+# FPGA_OPTS carries the cable type, which is adapter-specific and has no
+# sensible default -- openFPGALoader will refuse to run until it is set.
+ExecStart=/usr/bin/openFPGALoader $FPGA_OPTS /boot/am01.bit
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=am01-fpga
+
+[Install]
+WantedBy=multi-user.target

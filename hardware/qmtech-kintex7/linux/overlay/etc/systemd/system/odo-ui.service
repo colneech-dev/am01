@@ -1,48 +1,40 @@
-# AM01 OdoCrypt Touch Screen UI
+# AM01 touch screen UI
 #
-# Renders mining dashboard on /dev/fb0 (framebuffer)
-# Requires: framebuffer device, touch input (e.g., /dev/input/event0)
-# Depends on odo-miner and odo-webd for status data
+# Needs a framebuffer and a touch input device. With no display attached this
+# unit is skipped rather than failed, via ConditionPathExists below; use
+# odo-webd instead. To stop it being tried at all:
+#
+#   systemctl disable odo-ui
+#
+# Device paths live in /etc/default/odo-ui.
 
 [Unit]
-Description=AM01 Touch Screen Dashboard UI
+Description=AM01 Touch Screen UI
 Documentation=https://github.com/colneech-dev/am01
-After=network-online.target local-fs.target odo-miner.service odo-webd.service
-BindsTo=odo-miner.service
-Wants=odo-webd.service
+After=odo-miner.service
+# No framebuffer -> skipped as a no-op, not a boot failure.
+ConditionPathExists=/dev/fb0
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
-
-# Configuration
 EnvironmentFile=-/etc/default/odo-ui
 
-# Run as user with access to framebuffer and input devices
-User=${UI_USER:-root}
-Group=${UI_GROUP:-root}
+# root: needs /dev/fb0 and /dev/input/event*. Literal, not variables --
+# see the note in odo-miner.service.
+User=root
+Group=root
+WorkingDirectory=/var/lib/odo-miner
 
-# Working directory
-WorkingDirectory=${UI_DIR:-/opt/odo-ui}
+ExecStart=/usr/bin/odo-ui $UI_OPTS
 
-# Binary
-ExecStart=${UI_BIN:-/usr/local/bin/odo-ui} ${UI_OPTS:--fb /dev/fb0 -touch /dev/input/event0}
-
-# Restart on failure
 Restart=on-failure
-RestartSec=2
+RestartSec=5
 
-# Resource limits
-Nice=5
-LimitNOFILE=2048
-
-# Logging
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=odo-ui
 
-# Shutdown behavior
-KillMode=mixed
-TimeoutStopSec=5
-
 [Install]
-WantedBy=graphical.target multi-user.target
+WantedBy=multi-user.target

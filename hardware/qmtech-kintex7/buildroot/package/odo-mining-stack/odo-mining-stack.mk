@@ -35,8 +35,12 @@ define ODO_MINING_STACK_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/boot/overlays/am01-fpga-gpio.dts
 endef
 
+# The gpio group is created first, then miner joins it, so that the udev rule
+# in the overlay can hand /dev/gpiochip* to the daemon without running it as
+# root. Fields: user uid group gid password home shell groups comment.
 define ODO_MINING_STACK_USERS
-	miner -1 miner -1 * /var/lib/odo-miner - - AM01 mining daemon
+	- -1 gpio -1 * - - - GPIO character device access
+	miner -1 miner -1 * /var/lib/odo-miner - gpio AM01 mining daemon
 endef
 
 define ODO_MINING_STACK_PERMISSIONS

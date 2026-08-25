@@ -31,9 +31,31 @@ BR2_LINUX_KERNEL_DEFCONFIG="bcm2711"
 BR2_LINUX_KERNEL_IMAGE=y
 BR2_LINUX_KERNEL_DTS_SUPPORT=y
 BR2_LINUX_KERNEL_INTREE_DTS_NAME="broadcom/bcm2711-rpi-cm4"
+BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
+BR2_PACKAGE_KMOD=y
+BR2_PACKAGE_KMOD_TOOLS=y
 
-# Filesystem
+# Raspberry Pi boot firmware. Without this there is no start4.elf/fixup4.dat
+# and the CM4 cannot boot at all.
+BR2_PACKAGE_RPI_FIRMWARE=y
+BR2_PACKAGE_RPI_FIRMWARE_VARIANT_PI4=y
+BR2_PACKAGE_RPI_FIRMWARE_CONFIG_FILE="$(BR2_EXTERNAL_AM01_PATH)/board/config.txt"
+
+# rpiboot, to expose the CM4's eMMC as a USB block device for flashing.
+# Built for the host, not the target: output/host/bin/rpiboot
+BR2_PACKAGE_HOST_RASPBERRYPI_USBBOOT=y
+
+# Filesystem: ext4 root for the image, plus the tarball for inspection.
+BR2_TARGET_ROOTFS_EXT2=y
+BR2_TARGET_ROOTFS_EXT2_4=y
+BR2_TARGET_ROOTFS_EXT2_SIZE="700M"
 BR2_TARGET_ROOTFS_TAR_GZIP=y
+
+# Assemble boot.vfat + rootfs.ext4 into a flashable sdcard.img
+BR2_PACKAGE_HOST_DOSFSTOOLS=y
+BR2_PACKAGE_HOST_GENIMAGE=y
+BR2_PACKAGE_HOST_MTOOLS=y
+BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_AM01_PATH)/board/post-image.sh"
 
 # System
 BR2_TARGET_GENERIC_HOSTNAME="am01-miner"
@@ -68,6 +90,10 @@ BR2_PACKAGE_HTOP=y
 BR2_PACKAGE_LIBGPIOD=y
 BR2_PACKAGE_LIBGPIOD_TOOLS=y
 BR2_PACKAGE_I2C_TOOLS=y
+
+# FPGA programming over a USB-JTAG adapter attached to the CM4. Direct
+# CM4-GPIO-to-J1 wiring is not viable on this board, so no libgpiod backend.
+BR2_PACKAGE_OPENFPGALOADER=y
 
 # JSON parsing
 BR2_PACKAGE_JANSSON=y

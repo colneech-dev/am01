@@ -1,47 +1,34 @@
-# AM01 OdoCrypt Web Dashboard Server
+# AM01 web dashboard server
 #
-# Serves mining status JSON and web UI on HTTP (port 8080)
-# Depends on odo-miner daemon (reads status files from /run/odod/)
+#   curl http://BOARD_IP:8080/status.json
+#
+# Port and options live in /etc/default/odo-webd.
 
 [Unit]
 Description=AM01 Web Dashboard Server
 Documentation=https://github.com/colneech-dev/am01
-After=network-online.target local-fs.target
-BindsTo=odo-miner.service
-Before=odo-ui.service
+After=network-online.target odo-miner.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
-
-# Configuration
 EnvironmentFile=-/etc/default/odo-webd
 
-# User/group (same as miner)
-User=${WEBD_USER:-miner}
-Group=${WEBD_GROUP:-miner}
+# Literal, not variables -- see the note in odo-miner.service.
+User=miner
+Group=miner
+WorkingDirectory=/var/lib/odo-miner
 
-# Working directory
-WorkingDirectory=${WEBD_DIR:-/opt/odo-webd}
+ExecStart=/usr/bin/odo-webd $WEBD_OPTS
 
-# Binary
-ExecStart=${WEBD_BIN:-/usr/local/bin/odo-webd} ${WEBD_OPTS:--p 8080}
-
-# Restart on failure
 Restart=on-failure
-RestartSec=2
+RestartSec=5
 
-# Resource limits
-Nice=10
-LimitNOFILE=4096
-
-# Logging
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=odo-webd
-
-# Graceful shutdown
-KillMode=mixed
-TimeoutStopSec=5
 
 [Install]
 WantedBy=multi-user.target

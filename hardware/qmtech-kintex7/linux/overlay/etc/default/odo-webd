@@ -1,28 +1,13 @@
 # AM01 Web Dashboard Server Configuration
 #
-# Source: Buildroot overlay
-# Location: /etc/default/odo-webd
-# Used by: systemd odo-webd.service
-
-# Web server user/group (should match odo-miner)
-WEBD_USER=miner
-WEBD_GROUP=miner
-
-# Working directory
-WEBD_DIR=/opt/odo-webd
-
-# Path to binary
-WEBD_BIN=/usr/local/bin/odo-webd
+# Read by odo-webd.service. Only WEBD_OPTS has any effect; the user and binary
+# path are literal in the unit file (systemd cannot take those from the
+# environment). The binary is /usr/bin/odo-webd, running as 'miner'.
+#
+# Reach it at http://BOARD_IP:8080/
 
 # Command-line options:
-#   -p PORT       HTTP port (default: 8080)
-#   -f PATH       Frontend assets directory (optional)
-#   -S /path/to/status.json
-#                 Status file location
-# Example:
-#   WEBD_OPTS="-p 8080 -S /run/odod/status.json"
-
-WEBD_OPTS="-p 8080"
-
-# Access URL (for reference)
-# http://BOARD_IP:8080/
+#   -p PORT   HTTP port (default 8080)
+#   -f PATH   Frontend assets directory (optional)
+#   -S PATH   Status file written by odo-miner
+WEBD_OPTS="-p 8080 -S /run/odod/status.json"

@@ -1,0 +1,24 @@
+# AM01 FPGA programming (am01-fpga.service)
+#
+# Loads /boot/am01.bit into the Kintex-7 with openFPGALoader, over a USB-JTAG
+# adapter plugged into the CM4. Nothing happens unless that file exists, so
+# programming the board externally over JTAG remains an option.
+#
+# FPGA_OPTS must name your adapter -- there is no safe default. List what is
+# connected with:
+#
+#   openFPGALoader --scan-usb
+#
+# Then set the cable, for example:
+#
+#   FPGA_OPTS="-c ft2232"        # generic FT2232-based adapter
+#   FPGA_OPTS="-c digilent"      # Digilent HS2/HS3
+#   FPGA_OPTS="-c xvc-client"    # Xilinx Virtual Cable
+#
+# Add -f to write the bitstream to flash instead of loading it into SRAM;
+# without -f the FPGA loses its configuration on power-down and this unit
+# reloads it on each boot.
+FPGA_OPTS=""
+
+# Check it by hand before enabling the service:
+#   openFPGALoader $FPGA_OPTS /boot/am01.bit

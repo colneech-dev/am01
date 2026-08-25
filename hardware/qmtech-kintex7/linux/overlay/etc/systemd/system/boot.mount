@@ -1,0 +1,22 @@
+# Mount the FAT boot partition so config.txt, the kernel and the FPGA
+# bitstream can be replaced without rebuilding the image.
+#
+# The unit name must match the mount point: boot.mount -> /boot.
+# mmcblk0p1 is the first partition of the CM4's eMMC.
+
+[Unit]
+Description=Boot partition (Pi firmware, kernel, FPGA bitstream)
+DefaultDependencies=no
+Before=local-fs.target
+ConditionPathExists=/dev/mmcblk0p1
+
+[Mount]
+What=/dev/mmcblk0p1
+Where=/boot
+Type=vfat
+# nofail: a miner with no readable boot partition should still come up far
+# enough to be logged into over the network.
+Options=nofail
+
+[Install]
+WantedBy=local-fs.target

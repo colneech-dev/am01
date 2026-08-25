@@ -1,0 +1,6 @@
+# Let the unprivileged 'miner' user drive the FPGA parallel bus.
+#
+# Without this /dev/gpiochip* is root-only and odo-miner fails to open the bus.
+# The miner is placed in the 'gpio' group by SupplementaryGroups= in
+# odo-miner.service.
+SUBSYSTEM=="gpio", KERNEL=="gpiochip[0-9]*", GROUP="gpio", MODE="0660"
