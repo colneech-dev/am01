@@ -30,6 +30,21 @@ comment. `grep -cE '^[^#]*NEXTPNR_[A-Z_0-9]+=' build.sh` returns 0. Appearing
 in `build.sh`, `SESSIONS.md` or `TESTS-TO-RUN.md` is documentation, not
 evidence of a run.
 
+> **Both grep methods above are fallible — trust artefacts, not scripts.**
+>
+> - Grepping for the knob NAME false-**positives** on comments. A slower audit
+>   run marked `NEXTPNR_CRIT_WEIGHT`, `ROUTER2_MAX_ITER` and `SKIP_FAILED_ARCS`
+>   as exercised purely because `build.sh` and a test script mention them in
+>   prose.
+> - Grepping for `^[^#]*KNOB=` false-**negatives** on indirection.
+>   `test_criticality_knobs.sh` sets its knobs by passing name and value to a
+>   `run_test` helper, so no literal `NEXTPNR_X=` line exists and the stricter
+>   regex misses it entirely.
+>
+> The reliable test is whether the run produced an **output artefact** — a
+> `.pnr.log`, a FASM, a result file. `test_criticality_knobs.sh` has none, so
+> its knobs are genuinely unexercised despite being wired up correctly.
+
 ---
 
 ## 1. Built and never exercised (42)
@@ -244,6 +259,18 @@ must never be reported as a result.
    ratio per iteration. If criticality during negotiation is fiction, then
    items 12 and 13 are weighting noise and must not be attempted. This is the
    cheapest experiment in the whole list and it gates two of the larger ones.
+
+   > **The runner already exists: `test_criticality_knobs.sh`.** Written
+   > 2026-08-23, functional, **never run**, and was untracked until now. It
+   > covers T6 (`LOG_CRIT_GAP`), T7 (`CRIT_WEIGHT` 0.4/0.6) and T8
+   > (`SHARE_EXP` 1/2/3).
+   >
+   > **Run T6 ONLY at first.** T7 and T8 are blocked on item 11
+   > (`update_route_delays`) — until routed delay feeds back into criticality,
+   > both knobs multiply a placement estimate and can only amplify a wrong
+   > signal. T6 is precisely the measurement that establishes whether that is
+   > the case, so running all three at once would spend hours on two tests
+   > whose validity the first one decides.
 4. **Read the existing `thread bins:` / `phase ms:` lines** already emitted in
    every log. If `refail_nets` dominates, the MT partitioning work in
    `router2_mt_partition.proposed.cc` buys nothing and should be dropped
