@@ -50,7 +50,16 @@ module odocrypt_gpio_wrapper #(
     // fills the budget at 94% and 3 does not fit. Set to 1 to get the
     // original single-core behaviour back. See ../README.md
     // "Expected hashrate" for the derivation.
-    parameter integer NUM_MINERS = 2
+    parameter integer NUM_MINERS = 2,
+
+    // OdoCrypt epoch seed that hdl/odocrypt/encrypt.v was generated for,
+    // read back by the host at SEED_LO/SEED_HI as bitstream_epoch.
+    //
+    // The default is the real value rather than 0 so it is correct without
+    // either build flow having to pass a generic. It MUST match the seed
+    // stamped in encrypt.v's header -- tools/check-epoch.sh enforces that and
+    // flags staleness against the current date. Update both together.
+    parameter [31:0] ODO_SEED = 32'd1786752000
 ) (
     // ---------------------------------------------------------------
     // Bus clock domain -- the board's onboard 50MHz crystal
@@ -90,8 +99,15 @@ module odocrypt_gpio_wrapper #(
     localparam [3:0] ADDR_HEADER_HI  = 4'h6;
     localparam [3:0] ADDR_TARGET_LO  = 4'h7;
     localparam [3:0] ADDR_TARGET_HI  = 4'h8;
+    // Read-only: the OdoCrypt epoch seed encrypt.v was generated for. The
+    // daemon reads this back as bitstream_epoch and compares it against the
+    // pool's job epoch; without it a stale bitstream mines rejects silently.
+    localparam [3:0] ADDR_SEED_LO    = 4'h9;
+    localparam [3:0] ADDR_SEED_HI    = 4'hA;
 
-    localparam [15:0] VERSION = 16'h0100; // v1.0 of this register interface
+    // v1.1 adds SEED_LO/SEED_HI. The daemon treats a VERSION below this as
+    // "seed unreadable" rather than misreading 0 as a real epoch.
+    localparam [15:0] VERSION = 16'h0101;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;
@@ -327,6 +343,8 @@ module odocrypt_gpio_wrapper #(
                             rdata_reg <= golden_nonce_bus[31:16];
                             nonce_valid_clear_pulse <= 1'b1; // clears NONCE_VALID / irq
                         end
+                        ADDR_SEED_LO:  rdata_reg <= ODO_SEED[15:0];
+                        ADDR_SEED_HI:  rdata_reg <= ODO_SEED[31:16];
                         default: rdata_reg <= 16'h0;
                     endcase
                     gpio_data_oe <= 1'b1;

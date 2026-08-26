@@ -60,7 +60,14 @@ enum {
     ADDR_HEADER_HI = 6,
     ADDR_TARGET_LO = 7,
     ADDR_TARGET_HI = 8,
+    ADDR_SEED_LO   = 9,   /* wrapper VERSION >= 0x0101 */
+    ADDR_SEED_HI   = 10,
 };
+
+/* Register-interface version that first exposed SEED_LO/SEED_HI. Older
+ * bitstreams return 0 for unmapped addresses, which is indistinguishable from
+ * a real seed of 0, so the version is checked before trusting the value. */
+#define AM01_VERSION_WITH_SEED 0x0101
 
 /* Generous, since this bus isn't timing-critical -- see ../README.md.
  * A real READY that never arrives (bad wiring, unprogrammed FPGA) fails
@@ -271,6 +278,28 @@ int am01_bus_read_nonce(am01_bus_t *bus, uint32_t *nonce_out)
     if (reg_read16(bus, ADDR_NONCE_HI, &hi) < 0) /* clears NONCE_VALID/IRQ */
         return -1;
     *nonce_out = ((uint32_t)hi << 16) | lo;
+    return 0;
+}
+
+int am01_bus_read_seed(am01_bus_t *bus, uint32_t *seed_out)
+{
+    uint16_t ver, lo, hi;
+
+    /* Unmapped addresses read back as 0 on older bitstreams, which is
+     * indistinguishable from a genuine seed. Gate on the interface version so
+     * the caller learns "unknown" instead of being told the epoch is 0. */
+    if (reg_read16(bus, ADDR_VERSION, &ver) < 0)
+        return -1;
+    if (ver < AM01_VERSION_WITH_SEED) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    if (reg_read16(bus, ADDR_SEED_LO, &lo) < 0)
+        return -1;
+    if (reg_read16(bus, ADDR_SEED_HI, &hi) < 0)
+        return -1;
+    *seed_out = ((uint32_t)hi << 16) | lo;
     return 0;
 }
 

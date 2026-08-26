@@ -16,11 +16,25 @@ their real ECAD placement export
 directly, ref-des by ref-des) turned up real errors, not just
 imprecision:
 
-- **This board has no Ethernet jack.** The schematic includes an
-  Ethernet section (HR911130A RJ45 magjack, wired straight to the CM4's
-  MDI pairs through the B2B connector) -- but no matching footprint
-  exists anywhere in the vendor's own placement drawing. It's an
-  unpopulated reference block. v4's "RJ45" cutout is **removed**.
+- ~~**This board has no Ethernet jack.**~~ **RETRACTED -- the jack is real,
+  and v4.1 wrongly removed its cutout.** The reasoning below was that the
+  schematic's Ethernet section (HR911130A RJ45 magjack, wired to the CM4's
+  MDI pairs through the B2B connector) had no matching footprint in the
+  vendor's placement drawing, so it must be an unpopulated reference block.
+
+  That inference was wrong. The user manual
+  (`../reference/QMTECH_Kintex-7_XC7K325T_Development_Board_User_Manual(Hardware)_V01.pdf`)
+  shows the HanRun HR911130A populated in every board photograph, including
+  Figure 2-3 and the CM4-docked photo in section 2.2.9, and that section
+  lists "ethernet interface" among the CM4 interfaces the board provides.
+  Absence from one drawing was treated as evidence of absence; the photos
+  and the interface list both say otherwise.
+
+  **Known defect:** there is consequently no RJ45 opening in the current
+  model -- the cutout was deleted, and nothing in the `.scad` replaces it.
+  Restoring it needs the jack's real position off the placement drawing,
+  the same way the other connectors were sourced. Until then a printed case
+  blocks the Ethernet port.
 - **Four USB-A ports, not two.** J6 and J7 are each a stacked
   "Dual USB-A" shell (2 ports per connector), fed by a real USB2514QFN36
   hub chip off the CM4's single USB2 OTG line, plus a separate mini-USB
@@ -248,7 +262,9 @@ this close to one, especially in the Sealed variant with no venting.
   wall.
 - **v4.1 (current)**: replaced the estimated I/O with real positions
   read from the vendor's own schematic + ECAD placement drawing. Removed
-  a nonexistent RJ45 port, added the 2 missing USB-A ports, split
+  the RJ45 port (**wrongly -- see the retraction above; the jack is
+  populated and its cutout still needs restoring**), added the 2 missing
+  USB-A ports, split
   cutouts across the 3 walls the real connectors are actually on, moved
   the DC jack from a lid hole to an edge-mounted wall hole, and added
   the JP5 GPIO header window and SW2/SW3 button holes that were missing

@@ -63,6 +63,15 @@ int am01_bus_submit_work(am01_bus_t *bus, const uint32_t header[19], const uint3
  * STATUS.NONCE_VALID and deasserts IRQ on the FPGA side. */
 int am01_bus_read_nonce(am01_bus_t *bus, uint32_t *nonce_out);
 
+/* Reads the OdoCrypt epoch seed the loaded bitstream was built for, so the
+ * daemon can tell a stale bitstream from a current one instead of mining
+ * rejects silently. Returns 0 on success.
+ *
+ * Returns -1 with errno == ENOTSUP against a bitstream whose register
+ * interface predates SEED_LO/SEED_HI (VERSION < 0x0101). Treat that as
+ * "epoch unknown" -- it is NOT the same as a seed of 0. */
+int am01_bus_read_seed(am01_bus_t *bus, uint32_t *seed_out);
+
 /* Blocks (with a timeout) on the IRQ line's edge event, signaling a new
  * golden nonce is ready. Returns 0 on an edge seen, -1 on timeout/error
  * (errno == ETIMEDOUT on timeout). Follow with am01_bus_read_nonce(). */

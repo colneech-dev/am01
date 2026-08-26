@@ -18,6 +18,14 @@
 #include <time.h>
 #include <unistd.h>
 
+/* Reported when the bitstream's epoch seed cannot be read -- a register
+ * interface older than v1.1, or a bus error. Deliberately 0 rather than a
+ * distinctive sentinel: the daemon's staleness check is `job epoch != seed`,
+ * so this trips on every job and logs "bitstream epoch 0", which is the
+ * honest answer when the epoch is genuinely unknown. Anything else would
+ * read like a real epoch. */
+#define MINER_IO_SEED_UNKNOWN 0u
+
 /* =====================================================================
  * Global state: single GPIO bus instance for the entire daemon.
  * ===================================================================== */
@@ -41,11 +49,26 @@ int miner_io_pipe_init(void)
         return -1;
     }
 
-    /* Version and seed are bitstream constants. The GPIO wrapper doesn't
-     * expose these as readable registers yet, so hardcode placeholders.
-     * TODO: extend odocrypt_gpio_wrapper.v to expose SEED as a readable register. */
+    /* Both are bitstream constants, read once at startup.
+     *
+     * The seed matters: the daemon compares it against each job's epoch to
+     * decide whether the loaded bitstream still implements the algorithm the
+     * chain is using. This used to be hardcoded to 0, which made that check
+     * fire on every job and rendered its warning meaningless. */
     g_version = 0x00010000;  /* GPIO wrapper v1.0 */
-    g_seed = 0;              /* Not yet readable from wrapper */
+
+    if (am01_bus_read_seed(g_bus, &g_seed) < 0) {
+        g_seed = MINER_IO_SEED_UNKNOWN;
+        if (errno == ENOTSUP)
+            fprintf(stderr, "miner_io_pipe_init: bitstream predates the SEED "
+                            "register; epoch staleness cannot be detected\n");
+        else
+            fprintf(stderr, "miner_io_pipe_init: failed to read epoch seed: %s\n",
+                    strerror(errno));
+    } else {
+        fprintf(stderr, "miner_io_pipe_init: bitstream epoch seed %u\n",
+                (unsigned)g_seed);
+    }
 
     g_initialized = 1;
     return 0;
