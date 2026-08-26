@@ -281,6 +281,11 @@ int am01_bus_read_nonce(am01_bus_t *bus, uint32_t *nonce_out)
     return 0;
 }
 
+int am01_bus_read_version(am01_bus_t *bus, uint16_t *version_out)
+{
+    return reg_read16(bus, ADDR_VERSION, version_out);
+}
+
 int am01_bus_read_seed(am01_bus_t *bus, uint32_t *seed_out)
 {
     uint16_t ver, lo, hi;

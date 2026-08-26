@@ -15,7 +15,19 @@ arm_64bit=1
 # Serial console is provided over the mini-USB (J14) instead, as a USB CDC-ACM
 # gadget -- see /etc/modules-load.d/am01-usb-gadget.conf. It appears as a COM
 # port on the machine at the other end of the cable.
-dtoverlay=dwc2,dr_mode=peripheral
+#
+# dr_mode=otg, NOT peripheral. Schematic sheet 1: the FSUSB42MUX (U15) has its
+# common port on the CM4's USB2_P/USB2_N, output 1 on the USB2514 hub (the four
+# USB-A ports) and output 2 on the mini-USB J14 -- and its SEL is driven by
+# USBOTG_ID, pulled up by R278. So the hub and J14 are mutually exclusive and
+# the board switches between them automatically from the mini-USB cable's ID
+# pin. Forcing peripheral mode would flip the CM4 to device mode permanently
+# and leave the USB-A ports dead even with no cable in J14. With otg, the
+# software mode follows the same ID pin the hardware mux does:
+#
+#   no mini-USB cable  -> host mode,   USB-A ports live
+#   OTG cable in J14   -> device mode, gadget console (and rpiboot) live
+dtoverlay=dwc2,dr_mode=otg
 
 # The FPGA parallel bus claims GPIO 0-23, so nothing else may drive them.
 # Disable the I2C/SPI peripherals that would otherwise take those pins.

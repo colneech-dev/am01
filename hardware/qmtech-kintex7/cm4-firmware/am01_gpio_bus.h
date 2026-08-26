@@ -63,6 +63,10 @@ int am01_bus_submit_work(am01_bus_t *bus, const uint32_t header[19], const uint3
  * STATUS.NONCE_VALID and deasserts IRQ on the FPGA side. */
 int am01_bus_read_nonce(am01_bus_t *bus, uint32_t *nonce_out);
 
+/* Reads the wrapper's register-interface version (0x0101 = SEED registers
+ * present). Returns 0 on success. */
+int am01_bus_read_version(am01_bus_t *bus, uint16_t *version_out);
+
 /* Reads the OdoCrypt epoch seed the loaded bitstream was built for, so the
  * daemon can tell a stale bitstream from a current one instead of mining
  * rejects silently. Returns 0 on success.

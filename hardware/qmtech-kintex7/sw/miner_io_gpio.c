@@ -55,7 +55,16 @@ int miner_io_pipe_init(void)
      * decide whether the loaded bitstream still implements the algorithm the
      * chain is using. This used to be hardcoded to 0, which made that check
      * fire on every job and rendered its warning meaningless. */
-    g_version = 0x00010000;  /* GPIO wrapper v1.0 */
+    uint16_t raw_ver = 0;
+    if (am01_bus_read_version(g_bus, &raw_ver) == 0) {
+        /* Wrapper reports 16-bit BCD-ish (0x0101 = v1.1); the daemon's API is
+         * 32-bit major<<16 | minor. */
+        g_version = ((uint32_t)(raw_ver >> 8) << 16) | (raw_ver & 0xFF);
+    } else {
+        fprintf(stderr, "miner_io_pipe_init: failed to read VERSION: %s\n",
+                strerror(errno));
+        g_version = 0;
+    }
 
     if (am01_bus_read_seed(g_bus, &g_seed) < 0) {
         g_seed = MINER_IO_SEED_UNKNOWN;
@@ -128,18 +137,25 @@ int miner_io_pipe_poll(uint32_t *out_nonce)
     if (!g_bus)
         return -1;
 
-    /* The am01_gpio_bus API doesn't have a non-blocking status check yet.
-     * For now, this blocks momentarily on nonce reads. In production,
-     * extend am01_gpio_bus.h with a non-blocking poll variant.
-     *
-     * Return values match miner_io_pipe.c semantics:
+    /* Return values match miner_io_pipe.c semantics:
      *   0 = nonce was read
      *   1 = no nonce pending
-     *   -1 = error
-     */
+     *  -1 = error
+     *
+     * STATUS must be checked first. Reading NONCE_HI is what clears
+     * NONCE_VALID and drops the IRQ on the FPGA side, so an unconditional
+     * read both invents a nonce when none is pending and consumes the flag.
+     * This function used to always return 0, which left the daemon
+     * validating a garbage nonce on every pass of its loop. */
+    uint16_t status = 0;
+    if (am01_bus_read_status(g_bus, &status) < 0)
+        return -1;
+
+    if (!(status & AM01_STATUS_NONCE_VALID))
+        return 1;   /* nothing pending -- do NOT touch NONCE_HI */
+
     uint32_t nonce = 0;
-    int rc = am01_bus_read_nonce(g_bus, &nonce);
-    if (rc < 0)
+    if (am01_bus_read_nonce(g_bus, &nonce) < 0)
         return -1;
 
     if (out_nonce)
@@ -152,14 +168,27 @@ int miner_io_pipe_wait(int timeout_ms)
     if (!g_bus)
         return -1;
 
-    /* The GPIO backend (bit-banged GPIO) has no interrupt, so we sleep
-     * briefly and let the caller poll. Cap at 5ms (original /dev/mem backend)
-     * for low latency. Return value: 1 = timeout (always, no IRQ available). */
-    unsigned ms = (timeout_ms < 0 || timeout_ms > 5) ? 5u : (unsigned)timeout_ms;
-    struct timespec ts = { .tv_sec  = ms / 1000,
-                           .tv_nsec = (long)(ms % 1000) * 1000000L };
+    /* GPIO23 is the FPGA's nonce-ready IRQ, requested for both-edge events in
+     * am01_bus_open(), so block on the edge rather than spinning. An earlier
+     * version slept 5ms and always claimed "timeout", on the mistaken premise
+     * that this backend had no interrupt available.
+     *
+     * Return value: 0 = an edge arrived (a nonce is ready), 1 = timeout.
+     * A timeout is normal and not an error -- it just means no nonce yet. */
+    int ms = (timeout_ms < 0) ? 5 : timeout_ms;
+
+    if (am01_bus_wait_irq(g_bus, ms) == 0)
+        return 0;
+
+    if (errno == ETIMEDOUT)
+        return 1;
+
+    /* Anything else (bus error, line revoked) is worth surfacing, but the
+     * caller's contract only distinguishes ready/not-ready, so degrade to a
+     * timeout after a short sleep to avoid spinning on a persistent fault. */
+    struct timespec ts = { .tv_sec = 0, .tv_nsec = 5L * 1000000L };
     nanosleep(&ts, NULL);
-    return 1;   /* Always "timeout" — GPIO backend has no interrupt */
+    return 1;
 }
 
 const char *miner_io_pipe_backend(void)

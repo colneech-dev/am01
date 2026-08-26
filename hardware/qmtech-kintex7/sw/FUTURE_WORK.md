@@ -3,10 +3,21 @@
 ## Epoch Update Tool (odo-update) — REQUIRED FOR PRODUCTION
 
 ### Status
-**NOT YET IMPLEMENTED** for AM01. Required for autonomous epoch renewal.
+**NOT YET IMPLEMENTED** for AM01, but no longer blocked: the SEED register
+exists, so the mismatch is now detectable on the board. Needs a bitstream
+built with it before the watcher can be tested.
+
+Note AM01 is better placed than the Cyclone V here. `epoch-update.sh` there
+stages a bitstream and reboots, because runtime FPGA-manager reconfiguration
+is unavailable on that kernel. This image ships openFPGALoader and
+am01-fpga.service, so a JTAG reload in place needs no reboot.
 
 ### What It Does
-- Detects when OdoCrypt epoch changes (wall-clock boundary every 10 days)
+- Detects when OdoCrypt epoch changes. NOT by wall clock: the epoch derives
+  from the chain's block time, so on a slow chain a wall-clock predictor fires
+  early or late. The trigger is `job epoch != bitstream_epoch`, both of which
+  the daemon now writes to status.json (the SEED register makes the second one
+  real rather than a hardcoded 0).
 - Swaps FPGA bitstream to one compiled for the new epoch
 - Reboots the system to load the new bitstream
 - Prevents mining stale epoch (which pool rejects)
@@ -138,46 +149,62 @@ Need to implement:
 
 ---
 
-## GPIO I/O Non-Blocking Optimization — NICE-TO-HAVE
+## GPIO I/O Poll and IRQ — DONE (was a correctness bug, not an optimization)
 
 ### Status
-**WORKING** but not optimized.
+**FIXED.** This entry previously read "NICE-TO-HAVE / WORKING but not
+optimized". That was wrong on both counts.
 
-### Current Behavior
-- `miner_io_pipe_poll()` calls `am01_bus_read_nonce()` which blocks for ~100ms on GPIO handshake
-- Not an issue for mining (~1 job/sec), but adds latency spikes
+### What was actually wrong
+`miner_io_pipe_poll()` returned 0 ("nonce read") unconditionally, so the
+daemon believed a nonce was waiting on every call and validated a garbage
+value each pass of its loop. Worse, reading NONCE_HI is what clears
+NONCE_VALID and drops the IRQ, so each spurious poll also consumed the flag.
+`miner_pipe.c` validates nonces against the current job, so no invalid shares
+would have been submitted -- but the miner would have spun at full CPU.
 
-### Optimization
-- Add non-blocking status-check to `am01_gpio_bus.h`: `am01_bus_status()`
-- Check NONCE_VALID bit without consuming it
-- Only call `am01_bus_read_nonce()` when we know data is ready
-
-### Effort
-- 2-4 hours to add and test
-- Potential speedup: ~5-10ms per poll cycle
-- Mining throughput: negligible impact (not latency-critical at 1 job/sec rate)
-
----
-
-## Seed Register Exposure — MINOR BUG FIX
-
-### Status
-**PLACEHOLDER** — SEED currently hardcoded to 0.
-
-### Issue
-- Daemon cannot detect epoch mismatch automatically
-- Requires `epoch-update` tool to handle renewal
+`miner_io_pipe_wait()` slept 5ms and always reported a timeout, on a comment
+claiming this backend had no interrupt. GPIO23 *is* the FPGA's nonce-ready
+IRQ and `am01_bus_wait_irq()` already existed, requested for both-edge events.
 
 ### Fix
-- Extend `odocrypt_gpio_wrapper.v` to expose SEED as readable register
-- Add ADDR_SEED = 0x00 (or similar) with baked ODOKEY value
-- Update `miner_io_gpio.c` to read it at startup
-
-### Effort
-- 1-2 hours (RTL + test)
-- Needed before autonomous epoch renewal can work
+- `poll()` reads STATUS and returns 1 when NONCE_VALID is clear, without
+  touching NONCE_HI.
+- `wait()` blocks on the IRQ edge; a timeout returns 1 and is not an error.
+- `miner_io_pipe_version()` reads the real VERSION register rather than a
+  hardcoded constant.
 
 ---
+
+## Seed Register Exposure — DONE
+
+### Status
+**IMPLEMENTED.** SEED_LO/SEED_HI at 0x9/0xA, interface VERSION bumped to
+0x0101, fed by the wrapper's ODO_SEED parameter.
+
+### Why it mattered more than "MINOR BUG FIX" suggested
+With the seed hardcoded to 0, the daemon's staleness check (`job epoch !=
+seed`) fired on every job. A permanently-tripped alarm is the same as no
+alarm, so a stale bitstream was undetectable on the board.
+
+### Also added
+- `am01_bus_read_seed()` gates on VERSION and returns ENOTSUP against an
+  older bitstream, because an unmapped register reads back as 0 and would
+  otherwise be mistaken for a real epoch of 0.
+- `tools/odo_gen` stamps the epoch seed, validity window and regenerate
+  command into `encrypt.v`, so a stale copy is visible by inspection instead
+  of needing a regenerate-and-diff to date it.
+- `tools/check-epoch.sh` verifies encrypt.v's stamp agrees with ODO_SEED and
+  reports staleness against the current date.
+
+### Still open
+The tree's epoch is stale (seed 1786752000, rolled over 2026-08-25).
+Regenerating changes the sbox contents and invalidates place-and-route, so it
+is a deliberate step to take at a safe point -- check-epoch.sh prints the
+commands.
+
+---
+
 
 ## Performance Tuning — OPTIONAL
 
