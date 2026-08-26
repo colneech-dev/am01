@@ -81,7 +81,9 @@ def main():
     ap.add_argument("outfile", nargs="?")
     ap.add_argument("--columns", default="0,1,2,3,4,5,6",
                     help="RAMB18 site columns to use, left to right (default 0,1,2)")
-    ap.add_argument("--mode", choices=["block", "stripe"], default="stripe",
+    ap.add_argument("--cols-per-round", type=int, default=3,
+                    help="vivado mode: adjacent columns per round (measured: Vivado uses ~3)")
+    ap.add_argument("--mode", choices=["block", "stripe", "vivado"], default="stripe",
                     help="block = each round packed into one column (MEASURED WORSE, "
                          "see comment in source). stripe = each round spread across "
                          "all columns, distributing BRAM egress demand.")
@@ -121,6 +123,81 @@ def main():
         sys.exit("ERROR: block mode needs %d columns, only %d given" % (need_cols, len(cols)))
 
     assigned = 0
+    if args.mode == "vivado":
+        # VIVADO-MEASURED layout: a few ADJACENT columns per round.
+        #
+        # This is not a guess. Vivado reaches 158.81 MHz on this exact netlist,
+        # and verify_bram_spread.py measures both placements in the same
+        # coordinate system:
+        #
+        #   per round          Vivado (158.81)   nextpnr (89.30)
+        #   column span        2.2 (max 4)       5.2 (max 6)
+        #   distinct columns   3.2 (max 5)       6.1 (max 7)
+        #   row span          11.4               6.2
+        #   columns used       0..5              0..6
+        #   row range         53..137            0..139
+        #
+        # Both use 420 tiles, one RAMB18 per tile, none double-packed -- so the
+        # difference is purely WHERE, not how densely.
+        #
+        # Vivado confines each round's 20 BRAMs to ~3 adjacent columns; nextpnr
+        # smears every round across ~6 of the 7, i.e. the whole die width. BRAM
+        # nets are 10.7% of nets but 42.5% of total HPWL, with a median span of
+        # 124 tiles against 1 for SLICE nets, so this is where the wirelength is.
+        #
+        # WHY NEITHER EXISTING MODE
+        # -------------------------
+        # `stripe` (the current default) spreads each round across ALL columns --
+        # precisely maximising what Vivado minimises. `block` packs a round into
+        # 10 contiguous tiles, which over-corrects: its failed arcs were 817
+        # SLICE->SLICE against just 37 BRAM->SLICE, i.e. it crowded that round's
+        # ~3300 LUTs around a 25-row anchor rather than saturating BRAM egress.
+        # The target sits between them, and Vivado has already measured it.
+        # Per-column allocation cursor.
+        #
+        # An earlier version computed the Y band as (idx * per_col) % (SITES-...)
+        # which WRAPS: with 21 rounds x 7 rows against ~133 usable rows, rounds
+        # 19/20 wrapped back onto rounds 0/1 and produced 13 duplicate sites
+        # (420 assignments, 407 unique). Cursors cannot collide by construction.
+        #
+        # NOTE ON COLUMN HEIGHTS: the RAMB18 columns are NOT uniform. On
+        # xc7k325t, columns 0-5 run to Y138-139 but column 6 stops at Y59, so
+        # SITES_PER_COL=140 is only valid for 0-5. Vivado uses X0..X5 and leaves
+        # column 6 alone; pass --columns 0,1,2,3,4,5 to match. Assigning a site
+        # that does not exist fails hard:
+        #   ERROR: No Bel named 'RAMB18_X6Y63/RAMB18E1' located for this chip
+        ncol = len(cols)
+        cpr = max(1, min(args.cols_per_round, ncol))
+        span = max(1, ncol - cpr + 1)
+        cursor = {c: 0 for c in cols}
+        for idx, rnd in enumerate(rounds):
+            members = sorted(by_round[rnd])
+            rc = cols[(idx % span):(idx % span) + cpr]
+            lo = {c: cursor[c] for c in rc}
+            for j, (_, name) in enumerate(members):
+                col = rc[j % cpr]
+                site_y = cursor[col]
+                cursor[col] += 1
+                if site_y >= SITES_PER_COL:
+                    sys.exit("ERROR: column %d exhausted at Y%d" % (col, site_y))
+                bel = "RAMB18_X%dY%d/RAMB18E1" % (col, site_y)
+                if not args.dry_run:
+                    cells[name].setdefault("attributes", {})["BEL"] = bel
+                assigned += 1
+            print("  round %2d -> cols %s  Y%s" %
+                  (rnd, ",".join(str(c) for c in rc),
+                   ",".join("%d-%d" % (lo[c], cursor[c] - 1) for c in rc)))
+        print("assigned %d BEL attributes" % assigned)
+        if args.dry_run:
+            print("(dry run, nothing written)")
+            return
+        if not args.outfile:
+            sys.exit("ERROR: outfile required unless --dry-run")
+        with open(args.outfile, "w") as f:
+            json.dump(design, f)
+        print("wrote %s" % args.outfile)
+        return
+
     if args.mode == "stripe":
         # STRIPED layout.
         #
