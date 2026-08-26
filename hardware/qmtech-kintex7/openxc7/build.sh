@@ -210,9 +210,55 @@ else
     PNR_EXTRA=()
 fi
 
+# BRAM floorplan + critical-distance correction.
+#
+# MEASURED, on this design (routed clk_h, not post-place estimates):
+#     89.30 MHz  baseline, no floorplan, no knobs        converged iter 45
+#     86.73 MHz  floorplan alone                         converged iter  9
+#     91.12 MHz  floorplan (2 cols/round) + CRIT_DIST    converged iter 23
+#     93.28 MHz  floorplan (3 cols/round) + CRIT_DIST    converged iter 34
+#
+# NEITHER HALF WORKS ALONE. The floorplan alone is worse than baseline.
+# CRIT_DIST_EXP alone NEVER converged -- it sat at ~1595 overused across every
+# arc budget and both seeds tried. They compose because they fail for opposite
+# reasons: CRIT_DIST_EXP corrects a real inversion in HeAP's bound2bound weight
+# (1/(users*distance) gives a die-crossing critical net LESS pull than a 5-tile
+# slack net) and pays for it by lengthening everything else until the router
+# drowns; the floorplan hands that routing budget back by confining each round's
+# BRAMs to ~3 adjacent columns instead of smearing them across the die.
+#
+# The floorplan geometry is not a guess -- it is measured from Vivado's own
+# placement of this netlist (see verify_bram_spread.py). BRAM nets are 10.7% of
+# nets but 42.5% of total HPWL.
+#
+# ROUTER SETTINGS ARE PART OF THE RESULT, not incidental:
+#   ARC_MAX_VISIT=2000000  200k hard-errors on this design's BRAM-egress arcs;
+#                          unbounded (the code default) oscillates forever
+#   MAX_STALL=250          the default 50 counts iterations since the BEST
+#                          overuse improved, so it kills runs mid-descent
+#
+# BRAM_FP=0 disables the floorplan; CRIT_DIST= (empty) disables the knob.
+# floorplan_brams.py no-ops with a warning on a design with no round hierarchy,
+# so this is safe on other designs -- it degrades to baseline, not to breakage.
+BRAM_FP="${BRAM_FP:-1}"
+CRIT_DIST="${CRIT_DIST-1.0}"
+PNR_JSON="$OUT/$TOP.json"
+if [ "$BRAM_FP" = "1" ]; then
+    echo "==> [2/4a] BRAM floorplan (Vivado-measured layout)"
+    if python3 "$(dirname "$0")/floorplan_brams.py" "$OUT/$TOP.json" \
+            "$OUT/$TOP.fp.json" --mode vivado --columns 0,1,2,3,4,5; then
+        PNR_JSON="$OUT/$TOP.fp.json"
+    else
+        echo "    floorplan failed; continuing with the unfloorplanned netlist"
+    fi
+fi
+
 echo "==> [2/4] place & route (nextpnr-xilinx) -- $(date -Is)"
+NEXTPNR_ARC_MAX_VISIT="${NEXTPNR_ARC_MAX_VISIT:-2000000}" \
+NEXTPNR_ROUTER2_MAX_STALL="${NEXTPNR_ROUTER2_MAX_STALL:-250}" \
+${CRIT_DIST:+NEXTPNR_CRIT_DIST_EXP="$CRIT_DIST"} \
 "$NEXTPNR" --chipdb "$CHIPDB" \
-    --json "$OUT/$TOP.json" --xdc "$XDC" \
+    --json "$PNR_JSON" --xdc "$XDC" \
     --fasm "$OUT/$TOP.fasm" --freq "$FREQ" \
     ${PNR_EXTRA[@]+"${PNR_EXTRA[@]}"} \
     --log "$OUT/$TOP.pnr.log"
