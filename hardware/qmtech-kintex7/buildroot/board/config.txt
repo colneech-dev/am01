@@ -7,16 +7,24 @@ fixup_file=fixup4.dat
 kernel=Image
 arm_64bit=1
 
-# Serial console on ttyAMA0. Keep this: the miner is headless, and the UART is
-# the only way to see why a boot failed.
-enable_uart=1
-dtoverlay=miniuart-bt
+# NO UART console. The manual's GPIO table (section 2.2.9) routes GPIO14 -> C17
+# and GPIO15 -> A15 into the FPGA, and those are the primary UART's TXD/RXD as
+# well as data bus bits 14 and 15. Every alternate CM4 UART (uart2..uart5) also
+# lands inside GPIO0-27, so there is no serial console available on the pins.
+#
+# Serial console is provided over the mini-USB (J14) instead, as a USB CDC-ACM
+# gadget -- see /etc/modules-load.d/am01-usb-gadget.conf. It appears as a COM
+# port on the machine at the other end of the cable.
+dtoverlay=dwc2,dr_mode=peripheral
 
 # The FPGA parallel bus claims GPIO 0-23, so nothing else may drive them.
 # Disable the I2C/SPI peripherals that would otherwise take those pins.
 dtparam=i2c_arm=off
 dtparam=spi=off
 dtparam=i2s=off
+
+# Reserve the bus pins from other drivers.
+dtoverlay=am01-fpga-gpio
 
 # No display attached by default; odo-ui is skipped when /dev/fb0 is absent.
 # Raise this and attach a screen if you want the touch UI.

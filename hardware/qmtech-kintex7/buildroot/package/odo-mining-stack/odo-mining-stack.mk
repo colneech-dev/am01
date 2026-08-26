@@ -31,8 +31,16 @@ endef
 define ODO_MINING_STACK_INSTALL_TARGET_CMDS
 	$(TARGET_MAKE_ENV) $(MAKE) -C $(@D) $(ODO_MINING_STACK_MAKE_OPTS) \
 		DESTDIR="$(TARGET_DIR)" PREFIX=/usr install
-	$(INSTALL) -D -m 0644 $(BR2_EXTERNAL_AM01_PATH)/../linux/am01-fpga-gpio.dts \
-		$(TARGET_DIR)/boot/overlays/am01-fpga-gpio.dts
+	# Login prompt on the USB CDC-ACM gadget (mini-USB J14). The pin-based
+	# UART is unavailable: GPIO14/15 are FPGA data bus bits 14/15.
+	mkdir -p $(TARGET_DIR)/etc/systemd/system/getty.target.wants
+	ln -sf /usr/lib/systemd/system/serial-getty@.service \
+		$(TARGET_DIR)/etc/systemd/system/getty.target.wants/serial-getty@ttyGS0.service
+	# WiFi association is am01-wifi.service (a plain unit in the overlay,
+	# enabled via 00-am01.preset). Mask the wpa_supplicant package's own
+	# service so two supplicants cannot contend for wlan0.
+	mkdir -p $(TARGET_DIR)/etc/systemd/system
+	ln -sf /dev/null $(TARGET_DIR)/etc/systemd/system/wpa_supplicant.service
 endef
 
 # The gpio group is created first, then miner joins it, so that the udev rule

@@ -1,0 +1,31 @@
+# Associates the CM4's on-board WiFi. systemd-networkd then addresses wlan0
+# (see 20-wlan0.network).
+#
+# This is a plain unit rather than wpa_supplicant@wlan0 deliberately:
+# `systemctl preset-all`, which Buildroot runs while assembling the image,
+# enumerates unit *files* and cannot instantiate a template for a specific
+# instance. An enable line for wpa_supplicant@wlan0 in a preset is therefore
+# never acted on, and preset-all deletes any instance symlink created by hand.
+# A real unit file survives that.
+
+[Unit]
+Description=AM01 WiFi association (wlan0)
+Documentation=https://github.com/colneech-dev/am01
+Wants=sys-subsystem-net-devices-wlan0.device
+After=sys-subsystem-net-devices-wlan0.device
+Before=network-online.target
+# Absent on a fresh clone: the credential file is gitignored. Skip rather than
+# fail, since eth0 is the primary route in anyway.
+ConditionPathExists=/etc/wpa_supplicant/wpa_supplicant-wlan0.conf
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/wpa_supplicant -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant-wlan0.conf
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=am01-wifi
+
+[Install]
+WantedBy=multi-user.target

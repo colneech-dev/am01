@@ -1,0 +1,24 @@
+# Buildroot runs `systemctl preset-all` while assembling the image, which
+# resets unit enablement to preset policy. That silently deleted the
+# wpa_supplicant@wlan0 symlink the package had created: the wpa_supplicant
+# package ships 50-wpa_supplicant.preset, which enables the plain
+# wpa_supplicant.service and leaves template instances disabled.
+#
+# Presets in /etc take precedence over /usr/lib, and 00- sorts first, so this
+# is the authoritative policy for the miner image.
+
+# am01-wifi.service, not wpa_supplicant@wlan0: preset-all cannot instantiate a
+# template for a given instance, so an enable line for one is silently ignored
+# and any hand-made instance symlink is removed. See am01-wifi.service.
+enable am01-wifi.service
+disable wpa_supplicant.service
+
+# Console on the USB CDC-ACM gadget (mini-USB J14); no pin UART is possible
+# because GPIO14/15 are FPGA data bus bits.
+enable serial-getty@ttyGS0.service
+
+enable boot.mount
+enable am01-fpga.service
+enable odo-miner.service
+enable odo-webd.service
+enable odo-ui.service

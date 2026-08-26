@@ -55,6 +55,7 @@ BR2_TARGET_ROOTFS_TAR_GZIP=y
 BR2_PACKAGE_HOST_DOSFSTOOLS=y
 BR2_PACKAGE_HOST_GENIMAGE=y
 BR2_PACKAGE_HOST_MTOOLS=y
+BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_AM01_PATH)/board/post-build.sh"
 BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_AM01_PATH)/board/post-image.sh"
 
 # System
@@ -75,10 +76,26 @@ BR2_PACKAGE_UTIL_LINUX=y
 BR2_PACKAGE_WHICH=y
 BR2_PACKAGE_SCREEN=y
 
-# Networking
+# Networking. The board has a populated HR911130A RJ45 wired to the CM4's MDI
+# pairs (manual section 2.2.9), so eth0 is real -- DHCP on it is the primary
+# way in, since no pin-based serial console exists on this board.
+BR2_SYSTEM_DHCP="eth0"
 BR2_PACKAGE_OPENSSH=y
 BR2_PACKAGE_NETCAT=y
 BR2_PACKAGE_WGET=y
+
+# CM4 on-board WiFi: brcmfmac driver firmware plus a supplicant.
+# Credentials are NOT in this repo; see /etc/wpa_supplicant.conf on the target.
+BR2_PACKAGE_LINUX_FIRMWARE=y
+BR2_PACKAGE_LINUX_FIRMWARE_BRCM_BCM43XX=y
+# BCM43XXX carries the 43455 parts the CM4 needs: the Raspberry Pi nvram .txt
+# and (via CYPRESS_CYW43XXX) the cyfmac43455 firmware and clm_blob. BCM43XX
+# alone stops at 4354 and leaves the radio without firmware.
+BR2_PACKAGE_LINUX_FIRMWARE_BRCM_BCM43XXX=y
+BR2_PACKAGE_WPA_SUPPLICANT=y
+BR2_PACKAGE_WPA_SUPPLICANT_NL80211=y
+BR2_PACKAGE_WPA_SUPPLICANT_CLI=y
+BR2_PACKAGE_WPA_SUPPLICANT_PASSPHRASE=y
 
 # Debugging
 BR2_PACKAGE_STRACE=y
