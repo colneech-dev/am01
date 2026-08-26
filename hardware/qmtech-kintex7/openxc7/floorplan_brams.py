@@ -65,6 +65,36 @@ USAGE
     ./floorplan_brams.py in.json out.json [--columns 0,1,2] [--dry-run]
 """
 import argparse
+import collections
+import json
+import os
+import re
+import sys
+
+
+def load_valid_sites():
+    """{column: [sorted real Y values]} for RAMB18, from the prjxray tilegrid.
+
+    The device's BRAM columns are neither uniform in height nor contiguous, so
+    the site list has to be read rather than assumed. Measured on xc7k325t:
+    columns 0-4 hold 140 sites Y0..139 with no gaps, column 5 holds 130 with ten
+    gaps scattered through the same range, and column 6 stops at Y59.
+    """
+    import collections
+    db = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      ".openxc7-src/nextpnr-xilinx/xilinx/external/prjxray-db",
+                      "kintex7/xc7k325t/tilegrid.json")
+    if not os.path.exists(db):
+        sys.exit("ERROR: tilegrid not found at %s" % db)
+    with open(db) as f:
+        grid = json.load(f)
+    bycol = collections.defaultdict(list)
+    for info in grid.values():
+        for site in info.get("sites", {}):
+            m = re.match(r"RAMB18_X(\d+)Y(\d+)$", site)
+            if m:
+                bycol[int(m.group(1))].append(int(m.group(2)))
+    return {c: sorted(ys) for c, ys in bycol.items()}
 import json
 import re
 import sys
@@ -83,6 +113,15 @@ def main():
                     help="RAMB18 site columns to use, left to right (default 0,1,2)")
     ap.add_argument("--cols-per-round", type=int, default=3,
                     help="vivado mode: adjacent columns per round (measured: Vivado uses ~3)")
+    ap.add_argument("--y-base", type=int, default=0,
+                    help="vivado mode: first row to use. Vivado's BRAMs occupy Y53..Y137, "
+                         "i.e. it avoids the top and bottom of the device entirely; "
+                         "default 0 starts at the bottom edge")
+    ap.add_argument("--cols-stride", type=int, default=1,
+                    help="vivado mode: how many rounds share a column group before it "
+                         "advances. Vivado holds a group across several consecutive rounds "
+                         "(0-5, then 6-12); stride 1 advances every round, so consecutive "
+                         "pipeline stages never share columns")
     ap.add_argument("--mode", choices=["block", "stripe", "vivado"], default="stripe",
                     help="block = each round packed into one column (MEASURED WORSE, "
                          "see comment in source). stripe = each round spread across "
@@ -169,17 +208,44 @@ def main():
         ncol = len(cols)
         cpr = max(1, min(args.cols_per_round, ncol))
         span = max(1, ncol - cpr + 1)
+        # Wrap the column group modulo the column COUNT, not (ncol - cpr + 1).
+        #
+        # Sliding a window without wrapping loads the middle columns ~3x harder
+        # than the edges: with 6 columns and cpr=3 the windows are [0,1,2],
+        # [1,2,3], [2,3,4], [3,4,5], so column 2 appears in three of them and
+        # column 0 in one. That exhausted column 2 outright at --y-base 53
+        # (53 + ~105 > 140 rows). Vivado spreads evenly across all six.
+        # Use the REAL site map. RAMB18 columns are neither uniform nor
+        # contiguous on xc7k325t:
+        #     col 0-4  140 sites, Y0..139, no gaps
+        #     col 5    130 sites, Y0..139, TEN gaps
+        #     col 6     60 sites, Y0..59
+        # Assuming Y0..139 everywhere fails hard and late:
+        #     ERROR: No Bel named 'RAMB18_X5Y67/RAMB18E1' located for this chip
+        # Earlier variants only worked by not happening to land on a gap.
+        valid = load_valid_sites()
+        for c in cols:
+            if c not in valid:
+                sys.exit("ERROR: column %d has no RAMB18 sites" % c)
+        stride = max(1, args.cols_stride)
+        # cursor indexes into the column's sorted list of REAL rows
         cursor = {c: 0 for c in cols}
+        for c in cols:
+            while (cursor[c] < len(valid[c])
+                   and valid[c][cursor[c]] < max(0, args.y_base)):
+                cursor[c] += 1
         for idx, rnd in enumerate(rounds):
             members = sorted(by_round[rnd])
-            rc = cols[(idx % span):(idx % span) + cpr]
+            grp = (idx // stride) % ncol
+            rc = [cols[(grp + k) % ncol] for k in range(cpr)]
             lo = {c: cursor[c] for c in rc}
             for j, (_, name) in enumerate(members):
                 col = rc[j % cpr]
-                site_y = cursor[col]
+                if cursor[col] >= len(valid[col]):
+                    sys.exit("ERROR: column %d exhausted (%d real sites, y-base %d)"
+                             % (col, len(valid[col]), args.y_base))
+                site_y = valid[col][cursor[col]]
                 cursor[col] += 1
-                if site_y >= SITES_PER_COL:
-                    sys.exit("ERROR: column %d exhausted at Y%d" % (col, site_y))
                 bel = "RAMB18_X%dY%d/RAMB18E1" % (col, site_y)
                 if not args.dry_run:
                     cells[name].setdefault("attributes", {})["BEL"] = bel
