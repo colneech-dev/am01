@@ -15,8 +15,14 @@ BOARD_DIR="$(dirname "$0")"
 
 # cmdline.txt must sit next to the other boot files for genimage to pick it up.
 # mmcblk0p2 is the second partition of the eMMC on a CM4.
-echo "root=/dev/mmcblk0p2 rootwait console=tty1 console=ttyAMA0,115200" \
-	> "${BINARIES_DIR}/cmdline.txt"
+#
+# console=tty1 ONLY -- deliberately no ttyAMA0. That UART is disabled in
+# config.txt because GPIO14/15 are FPGA data bus bits, and Linux makes the LAST
+# console= the userspace /dev/console: naming a UART that does not exist would
+# send init's output nowhere. tty1 is HDMI, which is the only early-boot
+# diagnostic path on this board -- the USB gadget console cannot help until
+# dwc2 and g_serial have loaded.
+echo "root=/dev/mmcblk0p2 rootwait console=tty1" > "${BINARIES_DIR}/cmdline.txt"
 
 exec "${HOST_DIR}/bin/genimage" \
 	--rootpath "${TARGET_DIR}" \
