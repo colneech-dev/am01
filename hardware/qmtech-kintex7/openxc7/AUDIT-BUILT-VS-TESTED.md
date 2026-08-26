@@ -551,6 +551,79 @@ bad code — it is code that was never once executed.**
 
 ---
 
+## Plan — map the device's timing properly (upstreamable, NOT an Fmax lever)
+
+**Scope check first: three of the four layers already exist.**
+
+| layer | state | source |
+|---|---|---|
+| routing graph (tiles/wires/pips) | complete | prjxray-db |
+| bitstream encoding (FASM bits) | complete | prjxray fuzzing |
+| cell timing | 29 SDF files, but **kintex7 shipped none** — we generated BRAM ourselves | Vivado `write_sdf` |
+| **wire R/C** | **32 of 600 INT_L wires = 5.3%** | **missing** |
+
+So the gap is one thing: **interconnect wire resistance and capacitance**. Pip
+delays are largely present (~57% of INT_L pips carry non-zero delay). Wires are
+not, which is why `getWireDelay` returns 0 on xc7 (`xilinx/arch.h:1059`) and
+routed delay collapses to pip-count x per-class constants.
+
+### What Vivado will and will not give
+
+Checked directly in the 2026.1 install:
+
+- **No `.speed` files exist** in this version.
+- `public/liberty/kintex7.lib` (9.4 MB, plain text) carries timing
+  **topology only** — `timing_type` and `related_pin`, no `cell_rise` /
+  `intrinsic_rise` values.
+- `kintex7_pt.lib` has 61 "values", all `default_intrinsic_rise : 0.0` or
+  placeholder `1.0`.
+- `kintex7.rtd` is **binary/obfuscated** (header `XlxV64EB`).
+
+The real numbers are only obtainable through Vivado's own reporting.
+
+### What AMD publishes
+
+**DS182** (*Kintex-7 DC and AC Switching Characteristics*) gives speed-grade
+cell timing for our `-1` part — free, citable, public. It does **not** publish
+per-pip or per-wire routing delays, nor bitstream encoding. Those two are what a
+chipdb fundamentally is, which is why prjxray exists.
+
+### Build plan
+
+1. **Cell timing — solved method, ~1 day.** Generalise `make-bram-timing-db.sh`:
+   instantiate every primitive, `write_sdf`, parse `IOPATH`. Proven — it
+   produced the 216 MB BRAM SDF and `XC7_BRAM_CLK_TO_DO_NS = 2.08`.
+   Immediate target: `xilinx/arch.cc:2497` and `:2515` are both
+   `delay.delay = 200; // FIXME` — every LUT delay in the flow is a hardcoded
+   200 ps.
+2. **Wire R/C — an inverse fit, days not months.** The values are locked in the
+   binary `.rtd`, so fit rather than read: take routed nets with known pip
+   sequences, subtract known pip delays, attribute the residual to wire types.
+   **`vivado_net_delay_calib5.csv` already holds 20,000 such samples**, and the
+   unknowns are ~24 segment classes (EE2/EE4/HEX/LONG...), not 600 individual
+   wires — heavily over-determined least squares.
+3. Feed both into the chipdb via `bbaexport.py`, rebuilding with `bbasm` from
+   the same tree (see `build-chipdb.sh`'s revision-lock warning).
+
+### Expected value — low for us, real for the project
+
+**This will not close the Fmax gap, and should not be sold as if it might.**
+The timing review measured `predictDelay` against those same 20,000 Vivado
+delays at **0.78x, flat, no distance trend**, within 10% at the critical span.
+Criticality is scale-invariant (`common/timing.cc:678-680`), so a uniform
+correction provably cannot reach the placer at all. Our critical path is
+2.1 ns BRAM + 7.4 ns net + 0.2 ns LUT — better cell numbers move ~0.05 ns on
+11 ns.
+
+Where it does pay:
+- **Vendor-traceable timing.** "93.28 MHz" is currently self-consistent, not
+  backed by silicon-measured data. For anything shipping, that matters.
+- **openXC7 generally.** kintex7 having zero upstream timing data affects every
+  user of this part. Genuinely upstreamable, unlike most local patches here.
+- Any future design where logic rather than routing dominates.
+
+---
+
 ## Parked — upstream contribution (not on the Fmax path)
 
 **yosys#6144 has a maintainer reply (widlarizer, 2026-08-24).** `hdlname` is in
