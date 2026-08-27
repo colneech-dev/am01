@@ -187,8 +187,21 @@ To let the board do it instead:
 With no `/boot/am01.bit` the unit is skipped, so external programming keeps
 working unchanged.
 
-Direct CM4-GPIO-to-JTAG is not viable on this board — see
-`cm4-firmware/README.md`. It goes through a USB-JTAG adapter.
+**The CM4 cannot program the FPGA on its own.** There is no electrical path:
+the manual's section 2.2.9 GPIO table wires all 28 CM4 GPIOs to FPGA fabric
+pins (the parallel bus), while J1 and the SPI flash both land only on the
+FPGA's *dedicated configuration* pins (`TMS_0`/`TCK_0`/`TDO_0`/`TDI_0` and
+`FPGA_CCLK`/`FPGA_DQ0-3`/`FPGA_CSO_B` on U11A, schematic sheets 1-2). No
+CM4 pin reaches either, so JTAG bit-banging from GPIO is not an option
+regardless of software. A USB-JTAG adapter is required.
+
+For unattended epoch renewal, leave the adapter plugged into one of the
+board's USB-A ports. The alternative that needs no adapter at all is
+STARTUPE2/ICAPE2 self-reconfiguration -- the fabric can reach the SPI
+config pins after configuration, so the Pi could stream a new bitstream
+over the existing GPIO bus and have the FPGA rewrite its own flash. That
+needs real HDL work plus a MultiBoot golden image, since a failed write
+would otherwise leave the board unconfigurable except by JTAG.
 
 ---
 

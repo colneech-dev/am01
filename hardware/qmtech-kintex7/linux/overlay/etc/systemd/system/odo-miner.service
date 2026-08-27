@@ -14,8 +14,13 @@ Wants=network-online.target
 # am01-fpga.service is skipped and the miner should still start.
 Wants=am01-fpga.service
 # StartLimit* belong in [Unit]; systemd ignores them in [Service].
-StartLimitIntervalSec=60
-StartLimitBurst=5
+#
+# Rate limiting disabled deliberately. With the default burst the miner would
+# fail 5 times in 60s against an unreachable pool and then stay dead until
+# someone intervened -- exactly wrong for an unattended miner, where the pool
+# or the network being down is a transient condition to sit through, not a
+# reason to stop. RestartSec caps the retry rate instead.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -42,7 +47,9 @@ RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=yes
 
 Restart=on-failure
-RestartSec=5
+# 30s, not 5: the usual reason for a restart is the pool or the network being
+# unreachable, and hammering it every 5 seconds helps nobody.
+RestartSec=30
 
 Nice=5
 IOSchedulingClass=2

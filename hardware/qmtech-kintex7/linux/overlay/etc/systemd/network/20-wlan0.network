@@ -5,6 +5,13 @@
 [Match]
 Name=wlan0
 
+[Link]
+# systemd-networkd-wait-online blocks until every managed link is configured,
+# so an unassociated wlan0 held up boot for its full 120s timeout with
+# "Waiting for network to be configured". WiFi is the secondary route in --
+# eth0 is primary -- so it must not gate network-online.target.
+RequiredForOnline=no
+
 [Network]
 DHCP=yes
 

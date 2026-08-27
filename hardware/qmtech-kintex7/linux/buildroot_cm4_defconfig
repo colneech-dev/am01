@@ -60,7 +60,12 @@ BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_AM01_PATH)/board/post-image.sh"
 
 # System
 BR2_TARGET_GENERIC_HOSTNAME="am01-miner"
-BR2_TARGET_GENERIC_ISSUE=y
+# Empty on purpose. This is a *string* option (the banner text) -- it was set
+# to "y", which made the banner literally "y". Buildroot writes /etc/issue from
+# it during target-finalize and would clobber the overlay's version, which
+# prints the eth0/wlan0 addresses above the login prompt via agetty's \4{iface}
+# escapes. Leaving it empty stops Buildroot writing the file at all.
+BR2_TARGET_GENERIC_ISSUE=""
 BR2_TARGET_GENERIC_ROOT_PASSWD="changeme"
 BR2_SYSTEM_BIN_SH_BASH=y
 

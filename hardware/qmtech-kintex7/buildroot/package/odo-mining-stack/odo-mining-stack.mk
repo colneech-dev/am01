@@ -36,6 +36,13 @@ define ODO_MINING_STACK_INSTALL_TARGET_CMDS
 	mkdir -p $(TARGET_DIR)/etc/systemd/system/getty.target.wants
 	ln -sf /usr/lib/systemd/system/serial-getty@.service \
 		$(TARGET_DIR)/etc/systemd/system/getty.target.wants/serial-getty@ttyGS0.service
+	# Login prompt on HDMI (console=tty1). systemd's own preset says
+	# "enable getty@.service", but preset-all cannot instantiate a template for
+	# a given instance, so getty@tty1 was never enabled and the board booted to
+	# "Reached target Multi-User System" and then sat there with no prompt --
+	# with no UART, that left HDMI showing a dead end.
+	ln -sf /usr/lib/systemd/system/getty@.service \
+		$(TARGET_DIR)/etc/systemd/system/getty.target.wants/getty@tty1.service
 	# WiFi association is am01-wifi.service (a plain unit in the overlay,
 	# enabled via 00-am01.preset). Mask the wpa_supplicant package's own
 	# service so two supplicants cannot contend for wlan0.

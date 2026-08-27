@@ -16,18 +16,32 @@ arm_64bit=1
 # gadget -- see /etc/modules-load.d/am01-usb-gadget.conf. It appears as a COM
 # port on the machine at the other end of the cable.
 #
-# dr_mode=otg, NOT peripheral. Schematic sheet 1: the FSUSB42MUX (U15) has its
-# common port on the CM4's USB2_P/USB2_N, output 1 on the USB2514 hub (the four
-# USB-A ports) and output 2 on the mini-USB J14 -- and its SEL is driven by
-# USBOTG_ID, pulled up by R278. So the hub and J14 are mutually exclusive and
-# the board switches between them automatically from the mini-USB cable's ID
-# pin. Forcing peripheral mode would flip the CM4 to device mode permanently
-# and leave the USB-A ports dead even with no cable in J14. With otg, the
-# software mode follows the same ID pin the hardware mux does:
+# HOST mode: the four USB-A ports work, and there is NO gadget console on J14.
 #
-#   no mini-USB cable  -> host mode,   USB-A ports live
-#   OTG cable in J14   -> device mode, gadget console (and rpiboot) live
-dtoverlay=dwc2,dr_mode=otg
+# These are mutually exclusive on this board and cannot both be had. Schematic
+# sheet 1: the FSUSB42MUX (U15) has its common port on the CM4's USB2_P/USB2_N,
+# output 1 (HSD1) on the USB2514 hub feeding the USB-A ports, output 2 (HSD2)
+# on the mini-USB J14. SEL is USBOTG_ID, pulled HIGH by R278 -- and per the
+# FSUSB42 truth table SEL high selects HSD2, the mini-USB. Peripheral mode also
+# means no VBUS on the host ports, so a keyboard gets no power.
+#
+# dr_mode=otg does NOT split the difference: a pulled-up ID reads as
+# "B-device", so otg resolves to peripheral and the USB-A ports stay dead.
+# Host mode is what drives USBOTG_ID low, flipping the mux to the hub.
+#
+# Chosen because HDMI + USB keyboard is the only local console when there is
+# no network: a login prompt you cannot type at is no use. Switch back to the
+# gadget (dtoverlay=dwc2,dr_mode=peripheral, and drop otg_mode) once the board
+# is reachable over the network. rpiboot is unaffected either way -- it runs
+# before Linux.
+#
+# otg_mode=1, NOT dtoverlay=dwc2,dr_mode=host. On the CM4 the USB 2.0 host
+# controller is disabled by default, and dr_mode=host does not enable it --
+# it only tells the dwc2 driver which role to take. otg_mode=1 routes the OTG
+# port through the xHCI controller instead, which is what actually powers and
+# enumerates the USB-A ports behind the USB2514 hub. The two are alternatives:
+# do not set both.
+otg_mode=1
 
 # The FPGA parallel bus claims GPIO 0-23, so nothing else may drive them.
 # Disable the I2C/SPI peripherals that would otherwise take those pins.
