@@ -246,7 +246,7 @@ PNR_JSON="$OUT/$TOP.json"
 if [ "$BRAM_FP" = "1" ]; then
     echo "==> [2/4a] BRAM floorplan (Vivado-measured layout)"
     if python3 "$(dirname "$0")/floorplan_brams.py" "$OUT/$TOP.json" \
-            "$OUT/$TOP.fp.json" --mode vivado --columns 0,1,2,3,4,5; then
+            "$OUT/$TOP.fp.json" --mode vivado --columns 0,1,2,3,4,5 --y-base "${BRAM_YBASE:-53}"; then
         PNR_JSON="$OUT/$TOP.fp.json"
     else
         echo "    floorplan failed; continuing with the unfloorplanned netlist"
