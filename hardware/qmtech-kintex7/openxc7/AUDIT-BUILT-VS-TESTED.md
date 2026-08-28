@@ -844,3 +844,71 @@ post-mapping absorption pass, would be a genuine yosys contribution:
 `absorb_bram_outreg.py` is the working prototype of the latter. **Do not file
 until the route confirms a real Fmax gain** -- the argument for upstreaming is
 the measurement, not the mechanism.
+
+---
+
+## build.sh place & route was broken for two days -- 2026-08-28
+
+### The defect
+
+```bash
+NEXTPNR_ARC_MAX_VISIT="${...:-2000000}" \
+${CRIT_DIST:+NEXTPNR_CRIT_DIST_EXP="$CRIT_DIST"} \
+"$NEXTPNR" ...
+```
+
+Bash recognises `NAME=VALUE` assignment prefixes at **parse** time, before
+expansion. A prefix that only becomes `NAME=VALUE` *after* expanding is not an
+assignment -- it is taken as the command name:
+
+```
+build.sh: line 310: NEXTPNR_CRIT_DIST_EXP=1.0: command not found
+```
+
+`CRIT_DIST` defaults to `1.0`, so this fired on **every** `build.sh` run.
+Introduced by `fc33171` (2026-08-26), "fold the 93.28 MHz configuration into
+build.sh". Fixed by using `env`, which takes the expanded words as its own
+arguments. `run_cfg.sh` was never affected because it has always used `env`.
+
+### How many measurements were invalidated: ZERO
+
+Checked, not assumed. Two independent reasons:
+
+1. **The failure is loud and total.** `set -euo pipefail` turns exit 127 into an
+   immediate abort. No FASM, no bitstream, no Fmax line. It cannot yield a
+   wrong number, only no number.
+2. **Nothing went through build.sh in the window.** `build.sh` writes the
+   untagged `am01_qmtech_top.pnr.log`; `run_cfg.sh` writes tagged
+   `am01_qmtech_top_<tag>.pnr.log`. Every untagged route log predates the bug
+   (five on 15-16 Aug, one on 23 Aug), as do all untagged FASMs (16 Aug). All
+   41 runs since 26 Aug are tagged, i.e. `run_cfg.sh`.
+
+**One run hit it: the A/B baseline on 2026-08-28**, losing ~2 h of synthesis --
+and even that was recovered by routing the existing netlist via `route_ab.sh`
+rather than resynthesising.
+
+### What WAS damaged: the documented reproduction path
+
+`RESULTS.md` states "`build.sh` defaults to this configuration" and lists the
+winning knobs. That path had never been executed end to end. Following the
+documentation as written produced `command not found` after a two-hour wait.
+
+The numbers stand -- they were all taken through `run_cfg.sh`. What did not
+stand was the claim that build.sh reproduces them.
+
+### Why it survived two days
+
+The winning configuration was folded into `build.sh` as a convenience, and then
+nobody used `build.sh`: every experiment went through `run_cfg.sh`, which skips
+the ~2 h synthesis by reusing a netlist. A convenience path that nothing
+exercises is not covered by the fact that the tool it wraps is heavily used.
+
+### Lesson for this audit's own method
+
+This is the **"appearing in build.sh is documentation, not evidence"** rule
+(section 1) turning up in a new form. That rule was written about *knobs* named
+in comments. The same trap applies to the **command that applies them**: a knob
+folded into a script is not exercised until something runs that script.
+
+`REUSE_JSON` (added the same day) makes build.sh cheap enough to run for real,
+which is what would have caught this on day one.

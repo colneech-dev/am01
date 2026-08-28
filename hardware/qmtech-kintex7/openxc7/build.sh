@@ -307,10 +307,19 @@ if [ "$BRAM_FP" = "1" ]; then
 fi
 
 echo "==> [2/4] place & route (nextpnr-xilinx) -- $(date -Is)"
-NEXTPNR_ARC_MAX_VISIT="${NEXTPNR_ARC_MAX_VISIT:-2000000}" \
-NEXTPNR_ROUTER2_MAX_STALL="${NEXTPNR_ROUTER2_MAX_STALL:-250}" \
-${CRIT_DIST:+NEXTPNR_CRIT_DIST_EXP="$CRIT_DIST"} \
-"$NEXTPNR" --chipdb "$CHIPDB" \
+# NB: `env`, NOT a bare assignment prefix. Bash recognises NAME=VALUE
+# prefixes at PARSE time, before expansion, so a ${VAR:+NAME=VALUE} that
+# only becomes an assignment AFTER expanding is treated as the command
+# name instead, giving
+#     build.sh: NEXTPNR_CRIT_DIST_EXP=1.0: command not found
+# and no place & route at all. CRIT_DIST defaults to 1.0, so this fired on
+# every run and this step was broken for every build.sh invocation until it
+# was caught. env takes the expanded words as arguments and applies them as
+# assignments itself, which is why run_cfg.sh has always worked.
+env NEXTPNR_ARC_MAX_VISIT="${NEXTPNR_ARC_MAX_VISIT:-2000000}" \
+    NEXTPNR_ROUTER2_MAX_STALL="${NEXTPNR_ROUTER2_MAX_STALL:-250}" \
+    ${CRIT_DIST:+NEXTPNR_CRIT_DIST_EXP="$CRIT_DIST"} \
+    "$NEXTPNR" --chipdb "$CHIPDB" \
     --json "$PNR_JSON" --xdc "$XDC" \
     --fasm "$OUT/$TOP.fasm" --freq "$FREQ" \
     ${PNR_EXTRA[@]+"${PNR_EXTRA[@]}"} \
