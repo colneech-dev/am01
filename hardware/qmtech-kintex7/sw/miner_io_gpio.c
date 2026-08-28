@@ -43,7 +43,10 @@ int miner_io_pipe_init(void)
     if (g_initialized)
         return 0;   /* Already open */
 
-    g_bus = am01_bus_open("gpiochip0");
+    /* NULL -> locate the SoC GPIO controller by label. gpiochip numbering
+     * is probe-order dependent and "gpiochip0" was not it on this kernel.
+     * AM01_GPIOCHIP overrides, for debugging. */
+    g_bus = am01_bus_open(getenv("AM01_GPIOCHIP"));
     if (!g_bus) {
         fprintf(stderr, "miner_io_pipe_init: am01_bus_open failed\n");
         return -1;

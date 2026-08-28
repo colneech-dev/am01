@@ -115,6 +115,16 @@ SOURCES_BUSTEST := \
 
 OBJECTS_BUSTEST := $(call objects,$(SOURCES_BUSTEST))
 
+# =====================================================================
+# Binary: am01_diag (reads every FPGA register; no mining, read-only)
+# =====================================================================
+
+SOURCES_DIAG := \
+	$(GPIO_BUS)/am01_diag.c \
+	$(GPIO_BUS)/am01_gpio_bus.c
+
+OBJECTS_DIAG := $(call objects,$(SOURCES_DIAG))
+
 LIBS_WEBD := $(LIBS_BASE)
 
 # =====================================================================
@@ -137,12 +147,12 @@ LIBS_UI := $(LIBS_BASE) $(shell $(PKG_CONFIG) --libs libpng freetype2 fontconfig
 # =====================================================================
 
 .PHONY: all clean install help
-.PHONY: odo-miner odo-webd odo-ui am01_bus_test
+.PHONY: odo-miner odo-webd odo-ui am01_bus_test am01_diag
 
 # Default: build all. am01_bus_test is included deliberately -- it is the
 # first thing to run on a new board (see ../cm4-firmware/README.md), so it
 # needs to be in the image rather than something to compile on the target.
-all: odo-miner odo-webd odo-ui am01_bus_test
+all: odo-miner odo-webd odo-ui am01_bus_test am01_diag
 
 # Mining daemon (core)
 odo-miner: $(OBJECTS_DAEMON)
@@ -163,6 +173,12 @@ am01_bus_test: $(OBJECTS_BUSTEST)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS_MINER)
 	@echo "✓ Built: $@"
 
+# Read-only register dump: VERSION, epoch seed, die temp, rails, fan.
+am01_diag: $(OBJECTS_DIAG)
+	@echo "[LD] $@"
+	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS_MINER) -lm
+	@echo "✓ Built: $@"
+
 # Touch UI (framebuffer + touch input)
 odo-ui: $(OBJECTS_UI)
 	@echo "[LD] $@"
@@ -171,7 +187,8 @@ odo-ui: $(OBJECTS_UI)
 
 # Let make find the sources by basename, wherever they live.
 ALL_SOURCES := $(SOURCES_DAEMON) $(SOURCES_CRYPTO) $(SOURCES_KECCAK) \
-	$(SOURCES_STRATUM) $(SOURCES_WEBD) $(SOURCES_UI) $(SOURCES_BUSTEST)
+	$(SOURCES_STRATUM) $(SOURCES_WEBD) $(SOURCES_UI) $(SOURCES_BUSTEST) \
+	$(SOURCES_DIAG)
 vpath %.c $(sort $(dir $(ALL_SOURCES)))
 
 $(OBJ_DIR):
@@ -182,7 +199,7 @@ $(OBJ_DIR)/%.o: %.c | $(OBJ_DIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f odo-miner odo-webd odo-ui am01_bus_test
+	rm -f odo-miner odo-webd odo-ui am01_bus_test am01_diag
 	rm -rf $(OBJ_DIR)
 	@echo "Cleaned."
 
@@ -192,6 +209,7 @@ install: all
 	install -D -m 0755 odo-webd $(DESTDIR)$(PREFIX)/bin/odo-webd
 	install -D -m 0755 odo-ui $(DESTDIR)$(PREFIX)/bin/odo-ui
 	install -D -m 0755 am01_bus_test $(DESTDIR)$(PREFIX)/bin/am01_bus_test
+	install -D -m 0755 am01_diag $(DESTDIR)$(PREFIX)/bin/am01_diag
 	@echo "✓ Installed binaries to $(DESTDIR)$(PREFIX)/bin/"
 
 # Help

@@ -37,7 +37,27 @@
 					     8 9 10 11 12 13 14 15
 					     16 17 18 19 20 21 22 23>;
 				brcm,function = <0>;	/* input */
-				brcm,pull = <0>;	/* none */
+				/* Per-pin pulls, NOT a blanket "none".
+				 *
+				 * WR_N (20) and RD_N (21) are active-low strobes the CM4
+				 * drives. They must idle HIGH. With no pull configured they
+				 * fall to the SoC's default pull-DOWN for GPIO9-27, and the
+				 * only thing opposing that is the FPGA's weak internal
+				 * PULLUP -- so whenever no process holds the lines (before
+				 * Linux boots, and between runs of any tool) they drift low.
+				 * The FPGA reads that as a permanently asserted strobe,
+				 * enters S_WRITE/S_READ, raises READY and stays there.
+				 * Measured on hardware: READY read 1 with nothing running,
+				 * and every transaction then failed waiting for it to drop.
+				 *
+				 * 0 = none, 1 = down, 2 = up. Data lines stay pull-none
+				 * because they are bidirectional -- a pull would fight the
+				 * FPGA when it drives during a read. READY (22) and IRQ (23)
+				 * are FPGA outputs and need none either.
+				 */
+				brcm,pull = <0 0 0 0 0 0 0 0
+					     0 0 0 0 0 0 0 0
+					     0 0 0 0 2 2 0 0>;
 			};
 		};
 	};

@@ -242,6 +242,38 @@ static int reg_read16(am01_bus_t *bus, uint8_t addr, uint16_t *data_out)
     return 0;
 }
 
+/* Find the SoC's own GPIO controller by label rather than by number.
+ *
+ * gpiochip numbering is probe-order dependent: a CM4 also exposes a small
+ * raspberrypi-exp-gpio expander, and either can end up as gpiochip0 depending
+ * on kernel version. Hardcoding "gpiochip0" produced "failed to open
+ * gpiochip0" on this kernel. The label is stable where the number is not.
+ *
+ * Also checks the line count: the bus needs offsets up to 24, and the
+ * expander only has 8 lines, so a label match on the wrong chip would fail
+ * later and more confusingly. */
+static struct gpiod_chip *open_soc_gpiochip(void)
+{
+    struct gpiod_chip_iter *iter = gpiod_chip_iter_new();
+    if (!iter)
+        return NULL;
+
+    struct gpiod_chip *chip, *found = NULL;
+    gpiod_foreach_chip(iter, chip) {
+        const char *label = gpiod_chip_label(chip);
+        if (label && strncmp(label, "pinctrl-bcm", 11) == 0 &&
+            gpiod_chip_num_lines(chip) > IRQ_OFFSET) {
+            found = chip;
+            break;      /* iterator will not close the one we keep */
+        }
+    }
+    if (found)
+        gpiod_chip_iter_free_noclose(iter);
+    else
+        gpiod_chip_iter_free(iter);
+    return found;
+}
+
 am01_bus_t *am01_bus_open(const char *gpiochip_name)
 {
     am01_bus_t *bus = calloc(1, sizeof(*bus));
@@ -249,7 +281,12 @@ am01_bus_t *am01_bus_open(const char *gpiochip_name)
         return NULL;
     bus->data_is_output = -1;
 
-    bus->chip = gpiod_chip_open_by_name(gpiochip_name);
+    /* NULL or "auto" means find it ourselves. An explicit name still wins,
+     * so the test tool can override when debugging. */
+    if (!gpiochip_name || strcmp(gpiochip_name, "auto") == 0)
+        bus->chip = open_soc_gpiochip();
+    else
+        bus->chip = gpiod_chip_open_by_name(gpiochip_name);
     if (!bus->chip)
         goto fail;
 

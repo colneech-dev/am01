@@ -114,6 +114,13 @@ BR2_PACKAGE_LINUX_FIRMWARE_BRCM_BCM43XX=y
 # and (via CYPRESS_CYW43XXX) the cyfmac43455 firmware and clm_blob. BCM43XX
 # alone stops at 4354 and leaves the radio without firmware.
 BR2_PACKAGE_LINUX_FIRMWARE_BRCM_BCM43XXX=y
+# The wireless regulatory database. REQUIRED, not optional: the RPi kernel
+# sets CONFIG_CFG80211_REQUIRE_SIGNED_REGDB, so without regulatory.db and its
+# .p7s signature the country= setting in wpa_supplicant.conf can never apply.
+# The regdomain stays at world (00), the firmware refuses the channel, and the
+# driver reports "brcmf_set_channel fail" while wlan0 sits in SCANNING with
+# the radio working perfectly.
+BR2_PACKAGE_WIRELESS_REGDB=y
 BR2_PACKAGE_WPA_SUPPLICANT=y
 BR2_PACKAGE_WPA_SUPPLICANT_NL80211=y
 BR2_PACKAGE_WPA_SUPPLICANT_CLI=y
