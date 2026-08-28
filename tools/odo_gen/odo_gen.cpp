@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <cstring>
 
 class OdoVerilog: public OdoCrypt
 {
@@ -33,6 +34,18 @@ private:
 };
 
 #define NIBBLES(x) x, (1 + ((x)-1) / 4)
+
+// Optional extra output-register stage on every S-box read.
+//
+// Set by --bram-out-reg. With it, a block-RAM read infers DO_REG=1 (clock-to-DO
+// ~0.88 ns instead of ~2.45 ns, per the Vivado-extracted SDF), at the cost of
+// one extra pipeline cycle per round. Applies to small AND large S-boxes: they
+// share the apply_sboxes block, so registering only one kind would
+// desynchronise every round.
+static bool g_bram_out_reg = false;
+// Clock cycles per round: one for the S-box read, one for the state register,
+// plus one more when the output register is enabled.
+static int RoundCycles() { return g_bram_out_reg ? 3 : 2; }
 
 template<typename T, size_t sz1, size_t sz2>
 void GenerateSboxes(const T (&sbox)[sz1][sz2], bool dual_port, const char* prefix, const char* suffix, FILE* f)
@@ -50,9 +63,20 @@ void GenerateSboxes(const T (&sbox)[sz1][sz2], bool dual_port, const char* prefi
             fprintf(f, "    input [%d:0] in;\n", width-1);
             fprintf(f, "    output reg [%d:0] out;\n", width-1);
             fprintf(f, "    reg [%d:0] mem[0:%zd];\n", width-1, sz2-1);
-            fprintf(f, "    always @(posedge clk) begin\n");
-            fprintf(f, "        out <= mem[in];\n");
-            fprintf(f, "    end\n");
+            if (g_bram_out_reg)
+            {
+                fprintf(f, "    reg [%d:0] q1;\n", width-1);
+                fprintf(f, "    always @(posedge clk) begin\n");
+                fprintf(f, "        q1 <= mem[in];\n");
+                fprintf(f, "        out <= q1;\n");
+                fprintf(f, "    end\n");
+            }
+            else
+            {
+                fprintf(f, "    always @(posedge clk) begin\n");
+                fprintf(f, "        out <= mem[in];\n");
+                fprintf(f, "    end\n");
+            }
         }
         else
         {
@@ -82,12 +106,32 @@ void GenerateSboxes(const T (&sbox)[sz1][sz2], bool dual_port, const char* prefi
             // pass recognized the original single-always-block form fine;
             // this two-block form is the documented-safer template for both
             // (see AMD/Xilinx UG901's memory inference coding guidelines).
-            fprintf(f, "    always @(posedge clk) begin\n");
-            fprintf(f, "        a_out <= mem[a_in];\n");
-            fprintf(f, "    end\n");
-            fprintf(f, "    always @(posedge clk) begin\n");
-            fprintf(f, "        b_out <= mem[b_in];\n");
-            fprintf(f, "    end\n");
+            if (g_bram_out_reg)
+            {
+                // Two registers in series on each port is the template that
+                // infers RAMB18 with DO_REG=1 -- the second register maps to
+                // the block RAM's own optional output register rather than to
+                // fabric flops.
+                fprintf(f, "    reg [%d:0] a_q1;\n", width-1);
+                fprintf(f, "    reg [%d:0] b_q1;\n", width-1);
+                fprintf(f, "    always @(posedge clk) begin\n");
+                fprintf(f, "        a_q1 <= mem[a_in];\n");
+                fprintf(f, "        a_out <= a_q1;\n");
+                fprintf(f, "    end\n");
+                fprintf(f, "    always @(posedge clk) begin\n");
+                fprintf(f, "        b_q1 <= mem[b_in];\n");
+                fprintf(f, "        b_out <= b_q1;\n");
+                fprintf(f, "    end\n");
+            }
+            else
+            {
+                fprintf(f, "    always @(posedge clk) begin\n");
+                fprintf(f, "        a_out <= mem[a_in];\n");
+                fprintf(f, "    end\n");
+                fprintf(f, "    always @(posedge clk) begin\n");
+                fprintf(f, "        b_out <= mem[b_in];\n");
+                fprintf(f, "    end\n");
+            }
         }
         fprintf(f, "    initial begin\n");
         for (int j = 0; j < sz2; j++)
@@ -142,10 +186,10 @@ void OdoVerilog::Generate(int throughput, const char* prefix, FILE* f) const
 
     int unrolling = (ROUNDS-1) / throughput + 1;
     int extra_delay = 0;
-    while (gcd(throughput, 2*unrolling+extra_delay) != 1)
+    while (gcd(throughput, RoundCycles()*unrolling+extra_delay) != 1)
         extra_delay++;
     int periods = (ROUNDS-1) / unrolling + 1;
-    int latency = 2*ROUNDS + (periods-1) * extra_delay + 1;
+    int latency = RoundCycles()*ROUNDS + (periods-1) * extra_delay + 1;
     int period_bits = 1;
     while ((1 << period_bits) < periods)
         period_bits++;
@@ -330,12 +374,12 @@ void OdoVerilog::Generate(int throughput, const char* prefix, FILE* f) const
     if (throughput != 1)
     {
         fprintf(f, "    wire [%d:0] roundkey[%d:0];\n", STATE_SIZE-1, unrolling-1);
-        fprintf(f, "    reg [%d:0] period[%d:0];\n", period_bits-1, 2*unrolling+extra_delay-1);
-        for (int i = 1; i < 2*unrolling+extra_delay; i++)
+        fprintf(f, "    reg [%d:0] period[%d:0];\n", period_bits-1, RoundCycles()*unrolling+extra_delay-1);
+        for (int i = 1; i < RoundCycles()*unrolling+extra_delay; i++)
             fprintf(f, "    always @(posedge clk) period[%d] <= period[%d];\n", i, i-1);
         for (int i = 0; i < unrolling; i++)
         {
-            fprintf(f, "    %sget_round_key%d get_key%d(clk, period[%d], roundkey[%d]);\n", prefix, i, i, 2*i, i);
+            fprintf(f, "    %sget_round_key%d get_key%d(clk, period[%d], roundkey[%d]);\n", prefix, i, i, RoundCycles()*i, i);
             fprintf(f, "    %sfull_round round%d(clk, roundkey[%d], state[%d], next[%d]);\n", prefix, i, i, i, i);
         }
         fprintf(f, "    always @(posedge clk) begin\n");
@@ -346,7 +390,7 @@ void OdoVerilog::Generate(int throughput, const char* prefix, FILE* f) const
         fprintf(f, "        end\n");
         fprintf(f, "        else\n");
         fprintf(f, "        begin\n");
-        fprintf(f, "            period[0] <= period[%d]+1;\n", 2*unrolling+extra_delay-1);
+        fprintf(f, "            period[0] <= period[%d]+1;\n", RoundCycles()*unrolling+extra_delay-1);
         fprintf(f, "            state[0] <= next[%d];\n", unrolling+extra_delay-1);
         fprintf(f, "        end\n");
         fprintf(f, "        out <= next[%d];\n", (ROUNDS-1) % unrolling);
@@ -407,6 +451,18 @@ int main(int argc, char* argv[])
     uint32_t key = 0;
     uint32_t throughput = 0;
     const char* prefix = NULL;
+    // --bram-out-reg may appear anywhere; strip it before positional parsing.
+    for (int i = 1; i < argc; i++)
+    {
+        if (strcmp(argv[i], "--bram-out-reg") == 0)
+        {
+            g_bram_out_reg = true;
+            for (int j = i; j < argc - 1; j++)
+                argv[j] = argv[j+1];
+            argc--;
+            i--;
+        }
+    }
     if (argc < 3 || argc > 4)
         return usage(argv[0], "Incorrect number of agruments");
     key = strtoul(argv[1], NULL, 0);
