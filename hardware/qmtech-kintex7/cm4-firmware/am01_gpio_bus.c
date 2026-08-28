@@ -41,8 +41,12 @@
 static const unsigned int DATA_OFFSETS[NUM_DATA_LINES] = {
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
 };
-#define NUM_ADDR_LINES 4
-static const unsigned int ADDR_OFFSETS[NUM_ADDR_LINES] = { 16, 17, 18, 19 };
+/* 5 address lines: GPIO16-19 plus GPIO24 as addr[4]. GPIO24 was already
+ * wired to the FPGA but unused, so the register space went from 16 to 32
+ * slots without new hardware. Requires wrapper VERSION >= 0x0103; against an
+ * older bitstream addr[4] simply goes nowhere and the low 16 still work. */
+#define NUM_ADDR_LINES 5
+static const unsigned int ADDR_OFFSETS[NUM_ADDR_LINES] = { 16, 17, 18, 19, 24 };
 #define WR_N_OFFSET   20
 #define RD_N_OFFSET   21
 #define READY_OFFSET  22
@@ -63,6 +67,18 @@ enum {
     ADDR_SEED_LO   = 9,   /* wrapper VERSION >= 0x0101 */
     ADDR_SEED_HI   = 10,
     ADDR_TEMP      = 11,  /* wrapper VERSION >= 0x0102 */
+    ADDR_VCCINT    = 12,
+    ADDR_VCCAUX    = 13,
+    ADDR_VCCBRAM   = 14,
+    ADDR_FAN       = 15,
+    /* Above 0x0F needs the 5th address line, so VERSION >= 0x0103. */
+    ADDR_LCD_CMD   = 16,
+    ADDR_LCD_DATA  = 17,
+    ADDR_LCD_STAT  = 18,
+    ADDR_LCD_CTRL  = 19,
+    ADDR_TOUCH_X   = 20,
+    ADDR_TOUCH_Y   = 21,
+    ADDR_TOUCH_STAT= 22,
 };
 
 /* Register-interface version that first exposed SEED_LO/SEED_HI. Older
@@ -72,6 +88,11 @@ enum {
 
 /* Register-interface version that first exposed the XADC temperature. */
 #define AM01_VERSION_WITH_TEMP 0x0102
+
+/* Version that widened gpio_addr to 5 bits and added the display block.
+ * Below this the upper 16 registers are unreachable, because addr[4] is not
+ * wired on the host side either. */
+#define AM01_VERSION_WITH_LCD  0x0103
 
 /* Generous, since this bus isn't timing-critical -- see ../README.md.
  * A real READY that never arrives (bad wiring, unprogrammed FPGA) fails
@@ -368,6 +389,97 @@ int am01_bus_read_temp(am01_bus_t *bus, double *celsius_out)
         return -1;
     }
     *celsius_out = ((double)(raw >> 4) * 503.975 / 4096.0) - 273.15;
+    return 0;
+}
+
+/* ---- display / fan / touch ------------------------------------------- */
+
+static int need_version(am01_bus_t *bus, uint16_t min)
+{
+    uint16_t ver;
+    if (reg_read16(bus, ADDR_VERSION, &ver) < 0)
+        return -1;
+    if (ver < min) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    return 0;
+}
+
+int am01_bus_lcd_cmd(am01_bus_t *bus, uint8_t cmd)
+{
+    if (need_version(bus, AM01_VERSION_WITH_LCD) < 0)
+        return -1;
+    return reg_write16(bus, ADDR_LCD_CMD, cmd);
+}
+
+int am01_bus_lcd_data(am01_bus_t *bus, uint16_t data)
+{
+    /* No version check on the hot path: callers do one am01_bus_lcd_cmd()
+     * first, which checks. Re-reading VERSION per pixel would double the
+     * traffic on the one path where throughput actually matters. */
+    return reg_write16(bus, ADDR_LCD_DATA, data);
+}
+
+int am01_bus_lcd_busy(am01_bus_t *bus, int *busy_out)
+{
+    uint16_t v;
+    if (reg_read16(bus, ADDR_LCD_STAT, &v) < 0)
+        return -1;
+    *busy_out = (v & 1);
+    return 0;
+}
+
+int am01_bus_lcd_ctrl(am01_bus_t *bus, int reset_n, int backlight)
+{
+    if (need_version(bus, AM01_VERSION_WITH_LCD) < 0)
+        return -1;
+    return reg_write16(bus, ADDR_LCD_CTRL,
+                       (uint16_t)((reset_n ? 1u : 0u) | (backlight ? 2u : 0u)));
+}
+
+int am01_bus_read_touch(am01_bus_t *bus, uint16_t *x, uint16_t *y, int *pressed)
+{
+    uint16_t sx, sy, st;
+    if (need_version(bus, AM01_VERSION_WITH_LCD) < 0)
+        return -1;
+    if (reg_read16(bus, ADDR_TOUCH_X, &sx) < 0) return -1;
+    if (reg_read16(bus, ADDR_TOUCH_Y, &sy) < 0) return -1;
+    if (reg_read16(bus, ADDR_TOUCH_STAT, &st) < 0) return -1;
+    if (x) *x = sx & 0x0FFF;
+    if (y) *y = sy & 0x0FFF;
+    if (pressed) *pressed = st & 1;
+    return 0;
+}
+
+int am01_bus_fan(am01_bus_t *bus, int set_floor, uint8_t floor,
+                 uint8_t *duty_out, uint8_t *tach_hz_out)
+{
+    if (need_version(bus, AM01_VERSION_WITH_TEMP) < 0)
+        return -1;
+    if (set_floor && reg_write16(bus, ADDR_FAN, floor) < 0)
+        return -1;
+    uint16_t v;
+    if (reg_read16(bus, ADDR_FAN, &v) < 0)
+        return -1;
+    if (duty_out)    *duty_out    = (uint8_t)(v & 0xFF);
+    if (tach_hz_out) *tach_hz_out = (uint8_t)(v >> 8);
+    return 0;
+}
+
+int am01_bus_read_rails(am01_bus_t *bus, double *vccint, double *vccaux,
+                        double *vccbram)
+{
+    uint16_t a, b, c;
+    if (need_version(bus, AM01_VERSION_WITH_TEMP) < 0)
+        return -1;
+    if (reg_read16(bus, ADDR_VCCINT,  &a) < 0) return -1;
+    if (reg_read16(bus, ADDR_VCCAUX,  &b) < 0) return -1;
+    if (reg_read16(bus, ADDR_VCCBRAM, &c) < 0) return -1;
+    /* XADC supply channels: volts = (code >> 4) * 3.0 / 4096  (UG480). */
+    if (vccint)  *vccint  = (double)(a >> 4) * 3.0 / 4096.0;
+    if (vccaux)  *vccaux  = (double)(b >> 4) * 3.0 / 4096.0;
+    if (vccbram) *vccbram = (double)(c >> 4) * 3.0 / 4096.0;
     return 0;
 }
 

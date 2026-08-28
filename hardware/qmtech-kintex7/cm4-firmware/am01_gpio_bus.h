@@ -89,6 +89,35 @@ int am01_bus_read_seed(am01_bus_t *bus, uint32_t *seed_out);
  * external sensor in any case -- every CM4 GPIO goes to FPGA fabric. */
 int am01_bus_read_temp(am01_bus_t *bus, double *celsius_out);
 
+/* ---- ILI9341 display, XPT2046 touch, fan, supply rails ----------------
+ *
+ * All require wrapper VERSION >= 0x0103 (the display/touch ones) or 0x0102
+ * (fan, rails); they return -1/ENOTSUP otherwise rather than writing to a
+ * register that does not exist.
+ *
+ * The FPGA is only a transport for the panel: the ILI9341 holds the image in
+ * its own GRAM, so there is no framebuffer on either side and pixels are
+ * written straight through. lcd_data() skips the version check because it is
+ * the one path where throughput matters. */
+int am01_bus_lcd_cmd(am01_bus_t *bus, uint8_t cmd);
+int am01_bus_lcd_data(am01_bus_t *bus, uint16_t data);
+int am01_bus_lcd_busy(am01_bus_t *bus, int *busy_out);
+int am01_bus_lcd_ctrl(am01_bus_t *bus, int reset_n, int backlight);
+int am01_bus_read_touch(am01_bus_t *bus, uint16_t *x, uint16_t *y, int *pressed);
+
+/* Fan: optionally set a duty FLOOR (the fabric's temperature curve still
+ * applies above it, so software can raise cooling but never disable it), and
+ * read back current duty plus tach pulses/sec. A tach of 0 with non-zero duty
+ * means a stalled or disconnected fan. */
+int am01_bus_fan(am01_bus_t *bus, int set_floor, uint8_t floor,
+                 uint8_t *duty_out, uint8_t *tach_hz_out);
+
+/* XADC supply rails in volts. VCCINT is the one worth watching: ~12A at 1.0V
+ * through the MP8712, and a sagging core rail yields wrong hashes while the
+ * board still looks healthy. */
+int am01_bus_read_rails(am01_bus_t *bus, double *vccint, double *vccaux,
+                        double *vccbram);
+
 /* Blocks (with a timeout) on the IRQ line's edge event, signaling a new
  * golden nonce is ready. Returns 0 on an edge seen, -1 on timeout/error
  * (errno == ETIMEDOUT on timeout). Follow with am01_bus_read_nonce(). */

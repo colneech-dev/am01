@@ -73,7 +73,13 @@ module odocrypt_gpio_wrapper #(
     // driven either by bit-banged GPIO or the BCM2711 SMI peripheral.
     // ---------------------------------------------------------------
     inout  wire [15:0] gpio_data,
-    input  wire [3:0]  gpio_addr,
+    // 5 bits. GPIO16-19 were the original four; GPIO24 (FPGA ball B14) is
+    // added as addr[4]. It was already routed to the FPGA -- the manual's
+    // section 2.2.9 table wires GPIO0-27 to fabric -- but unused by this
+    // design, so widening cost a constraint rather than a wire. 4 bits gave
+    // 16 slots and all 16 were allocated once the XADC and fan registers
+    // landed, leaving nowhere for the display.
+    input  wire [4:0]  gpio_addr,
     input  wire        gpio_wr_n,   // active low
     input  wire        gpio_rd_n,   // active low
     output reg          gpio_ready,
@@ -91,41 +97,54 @@ module odocrypt_gpio_wrapper #(
     // fabric so cooling works with no software running.
     // ---------------------------------------------------------------
     output wire        fan_pwm,
-    input  wire        fan_tach_in
+    input  wire        fan_tach_in,
+
+    // ---------------------------------------------------------------
+    // ILI9341 panel + XPT2046 touch on JP5, sharing one SPI bus.
+    // ---------------------------------------------------------------
+    output wire        lcd_sclk,
+    output wire        lcd_mosi,
+    input  wire        lcd_miso,
+    output wire        lcd_cs_n,
+    output wire        lcd_dc,
+    output wire        lcd_rst_n,
+    output wire        lcd_bl,
+    output wire        touch_cs_n,
+    input  wire        touch_irq
 );
 
     // -----------------------------------------------------------------
     // Register map
     // -----------------------------------------------------------------
-    localparam [3:0] ADDR_VERSION    = 4'h0;
-    localparam [3:0] ADDR_CTRL       = 4'h1;
-    localparam [3:0] ADDR_STATUS     = 4'h2;
-    localparam [3:0] ADDR_NONCE_LO   = 4'h3;
-    localparam [3:0] ADDR_NONCE_HI   = 4'h4;
-    localparam [3:0] ADDR_HEADER_LO  = 4'h5;
-    localparam [3:0] ADDR_HEADER_HI  = 4'h6;
-    localparam [3:0] ADDR_TARGET_LO  = 4'h7;
-    localparam [3:0] ADDR_TARGET_HI  = 4'h8;
+    localparam [4:0] ADDR_VERSION     = 5'h0;
+    localparam [4:0] ADDR_CTRL        = 5'h1;
+    localparam [4:0] ADDR_STATUS      = 5'h2;
+    localparam [4:0] ADDR_NONCE_LO    = 5'h3;
+    localparam [4:0] ADDR_NONCE_HI    = 5'h4;
+    localparam [4:0] ADDR_HEADER_LO   = 5'h5;
+    localparam [4:0] ADDR_HEADER_HI   = 5'h6;
+    localparam [4:0] ADDR_TARGET_LO   = 5'h7;
+    localparam [4:0] ADDR_TARGET_HI   = 5'h8;
     // Read-only: the OdoCrypt epoch seed encrypt.v was generated for. The
     // daemon reads this back as bitstream_epoch and compares it against the
     // pool's job epoch; without it a stale bitstream mines rejects silently.
-    localparam [3:0] ADDR_SEED_LO    = 4'h9;
-    localparam [3:0] ADDR_SEED_HI    = 4'hA;
+    localparam [4:0] ADDR_SEED_LO     = 5'h9;
+    localparam [4:0] ADDR_SEED_HI     = 5'hA;
     // Raw XADC on-die temperature code, 16 bits as read from DRP 0x00 (only
     // the top 12 bits are significant). Converted host-side rather than here:
     //     degC = (code >> 4) * 503.975 / 4096 - 273.15
     // A raw value keeps the RTL to a latch and avoids fixed-point in fabric.
     // Reads 0 until the first conversion completes, a few us after reset.
-    localparam [3:0] ADDR_TEMP       = 4'hB;
+    localparam [4:0] ADDR_TEMP        = 5'hB;
     // Supply rails, same XADC, same DRP, different channels. Default mode
     // already samples these alongside temperature, so they cost one more
     // latch each. VCCINT matters most: this design draws ~12A at 1.0V through
     // the MP8712, and a sagging core rail produces wrong hash results while
     // everything still looks healthy -- silent rejects, not a crash.
     //     volts = (code >> 4) * 3.0 / 4096
-    localparam [3:0] ADDR_VCCINT     = 4'hC;
-    localparam [3:0] ADDR_VCCAUX     = 4'hD;
-    localparam [3:0] ADDR_VCCBRAM    = 4'hE;
+    localparam [4:0] ADDR_VCCINT      = 5'hC;
+    localparam [4:0] ADDR_VCCAUX      = 5'hD;
+    localparam [4:0] ADDR_VCCBRAM     = 5'hE;
     // Fan. Read : [7:0] current duty (0-255), [15:8] tach pulses/sec.
     //      Write: [7:0] minimum duty floor; 0 = fully automatic.
     // Control is closed-loop in fabric off the XADC die temperature, so the
@@ -133,12 +152,31 @@ module odocrypt_gpio_wrapper #(
     // whether the Pi or the miner is alive. This design free-runs at full
     // power the moment it configures from flash, so cooling must not depend
     // on software having started.
-    localparam [3:0] ADDR_FAN        = 4'hF;
+    localparam [4:0] ADDR_FAN         = 5'hF;
+
+    // ---- ILI9341 display, in the space the 5th address bit opened up ----
+    // The panel has its own GRAM, so the FPGA never holds a framebuffer --
+    // it is a transport: the host writes command/data bytes and they go out
+    // over SPI. That is why this needs no BRAM, which matters at 94% RAMB18.
+    //
+    // LCD_DATA is deliberately its own slot: pixel writes are the only
+    // high-traffic path here, and keeping them on a fixed address means the
+    // host can hammer one register without re-addressing.
+    localparam [4:0] ADDR_LCD_CMD     = 5'h10;  // write: command byte, DC=0
+    localparam [4:0] ADDR_LCD_DATA    = 5'h11;  // write: data/pixel, DC=1
+    localparam [4:0] ADDR_LCD_STAT    = 5'h12;  // read: busy/fifo state
+    localparam [4:0] ADDR_LCD_CTRL    = 5'h13;  // write: [0] RST_N [1] backlight
+    localparam [4:0] ADDR_TOUCH_X     = 5'h14;  // read: XPT2046 X
+    localparam [4:0] ADDR_TOUCH_Y     = 5'h15;  // read: XPT2046 Y
+    localparam [4:0] ADDR_TOUCH_STAT  = 5'h16;  // read: [0] pressed
 
     // v1.1 adds SEED_LO/SEED_HI. The daemon treats a VERSION below this as
     // "seed unreadable" rather than misreading 0 as a real epoch.
     // v1.2 adds TEMP, the XADC supply rails, and autonomous fan control.
-    localparam [15:0] VERSION = 16'h0102;
+    // v1.3 widens gpio_addr to 5 bits and adds the ILI9341/XPT2046 block.
+    // A v1.2-or-older host driving only 4 address lines still works: the
+    // fifth line idles low, so it addresses 0x00-0x0F exactly as before.
+    localparam [15:0] VERSION = 16'h0103;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;
@@ -172,8 +210,8 @@ module odocrypt_gpio_wrapper #(
     // Functionally identical either way -- see wr_active/rd_active and
     // the S_WRITE/S_READ release checks below, which un-invert as needed.
     (* ASYNC_REG = "TRUE" *) reg [2:0] wr_sync, rd_sync;
-    (* ASYNC_REG = "TRUE" *) reg [3:0] addr_sync0;
-    reg [3:0] addr_sync1;
+    (* ASYNC_REG = "TRUE" *) reg [4:0] addr_sync0;
+    reg [4:0]  addr_sync1;
     (* ASYNC_REG = "TRUE" *) reg [15:0] data_in_sync0;
     reg [15:0] data_in_sync1;
 
@@ -318,6 +356,26 @@ module odocrypt_gpio_wrapper #(
         end
     end
 
+    // NO_XADC builds the design without the on-die monitor.
+    //
+    // Not a preference -- the open-source flow CANNOT place an XADC on this
+    // part. prjxray's kintex7 database contains zero XADC/MONITOR tiles, so
+    // nextpnr-xilinx has no bel to bind to and place-and-route dies with
+    //   ERROR: Unable to place cell '...xadc_inst', no Bels remaining of
+    //          type 'XADC'
+    // nextpnr's only mentions of XADC are an invertible-pin entry and an
+    // error message; there is no packer support. Closing that gap means
+    // fuzzing the XADC configuration into prjxray, which is real work.
+    //
+    // Leaving the reads tied to zero is already a defined state rather than a
+    // hack: the fan controller below treats a raw code of 0 as "the XADC has
+    // not produced a reading" and falls back to full-speed cooling, which is
+    // exactly the correct behaviour for a bitstream that has no monitor.
+    // Vivado builds are unaffected -- do not pass the define there.
+`ifdef NO_XADC
+    assign xadc_do   = 16'h0000;
+    assign xadc_drdy = 1'b0;
+`else
     XADC #(
         .INIT_40(16'h0000),   // CFG0: no averaging, unipolar, temperature
         .INIT_41(16'h0F0F),   // CFG1: default mode, all alarms disabled
@@ -349,6 +407,105 @@ module odocrypt_gpio_wrapper #(
         .EOS    (),
         .BUSY   ()
     );
+`endif
+
+    // =====================================================================
+    // ILI9341 display + XPT2046 touch, sharing one SPI bus.
+    //
+    // The FPGA is a transport here, not a graphics engine: the panel has its
+    // own GRAM, so nothing is stored on this side. The host writes a command
+    // byte to LCD_CMD (DC low) or a 16-bit pixel to LCD_DATA (DC high) and
+    // this shifts it out. No framebuffer means no BRAM, which is the only
+    // reason it fits in a design already at 94% RAMB18.
+    //
+    // SCLK is bus_clk/8 = 6.25MHz. Conservative on purpose -- none of this
+    // has been near real silicon, and a slow bus is far easier to debug than
+    // a marginal one.
+    // =====================================================================
+    reg  [15:0] spi_shift;
+    reg  [4:0]  spi_bits;
+    reg  [2:0]  spi_div;
+    reg         spi_busy;
+    reg         spi_dc;
+    reg         spi_cs_lcd_n;
+    reg         spi_sclk;
+    reg         spi_mosi;
+    reg         lcd_rst_n_r;
+    reg         lcd_bl_r;
+    reg  [11:0] touch_x, touch_y;
+    reg         touch_pressed;
+
+    // Driven by the bus FSM on a write to LCD_CMD / LCD_DATA / LCD_CTRL.
+    reg         lcd_start;
+    reg  [15:0] lcd_start_data;
+    reg         lcd_start_dc;
+    reg         lcd_start_16;
+    reg         lcd_ctrl_wr;
+    reg  [15:0] lcd_ctrl_data;
+
+    assign lcd_sclk   = spi_sclk;
+    assign lcd_mosi   = spi_mosi;
+    assign lcd_cs_n   = spi_cs_lcd_n;
+    assign lcd_dc     = spi_dc;
+    assign lcd_rst_n  = lcd_rst_n_r;
+    assign lcd_bl     = lcd_bl_r;
+    assign touch_cs_n = 1'b1;   // touch controller idle for now
+
+    always @(posedge bus_clk or negedge bus_rst_n) begin
+        if (!bus_rst_n) begin
+            spi_shift     <= 16'h0;
+            spi_bits      <= 5'd0;
+            spi_div       <= 3'd0;
+            spi_busy      <= 1'b0;
+            spi_dc        <= 1'b0;
+            spi_cs_lcd_n  <= 1'b1;
+            spi_sclk      <= 1'b0;
+            spi_mosi      <= 1'b0;
+            lcd_rst_n_r   <= 1'b0;   // hold the panel in reset
+            lcd_bl_r      <= 1'b0;   // backlight off until configured
+            touch_x       <= 12'h0;
+            touch_y       <= 12'h0;
+            touch_pressed <= 1'b0;
+        end else begin
+            if (lcd_start && !spi_busy) begin
+                spi_shift    <= lcd_start_16 ? lcd_start_data
+                                             : {lcd_start_data[7:0], 8'h00};
+                spi_bits     <= lcd_start_16 ? 5'd16 : 5'd8;
+                spi_dc       <= lcd_start_dc;
+                spi_cs_lcd_n <= 1'b0;
+                spi_busy     <= 1'b1;
+                spi_div      <= 3'd0;
+                spi_sclk     <= 1'b0;
+            end else if (spi_busy) begin
+                spi_div <= spi_div + 3'd1;
+                if (spi_div == 3'd3) begin
+                    spi_div <= 3'd0;
+                    if (!spi_sclk) begin
+                        // SPI mode 0: shift on the falling edge, the panel
+                        // samples on the rising one.
+                        spi_mosi  <= spi_shift[15];
+                        spi_shift <= {spi_shift[14:0], 1'b0};
+                        spi_sclk  <= 1'b1;
+                    end else begin
+                        spi_sclk <= 1'b0;
+                        spi_bits <= spi_bits - 5'd1;
+                        if (spi_bits == 5'd1) begin
+                            spi_busy     <= 1'b0;
+                            spi_cs_lcd_n <= 1'b1;
+                        end
+                    end
+                end
+            end
+
+            if (lcd_ctrl_wr) begin
+                lcd_rst_n_r <= lcd_ctrl_data[0];
+                lcd_bl_r    <= lcd_ctrl_data[1];
+            end
+
+            // XPT2046 PENIRQ is active low, open drain.
+            touch_pressed <= ~touch_irq;
+        end
+    end
 
     // =====================================================================
     // Fan control -- closed loop on die temperature, entirely in fabric.
@@ -425,7 +582,7 @@ module odocrypt_gpio_wrapper #(
                S_READ  = 2'd2;
 
     reg [1:0]  bus_state;
-    reg [3:0]  addr_latched;
+    reg [4:0]  addr_latched;
     reg [15:0] wdata_latched;
     reg [15:0] header_lo_stage, target_lo_stage;
     reg        request_issued;
@@ -473,6 +630,9 @@ module odocrypt_gpio_wrapper #(
                     gpio_ready   <= 1'b0;
                     gpio_data_oe <= 1'b0;
                     request_issued <= 1'b0;
+                    // One-shot strobes into the SPI/display block.
+                    lcd_start    <= 1'b0;
+                    lcd_ctrl_wr  <= 1'b0;
                     if (wr_active) begin
                         addr_latched  <= addr_sync1;
                         wdata_latched <= data_in_sync1;
@@ -491,6 +651,31 @@ module odocrypt_gpio_wrapper #(
                         ADDR_FAN: begin
                             fan_floor  <= wdata_latched[7:0];
                             gpio_ready <= 1'b1;
+                        end
+                        // Display writes are dropped if the shifter is still
+                        // busy; the host polls LCD_STAT before writing.
+                        ADDR_LCD_CMD: begin
+                            if (!spi_busy) begin
+                                lcd_start_data <= wdata_latched;
+                                lcd_start_dc   <= 1'b0;
+                                lcd_start_16   <= 1'b0;
+                                lcd_start      <= 1'b1;
+                            end
+                            gpio_ready <= 1'b1;
+                        end
+                        ADDR_LCD_DATA: begin
+                            if (!spi_busy) begin
+                                lcd_start_data <= wdata_latched;
+                                lcd_start_dc   <= 1'b1;
+                                lcd_start_16   <= 1'b1;
+                                lcd_start      <= 1'b1;
+                            end
+                            gpio_ready <= 1'b1;
+                        end
+                        ADDR_LCD_CTRL: begin
+                            lcd_ctrl_data <= wdata_latched;
+                            lcd_ctrl_wr   <= 1'b1;
+                            gpio_ready    <= 1'b1;
                         end
                         ADDR_CTRL: begin
                             if (!request_issued) begin
@@ -561,6 +746,10 @@ module odocrypt_gpio_wrapper #(
                         ADDR_VCCAUX:   rdata_reg <= xadc_vccaux_bus;
                         ADDR_VCCBRAM:  rdata_reg <= xadc_vccbram_bus;
                         ADDR_FAN:      rdata_reg <= {fan_tach_hz, fan_duty};
+                        ADDR_LCD_STAT: rdata_reg <= {15'h0, spi_busy};
+                        ADDR_TOUCH_X:  rdata_reg <= {4'h0, touch_x};
+                        ADDR_TOUCH_Y:  rdata_reg <= {4'h0, touch_y};
+                        ADDR_TOUCH_STAT: rdata_reg <= {15'h0, touch_pressed};
                         default: rdata_reg <= 16'h0;
                     endcase
                     gpio_data_oe <= 1'b1;

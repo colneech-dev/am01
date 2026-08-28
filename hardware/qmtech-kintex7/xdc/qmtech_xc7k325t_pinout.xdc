@@ -150,6 +150,11 @@ set_property PACKAGE_PIN B10 [get_ports {gpio_addr[0]}]
 set_property PACKAGE_PIN D16 [get_ports {gpio_addr[1]}]
 set_property PACKAGE_PIN B15 [get_ports {gpio_addr[2]}]
 set_property PACKAGE_PIN B9  [get_ports {gpio_addr[3]}]
+# addr[4] = GPIO24 -> FPGA ball B14 (manual section 2.2.9). Already routed to
+# fabric and unused by the bus, so this widens the register space from 16 to
+# 32 slots without any new wiring. Needed because all 16 original slots were
+# allocated once the XADC and fan registers were added.
+set_property PACKAGE_PIN B14 [get_ports {gpio_addr[4]}]
 
 # Control lines = CM4 GPIO20..23
 set_property PACKAGE_PIN A9  [get_ports gpio_wr_n]
@@ -191,6 +196,7 @@ set_property IOSTANDARD LVCMOS33 [get_ports {gpio_addr[0]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {gpio_addr[1]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {gpio_addr[2]}]
 set_property IOSTANDARD LVCMOS33 [get_ports {gpio_addr[3]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {gpio_addr[4]}]
 set_property IOSTANDARD LVCMOS33 [get_ports gpio_wr_n]
 set_property IOSTANDARD LVCMOS33 [get_ports gpio_rd_n]
 set_property IOSTANDARD LVCMOS33 [get_ports gpio_ready]
@@ -271,3 +277,46 @@ set_property IOSTANDARD LVCMOS33 [get_ports fan_tach_in]
 # Tach is open-collector on every fan I know of; without this it floats and
 # reads as random RPM rather than zero.
 set_property PULLUP true [get_ports fan_tach_in]
+
+# ---------------------------------------------------------------------------
+# ILI9341 panel + XPT2046 touch, on JP5's spare BANK12 I/O.
+#
+# Contiguous at the low end of the header (pins 3-11) so a ribbon lands
+# naturally; the fan sits at 43/44 by the 5V0 pins, well clear.
+#
+# SCLK/MOSI/MISO are shared between panel and touch controller; each has its
+# own chip select. Bank 12's VCCO is the 3V3 rail, so LVCMOS33 throughout --
+# both devices are 3.3V parts.
+#
+#   JP5  3 (AD21) lcd_sclk     JP5  9 (V21) lcd_bl
+#   JP5  4 (AE21) lcd_mosi     JP5 10 (W21) touch_cs_n
+#   JP5  5 (AE22) lcd_miso     JP5 11 (Y22) touch_irq
+#   JP5  6 (AF22) lcd_cs_n
+#   JP5  7 (AE23) lcd_dc
+#   JP5  8 (AF23) lcd_rst_n
+# ---------------------------------------------------------------------------
+set_property PACKAGE_PIN AD21 [get_ports lcd_sclk]
+set_property PACKAGE_PIN AE21 [get_ports lcd_mosi]
+set_property PACKAGE_PIN AE22 [get_ports lcd_miso]
+set_property PACKAGE_PIN AF22 [get_ports lcd_cs_n]
+set_property PACKAGE_PIN AE23 [get_ports lcd_dc]
+set_property PACKAGE_PIN AF23 [get_ports lcd_rst_n]
+set_property PACKAGE_PIN V21  [get_ports lcd_bl]
+set_property PACKAGE_PIN W21  [get_ports touch_cs_n]
+set_property PACKAGE_PIN Y22  [get_ports touch_irq]
+# Written out one per line rather than via a foreach. The loop form did not
+# apply -- lcd_miso came out of synthesis with no IOSTANDARD at all, so Vivado
+# defaulted it to LVCMOS18 and DRC failed the whole implementation on a bank
+# 12 Vcc conflict (bank 12 is the 3V3 rail). Explicit lines also match the
+# rest of this file, and a missing one is visible in a diff.
+set_property IOSTANDARD LVCMOS33 [get_ports lcd_sclk]
+set_property IOSTANDARD LVCMOS33 [get_ports lcd_mosi]
+set_property IOSTANDARD LVCMOS33 [get_ports lcd_miso]
+set_property IOSTANDARD LVCMOS33 [get_ports lcd_cs_n]
+set_property IOSTANDARD LVCMOS33 [get_ports lcd_dc]
+set_property IOSTANDARD LVCMOS33 [get_ports lcd_rst_n]
+set_property IOSTANDARD LVCMOS33 [get_ports lcd_bl]
+set_property IOSTANDARD LVCMOS33 [get_ports touch_cs_n]
+set_property IOSTANDARD LVCMOS33 [get_ports touch_irq]
+# XPT2046 PENIRQ is open-drain.
+set_property PULLUP true [get_ports touch_irq]

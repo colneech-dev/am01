@@ -38,7 +38,7 @@ module am01_qmtech_top (
     input  wire        sys_clk_50m,
 
     inout  wire [15:0] gpio_data,
-    input  wire [3:0]  gpio_addr,
+    input  wire [4:0]  gpio_addr,
     input  wire        gpio_wr_n,
     input  wire        gpio_rd_n,
     output wire        gpio_ready,
@@ -50,6 +50,17 @@ module am01_qmtech_top (
     // temperature, so it runs correctly with no software involved.
     output wire        fan_pwm,
     input  wire        fan_tach_in,
+
+    // ILI9341 panel + XPT2046 touch on JP5, one shared SPI bus.
+    output wire        lcd_sclk,
+    output wire        lcd_mosi,
+    input  wire        lcd_miso,
+    output wire        lcd_cs_n,
+    output wire        lcd_dc,
+    output wire        lcd_rst_n,
+    output wire        lcd_bl,
+    output wire        touch_cs_n,
+    input  wire        touch_irq,
     input  wire        user_key_sw2,   // active low, used here as manual reset
     input  wire        user_key_sw3    // unused, reserved
 );
@@ -106,6 +117,16 @@ module am01_qmtech_top (
 
         .fan_pwm     (fan_pwm),
         .fan_tach_in (fan_tach_in),
+
+        .lcd_sclk   (lcd_sclk),
+        .lcd_mosi   (lcd_mosi),
+        .lcd_miso   (lcd_miso),
+        .lcd_cs_n   (lcd_cs_n),
+        .lcd_dc     (lcd_dc),
+        .lcd_rst_n  (lcd_rst_n),
+        .lcd_bl     (lcd_bl),
+        .touch_cs_n (touch_cs_n),
+        .touch_irq  (touch_irq),
 
         .gpio_data (gpio_data),
         .gpio_addr (gpio_addr),
