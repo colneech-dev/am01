@@ -84,7 +84,14 @@ module odocrypt_gpio_wrapper #(
     // (an MMCM output derived from the 50MHz crystal, same role
     // artix200_v3_clocking plays on the stock AM01).
     // ---------------------------------------------------------------
-    input  wire        clk_h
+    input  wire        clk_h,
+
+    // ---------------------------------------------------------------
+    // Fan, on spare BANK12 I/O at JP5. PWM out, tach in. Driven from
+    // fabric so cooling works with no software running.
+    // ---------------------------------------------------------------
+    output wire        fan_pwm,
+    input  wire        fan_tach_in
 );
 
     // -----------------------------------------------------------------
@@ -104,10 +111,34 @@ module odocrypt_gpio_wrapper #(
     // pool's job epoch; without it a stale bitstream mines rejects silently.
     localparam [3:0] ADDR_SEED_LO    = 4'h9;
     localparam [3:0] ADDR_SEED_HI    = 4'hA;
+    // Raw XADC on-die temperature code, 16 bits as read from DRP 0x00 (only
+    // the top 12 bits are significant). Converted host-side rather than here:
+    //     degC = (code >> 4) * 503.975 / 4096 - 273.15
+    // A raw value keeps the RTL to a latch and avoids fixed-point in fabric.
+    // Reads 0 until the first conversion completes, a few us after reset.
+    localparam [3:0] ADDR_TEMP       = 4'hB;
+    // Supply rails, same XADC, same DRP, different channels. Default mode
+    // already samples these alongside temperature, so they cost one more
+    // latch each. VCCINT matters most: this design draws ~12A at 1.0V through
+    // the MP8712, and a sagging core rail produces wrong hash results while
+    // everything still looks healthy -- silent rejects, not a crash.
+    //     volts = (code >> 4) * 3.0 / 4096
+    localparam [3:0] ADDR_VCCINT     = 4'hC;
+    localparam [3:0] ADDR_VCCAUX     = 4'hD;
+    localparam [3:0] ADDR_VCCBRAM    = 4'hE;
+    // Fan. Read : [7:0] current duty (0-255), [15:8] tach pulses/sec.
+    //      Write: [7:0] minimum duty floor; 0 = fully automatic.
+    // Control is closed-loop in fabric off the XADC die temperature, so the
+    // fan is correct from power-on -- before Linux boots, and regardless of
+    // whether the Pi or the miner is alive. This design free-runs at full
+    // power the moment it configures from flash, so cooling must not depend
+    // on software having started.
+    localparam [3:0] ADDR_FAN        = 4'hF;
 
     // v1.1 adds SEED_LO/SEED_HI. The daemon treats a VERSION below this as
     // "seed unreadable" rather than misreading 0 as a real epoch.
-    localparam [15:0] VERSION = 16'h0101;
+    // v1.2 adds TEMP, the XADC supply rails, and autonomous fan control.
+    localparam [15:0] VERSION = 16'h0102;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;
@@ -213,6 +244,179 @@ module odocrypt_gpio_wrapper #(
     end
 
     // =====================================================================
+    // XADC on-die temperature.
+    //
+    // The Kintex-7 has a built-in temperature sensor; this is the die
+    // temperature, not a heatsink probe, which is what actually matters for
+    // a design that free-runs at full power the moment it configures. There
+    // is nowhere on this board to attach an external sensor anyway: all 28
+    // CM4 GPIOs go to FPGA fabric pins and JP5 is FPGA I/O, so the daemon's
+    // DS18B20 support (inherited from the Cyclone V variant) cannot be used.
+    //
+    // Default mode (CFG1[15:12]=0000) free-runs a sequence including the
+    // temperature channel with no sequencer setup, so this only has to poll
+    // DRP address 0x00 and latch the result. ADCCLK = DCLK/8 = 6.25MHz from
+    // the 50MHz bus_clk, inside the 1-26MHz the ADC requires.
+    //
+    // VP/VN are tied off: the internal sensor does not use the external
+    // analog inputs, and the schematic grounds DXP_0/DXN_0.
+    // =====================================================================
+    wire [15:0] xadc_do;
+    wire        xadc_drdy;
+    reg         xadc_den;
+    reg  [6:0]  xadc_daddr;
+    reg  [1:0]  xadc_chan;      // which of the four we are currently reading
+    reg  [15:0] xadc_temp_bus;
+    reg  [15:0] xadc_vccint_bus;
+    reg  [15:0] xadc_vccaux_bus;
+    reg  [15:0] xadc_vccbram_bus;
+    reg  [7:0]  xadc_wait;
+
+    // DRP addresses, in the order xadc_chan cycles through them.
+    function [6:0] chan_addr(input [1:0] c);
+        case (c)
+            2'd0: chan_addr = 7'h00;  // temperature
+            2'd1: chan_addr = 7'h01;  // VCCINT
+            2'd2: chan_addr = 7'h02;  // VCCAUX
+            default: chan_addr = 7'h06;  // VCCBRAM
+        endcase
+    endfunction
+
+    always @(posedge bus_clk or negedge bus_rst_n) begin
+        if (!bus_rst_n) begin
+            xadc_den         <= 1'b0;
+            xadc_daddr       <= 7'h00;
+            xadc_chan        <= 2'd0;
+            xadc_temp_bus    <= 16'h0000;
+            xadc_vccint_bus  <= 16'h0000;
+            xadc_vccaux_bus  <= 16'h0000;
+            xadc_vccbram_bus <= 16'h0000;
+            xadc_wait        <= 8'd0;
+        end else begin
+            xadc_den <= 1'b0;                 // single-cycle strobe
+
+            if (xadc_drdy) begin
+                case (xadc_chan)
+                    2'd0: xadc_temp_bus    <= xadc_do;
+                    2'd1: xadc_vccint_bus  <= xadc_do;
+                    2'd2: xadc_vccaux_bus  <= xadc_do;
+                    2'd3: xadc_vccbram_bus <= xadc_do;
+                endcase
+                xadc_chan <= xadc_chan + 2'd1;   // wraps at 4
+            end
+
+            // One channel roughly every 256 bus_clk cycles (~5us), so all
+            // four refresh in ~20us -- far faster than either the sensor
+            // changes or the host polls, and light enough on the DRP port.
+            if (xadc_wait == 8'd0) begin
+                xadc_daddr <= chan_addr(xadc_chan);
+                xadc_den   <= 1'b1;
+                xadc_wait  <= 8'hFF;
+            end else begin
+                xadc_wait <= xadc_wait - 8'd1;
+            end
+        end
+    end
+
+    XADC #(
+        .INIT_40(16'h0000),   // CFG0: no averaging, unipolar, temperature
+        .INIT_41(16'h0F0F),   // CFG1: default mode, all alarms disabled
+        .INIT_42(16'h0800),   // CFG2: DCLK divider = 8 -> ADCCLK 6.25MHz
+        .SIM_MONITOR_FILE("design.txt")
+    ) xadc_inst (
+        .DADDR  (xadc_daddr),
+        .DCLK   (bus_clk),
+        .DEN    (xadc_den),
+        .DI     (16'h0000),
+        .DWE    (1'b0),
+        .DO     (xadc_do),
+        .DRDY   (xadc_drdy),
+        .RESET  (~bus_rst_n),
+        .VP     (1'b0),
+        .VN     (1'b0),
+        .VAUXP  (16'h0000),
+        .VAUXN  (16'h0000),
+        .CONVST (1'b0),
+        .CONVSTCLK (1'b0),
+        .JTAGBUSY  (),
+        .JTAGLOCKED(),
+        .JTAGMODIFIED(),
+        .OT     (),
+        .ALM    (),
+        .MUXADDR(),
+        .CHANNEL(),
+        .EOC    (),
+        .EOS    (),
+        .BUSY   ()
+    );
+
+    // =====================================================================
+    // Fan control -- closed loop on die temperature, entirely in fabric.
+    //
+    // Thresholds are compared against the RAW XADC code to keep this to
+    // magnitude comparators; no conversion arithmetic in fabric.
+    //     code = (degC + 273.15) * 4096 / 503.975, then << 4
+    //       40C -> 16'h9F10   55C -> 16'hA6E0
+    //       70C -> 16'hAEB0   85C -> 16'hB680
+    //
+    // FAIL-SAFE: a raw code of 0 means the XADC has not produced a reading
+    // yet (or is not working). That runs the fan at 100%, not 0% -- an
+    // unknown temperature must never be treated as a cold one.
+    // =====================================================================
+    localparam [15:0] TEMP_40C = 16'h9F10;
+    localparam [15:0] TEMP_55C = 16'hA6E0;
+    localparam [15:0] TEMP_70C = 16'hAEB0;
+    localparam [15:0] TEMP_85C = 16'hB680;
+
+    reg  [7:0]  fan_duty;        // 0-255, what we are actually driving
+    reg  [7:0]  fan_floor;       // host-settable minimum, 0 = pure auto
+    reg  [10:0] fan_pwm_cnt;
+    reg  [7:0]  fan_tach_hz;     // tach pulses in the last second
+    reg  [7:0]  fan_tach_acc;
+    reg  [25:0] fan_sec_cnt;
+    reg  [2:0]  tach_sync;
+
+    wire [7:0] fan_auto =
+          (xadc_temp_bus == 16'h0000) ? 8'd255 :   // unknown -> full
+          (xadc_temp_bus >= TEMP_85C) ? 8'd255 :
+          (xadc_temp_bus >= TEMP_70C) ? 8'd191 :
+          (xadc_temp_bus >= TEMP_55C) ? 8'd140 :
+          (xadc_temp_bus >= TEMP_40C) ? 8'd102 :
+                                        8'd77;    // ~30% floor, never off
+
+    always @(posedge bus_clk or negedge bus_rst_n) begin
+        if (!bus_rst_n) begin
+            fan_duty     <= 8'd255;   // full until we know better
+            fan_floor    <= 8'd0;
+            fan_pwm_cnt  <= 11'd0;
+            fan_sec_cnt  <= 26'd0;
+            fan_tach_acc <= 8'd0;
+            fan_tach_hz  <= 8'd0;
+            tach_sync    <= 3'b000;
+        end else begin
+            fan_duty    <= (fan_auto > fan_floor) ? fan_auto : fan_floor;
+            fan_pwm_cnt <= fan_pwm_cnt + 11'd1;   // free-running, wraps
+
+            // Tach: count rising edges over one second of bus_clk.
+            tach_sync <= {tach_sync[1:0], fan_tach_in};
+            if (tach_sync[2:1] == 2'b01 && fan_tach_acc != 8'hFF)
+                fan_tach_acc <= fan_tach_acc + 8'd1;
+
+            if (fan_sec_cnt >= 26'd49_999_999) begin
+                fan_sec_cnt  <= 26'd0;
+                fan_tach_hz  <= fan_tach_acc;
+                fan_tach_acc <= 8'd0;
+            end else begin
+                fan_sec_cnt <= fan_sec_cnt + 26'd1;
+            end
+        end
+    end
+
+    // 50MHz / 2048 = 24.4kHz, inside the 21-28kHz a 4-pin PWM fan expects.
+    // duty<<3 spreads 0-255 across the 0-2047 counter without a divide.
+    assign fan_pwm = (fan_pwm_cnt < {fan_duty, 3'b000});
+
+    // =====================================================================
     // Bus-side state machine: 4-phase interlocked handshake, one
     // register access at a time.
     // =====================================================================
@@ -281,6 +485,13 @@ module odocrypt_gpio_wrapper #(
 
                 S_WRITE: begin
                     case (addr_latched)
+                        // Minimum fan duty. Purely a floor: the automatic
+                        // curve still applies above it, so the host can raise
+                        // cooling but never disable it.
+                        ADDR_FAN: begin
+                            fan_floor  <= wdata_latched[7:0];
+                            gpio_ready <= 1'b1;
+                        end
                         ADDR_CTRL: begin
                             if (!request_issued) begin
                                 req_op_bus     <= wdata_latched[1] ? OP_HOST_BREAK : OP_SOFT_RESET;
@@ -345,6 +556,11 @@ module odocrypt_gpio_wrapper #(
                         end
                         ADDR_SEED_LO:  rdata_reg <= ODO_SEED[15:0];
                         ADDR_SEED_HI:  rdata_reg <= ODO_SEED[31:16];
+                        ADDR_TEMP:     rdata_reg <= xadc_temp_bus;
+                        ADDR_VCCINT:   rdata_reg <= xadc_vccint_bus;
+                        ADDR_VCCAUX:   rdata_reg <= xadc_vccaux_bus;
+                        ADDR_VCCBRAM:  rdata_reg <= xadc_vccbram_bus;
+                        ADDR_FAN:      rdata_reg <= {fan_tach_hz, fan_duty};
                         default: rdata_reg <= 16'h0;
                     endcase
                     gpio_data_oe <= 1'b1;

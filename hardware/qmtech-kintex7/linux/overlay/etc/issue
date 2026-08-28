@@ -1,7 +1,7 @@
 
 AM01 OdoCrypt miner -- \n (\l)
 
-  eth0    \4{eth0}
+  end0    \4{end0}
   wlan0   \4{wlan0}
 
   ssh root@<address>          web: http://<address>:8080/

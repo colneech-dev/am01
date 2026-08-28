@@ -249,3 +249,25 @@ set_property IOSTANDARD LVCMOS33 [get_ports user_key_sw3]
 # JTAG (TCK/TDO/TDI/TMS) and PROGRAM_B/DONE/INIT_B are dedicated
 # configuration pins on this device/package -- Vivado handles them
 # automatically; no PACKAGE_PIN constraints needed here.
+
+# ---------------------------------------------------------------------------
+# Fan, on JP5's spare BANK12 I/O.
+#
+# Deliberately at the FAR END of the header (pins 43/44), immediately beside
+# the 5V0 pins at 49/50 -- so a fan lead picks up power and PWM from the same
+# corner, and pins 3..42 stay contiguous for a display/touch panel.
+#
+# Bank 12's VCCO is the 3V3 rail (see the SW2/SW3 note above), so LVCMOS33.
+# A 4-pin fan's PWM input is 3.3V-tolerant; a 2-pin fan needs a MOSFET, gate
+# driven from fan_pwm.
+#
+#   JP5 pin 43 = BANK12_U24 -> fan_pwm      (24.4kHz PWM out)
+#   JP5 pin 44 = BANK12_U25 -> fan_tach_in  (open-collector tach, needs pull-up)
+# ---------------------------------------------------------------------------
+set_property PACKAGE_PIN U24 [get_ports fan_pwm]
+set_property PACKAGE_PIN U25 [get_ports fan_tach_in]
+set_property IOSTANDARD LVCMOS33 [get_ports fan_pwm]
+set_property IOSTANDARD LVCMOS33 [get_ports fan_tach_in]
+# Tach is open-collector on every fan I know of; without this it floats and
+# reads as random RPM rather than zero.
+set_property PULLUP true [get_ports fan_tach_in]

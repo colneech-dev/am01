@@ -1,22 +1,18 @@
 # AM01 Touch Screen UI Configuration
 #
-# Read by odo-ui.service. Only UI_OPTS has any effect; the user and binary path
-# are literal in the unit file (systemd cannot take those from the
-# environment). The binary is /usr/bin/odo-ui, running as root because it needs
-# /dev/fb0 and /dev/input/event*.
+# Read by odo-ui.service.
+#
+# odo-ui takes ONE optional argument: the path to status.json. It does NOT
+# accept -fb or -touch -- an earlier version of this file passed those, which
+# would have made odo-ui treat "-fb" as the status path and fail. The
+# framebuffer is hardcoded to /dev/fb0 and the touch device is discovered by
+# scanning /dev/input/event*.
 #
 # REQUIREMENTS:
-#   - Framebuffer device (/dev/fb0) -- HDMI or parallel LCD
-#   - Touch input device (/dev/input/eventN)
+#   - A real Linux framebuffer at /dev/fb0. odo-ui uses the FBIOGET_*SCREENINFO
+#     ioctls and mmaps it, so it needs a genuine fbdev -- on this board that
+#     means HDMI. An SPI panel would need a kernel framebuffer driver first.
+#   - A touch device under /dev/input/ (USB, or via a driver).
 #
-# With no framebuffer present the unit is skipped rather than failed. Use
-# odo-webd instead, or disable it outright: systemctl disable odo-ui
-
-# Command-line options:
-#   -fb PATH      Framebuffer device (default /dev/fb0)
-#   -touch PATH   Touch input device (default /dev/input/event0)
-#   -bg PATH      Background image (PNG)
-#   -font PATH    Font file (TTF)
-#
-# Check the touch device with `evtest` if there is more than one input.
-UI_OPTS="-fb /dev/fb0 -touch /dev/input/event0"
+# With no framebuffer the unit is skipped, not failed. Use odo-webd instead.
+UI_OPTS="/run/odod/status.json"

@@ -62,12 +62,16 @@ enum {
     ADDR_TARGET_HI = 8,
     ADDR_SEED_LO   = 9,   /* wrapper VERSION >= 0x0101 */
     ADDR_SEED_HI   = 10,
+    ADDR_TEMP      = 11,  /* wrapper VERSION >= 0x0102 */
 };
 
 /* Register-interface version that first exposed SEED_LO/SEED_HI. Older
  * bitstreams return 0 for unmapped addresses, which is indistinguishable from
  * a real seed of 0, so the version is checked before trusting the value. */
 #define AM01_VERSION_WITH_SEED 0x0101
+
+/* Register-interface version that first exposed the XADC temperature. */
+#define AM01_VERSION_WITH_TEMP 0x0102
 
 /* Generous, since this bus isn't timing-critical -- see ../README.md.
  * A real READY that never arrives (bad wiring, unprogrammed FPGA) fails
@@ -78,6 +82,11 @@ struct am01_bus {
     struct gpiod_chip *chip;
     struct gpiod_line *data_lines[NUM_DATA_LINES];
     struct gpiod_line *addr_lines[NUM_ADDR_LINES];
+    /* Bulk handles for the two wide groups. libgpiod's *_bulk calls move all
+     * lines in one ioctl instead of one per line, which is the difference
+     * between ~20 syscalls per 16-bit word and ~4. */
+    struct gpiod_line_bulk data_bulk;
+    struct gpiod_line_bulk addr_bulk;
     struct gpiod_line *wr_n;
     struct gpiod_line *rd_n;
     struct gpiod_line *ready;
@@ -117,44 +126,53 @@ static int set_data_direction(am01_bus_t *bus, int output)
     if (bus->data_is_output == output)
         return 0;
 
-    for (int i = 0; i < NUM_DATA_LINES; i++) {
-        gpiod_line_release(bus->data_lines[i]);
-        int rc = output
-            ? gpiod_line_request_output(bus->data_lines[i], CONSUMER, 0)
-            : gpiod_line_request_input(bus->data_lines[i], CONSUMER);
-        if (rc < 0)
-            return -1;
+    if (bus->data_is_output != -1)
+        gpiod_line_release_bulk(&bus->data_bulk);
+
+    int rc;
+    if (output) {
+        int defaults[NUM_DATA_LINES] = { 0 };
+        rc = gpiod_line_request_bulk_output(&bus->data_bulk, CONSUMER, defaults);
+    } else {
+        rc = gpiod_line_request_bulk_input(&bus->data_bulk, CONSUMER);
     }
+    if (rc < 0)
+        return -1;
+
     bus->data_is_output = output;
     return 0;
 }
 
 static int drive_addr(am01_bus_t *bus, uint8_t addr)
 {
+    int v[NUM_ADDR_LINES];
     for (int i = 0; i < NUM_ADDR_LINES; i++)
-        if (gpiod_line_set_value(bus->addr_lines[i], (addr >> i) & 1) < 0)
-            return -1;
-    return 0;
+        v[i] = (addr >> i) & 1;
+    return gpiod_line_set_value_bulk(&bus->addr_bulk, v);
 }
 
 static int drive_data(am01_bus_t *bus, uint16_t data)
 {
+    int v[NUM_DATA_LINES];
     for (int i = 0; i < NUM_DATA_LINES; i++)
-        if (gpiod_line_set_value(bus->data_lines[i], (data >> i) & 1) < 0)
-            return -1;
-    return 0;
+        v[i] = (data >> i) & 1;
+    /* One ioctl for all 16 bits -- and they change simultaneously, which the
+     * per-line version could not guarantee. The FPGA samples DATA on the WR_N
+     * strobe, so a skewed bus was a latent setup-time hazard as well as slow. */
+    return gpiod_line_set_value_bulk(&bus->data_bulk, v);
 }
 
 static int sample_data(am01_bus_t *bus, uint16_t *data_out)
 {
-    uint16_t v = 0;
-    for (int i = 0; i < NUM_DATA_LINES; i++) {
-        int bit = gpiod_line_get_value(bus->data_lines[i]);
-        if (bit < 0)
-            return -1;
-        v |= (uint16_t)(bit & 1) << i;
-    }
-    *data_out = v;
+    int v[NUM_DATA_LINES];
+    if (gpiod_line_get_value_bulk(&bus->data_bulk, v) < 0)
+        return -1;
+    uint16_t w = 0;
+    for (int i = 0; i < NUM_DATA_LINES; i++)
+        w |= (uint16_t)(v[i] & 1) << i;
+    /* Single ioctl, so all 16 bits are sampled at the same instant rather
+     * than smeared across 16 syscalls while the FPGA holds them stable. */
+    *data_out = w;
     return 0;
 }
 
@@ -179,11 +197,24 @@ static int reg_write16(am01_bus_t *bus, uint8_t addr, uint16_t data)
  * RD_N, wait READY to drop. */
 static int reg_read16(am01_bus_t *bus, uint8_t addr, uint16_t *data_out)
 {
+    /* Release the data bus BEFORE asserting RD_N.
+     *
+     * The wrapper's S_READ state asserts gpio_data_oe as soon as it sees RD_N
+     * low, so the FPGA starts driving all 16 data lines immediately. If this
+     * end is still configured as outputs -- which it is after any write, since
+     * set_data_direction() is sticky -- both ends drive the bus at once. That
+     * is a real short through the IOBs on both sides, not just a corrupt read:
+     * it wastes power and can only ever return garbage.
+     *
+     * The first read after open() happened to work because the data lines had
+     * not been requested yet, which is why this stayed hidden until a read
+     * followed a write (exactly what am01_bus_test does: read STATUS, submit
+     * 27 words, then read back). */
+    if (set_data_direction(bus, 0) < 0) return -1;
     if (drive_addr(bus, addr) < 0) return -1;
 
     if (gpiod_line_set_value(bus->rd_n, 0) < 0) return -1;
     if (wait_ready(bus, 1) < 0) return -1;
-    if (set_data_direction(bus, 0) < 0) return -1;
     if (sample_data(bus, data_out) < 0) return -1;
     if (gpiod_line_set_value(bus->rd_n, 1) < 0) return -1;
     if (wait_ready(bus, 0) < 0) return -1;
@@ -201,16 +232,24 @@ am01_bus_t *am01_bus_open(const char *gpiochip_name)
     if (!bus->chip)
         goto fail;
 
+    gpiod_line_bulk_init(&bus->data_bulk);
     for (int i = 0; i < NUM_DATA_LINES; i++) {
         bus->data_lines[i] = gpiod_chip_get_line(bus->chip, DATA_OFFSETS[i]);
         if (!bus->data_lines[i])
             goto fail;
+        gpiod_line_bulk_add(&bus->data_bulk, bus->data_lines[i]);
     }
+
+    gpiod_line_bulk_init(&bus->addr_bulk);
     for (int i = 0; i < NUM_ADDR_LINES; i++) {
         bus->addr_lines[i] = gpiod_chip_get_line(bus->chip, ADDR_OFFSETS[i]);
         if (!bus->addr_lines[i])
             goto fail;
-        if (gpiod_line_request_output(bus->addr_lines[i], CONSUMER, 0) < 0)
+        gpiod_line_bulk_add(&bus->addr_bulk, bus->addr_lines[i]);
+    }
+    {
+        int defaults[NUM_ADDR_LINES] = { 0 };
+        if (gpiod_line_request_bulk_output(&bus->addr_bulk, CONSUMER, defaults) < 0)
             goto fail;
     }
 
@@ -305,6 +344,30 @@ int am01_bus_read_seed(am01_bus_t *bus, uint32_t *seed_out)
     if (reg_read16(bus, ADDR_SEED_HI, &hi) < 0)
         return -1;
     *seed_out = ((uint32_t)hi << 16) | lo;
+    return 0;
+}
+
+int am01_bus_read_temp(am01_bus_t *bus, double *celsius_out)
+{
+    uint16_t ver, raw;
+
+    if (reg_read16(bus, ADDR_VERSION, &ver) < 0)
+        return -1;
+    if (ver < AM01_VERSION_WITH_TEMP) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    if (reg_read16(bus, ADDR_TEMP, &raw) < 0)
+        return -1;
+
+    /* XADC returns a 12-bit code in the top bits. The transfer function is
+     * from Xilinx UG480: degC = code * 503.975 / 4096 - 273.15. A code of 0
+     * means no conversion has completed yet, which would read as -273C. */
+    if (raw == 0) {
+        errno = EAGAIN;
+        return -1;
+    }
+    *celsius_out = ((double)(raw >> 4) * 503.975 / 4096.0) - 273.15;
     return 0;
 }
 

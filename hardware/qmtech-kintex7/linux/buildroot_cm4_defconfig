@@ -34,6 +34,20 @@ BR2_LINUX_KERNEL_INTREE_DTS_NAME="broadcom/bcm2711-rpi-cm4"
 BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
 BR2_PACKAGE_KMOD=y
 BR2_PACKAGE_KMOD_TOOLS=y
+# REQUIRED, not optional. The RPi kernel sets CONFIG_MODULE_COMPRESS_XZ, so
+# every module ships as .ko.xz -- and kmod only links liblzma when
+# BR2_PACKAGE_XZ is set (package/kmod/kmod.mk gates -Dxz=enabled on it).
+# Without this, modprobe cannot decompress ANY module: they are all present
+# under /usr/lib/modules and all unloadable. Symptom was no wlan0 at all,
+# because brcmfmac could never load. Buildroot's own
+# raspberrypicm4io_64_defconfig sets this.
+BR2_PACKAGE_XZ=y
+# And the HOST kmod needs it too, for a different reason: depmod runs on the
+# build machine and must decompress each .ko.xz to read its symbols. Without
+# it depmod silently emits an EMPTY modules.dep -- 0 bytes -- so modprobe
+# reports "module not found" for modules that are sitting right there. Both
+# options are required; either one alone leaves modules unloadable.
+BR2_PACKAGE_HOST_KMOD_XZ=y
 
 # Raspberry Pi boot firmware. Without this there is no start4.elf/fixup4.dat
 # and the CM4 cannot boot at all.
@@ -84,7 +98,10 @@ BR2_PACKAGE_SCREEN=y
 # Networking. The board has a populated HR911130A RJ45 wired to the CM4's MDI
 # pairs (manual section 2.2.9), so eth0 is real -- DHCP on it is the primary
 # way in, since no pin-based serial console exists on this board.
-BR2_SYSTEM_DHCP="eth0"
+# Empty on purpose: this generates a .network matching "eth0", which does not
+# exist on this kernel (the interface is end0). The overlay ships
+# 10-wired.network matching both names instead.
+BR2_SYSTEM_DHCP=""
 BR2_PACKAGE_OPENSSH=y
 BR2_PACKAGE_NETCAT=y
 BR2_PACKAGE_WGET=y

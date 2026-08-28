@@ -76,6 +76,19 @@ int am01_bus_read_version(am01_bus_t *bus, uint16_t *version_out);
  * "epoch unknown" -- it is NOT the same as a seed of 0. */
 int am01_bus_read_seed(am01_bus_t *bus, uint32_t *seed_out);
 
+/* Reads the FPGA's on-die temperature via XADC, in degrees C. Returns 0 on
+ * success.
+ *
+ * -1 / ENOTSUP against a bitstream older than VERSION 0x0102.
+ * -1 / EAGAIN if no conversion has completed yet (raw code still 0), which
+ * is normal for the first few microseconds after configuration.
+ *
+ * This is the die temperature, which is the number that matters: the design
+ * free-runs at full power from the moment it configures, and a heatsink
+ * probe would lag it badly. There is nowhere on this board to attach an
+ * external sensor in any case -- every CM4 GPIO goes to FPGA fabric. */
+int am01_bus_read_temp(am01_bus_t *bus, double *celsius_out);
+
 /* Blocks (with a timeout) on the IRQ line's edge event, signaling a new
  * golden nonce is ready. Returns 0 on an edge seen, -1 on timeout/error
  * (errno == ETIMEDOUT on timeout). Follow with am01_bus_read_nonce(). */

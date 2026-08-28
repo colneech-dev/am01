@@ -45,6 +45,11 @@ module am01_qmtech_top (
     output wire        gpio_irq,
 
     output wire [2:0]  status_led,
+
+    // Fan on JP5's spare BANK12 I/O. Driven from fabric off the XADC die
+    // temperature, so it runs correctly with no software involved.
+    output wire        fan_pwm,
+    input  wire        fan_tach_in,
     input  wire        user_key_sw2,   // active low, used here as manual reset
     input  wire        user_key_sw3    // unused, reserved
 );
@@ -98,6 +103,9 @@ module am01_qmtech_top (
     odocrypt_gpio_wrapper odocrypt_gpio_wrapper_inst (
         .bus_clk   (bus_clk),
         .bus_rst_n (bus_rst_n),
+
+        .fan_pwm     (fan_pwm),
+        .fan_tach_in (fan_tach_in),
 
         .gpio_data (gpio_data),
         .gpio_addr (gpio_addr),

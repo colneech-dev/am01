@@ -1,0 +1,17 @@
+# Wired ethernet -- the primary route in.
+#
+# Matches BOTH names on purpose. The Raspberry Pi 6.6 kernel names the CM4's
+# on-board ethernet "end0" (predictable naming for the embedded MAC), not
+# "eth0". Config that matched only eth0 silently never applied: the interface
+# existed and was up, but nothing ran DHCP on it, so the board had no address
+# and no way in. `ls /sys/class/net/` showed only "lo" and "end0".
+
+[Match]
+Name=end0 eth0
+
+[Network]
+DHCP=yes
+
+[DHCPv4]
+# Makes the miner findable on the LAN; there is no mDNS on this image.
+SendHostname=yes
