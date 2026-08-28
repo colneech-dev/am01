@@ -1,16 +1,16 @@
-# CM4 on-board WiFi. eth0 is configured by BR2_SYSTEM_DHCP; this covers wlan0.
-# Association is handled by wpa_supplicant@wlan0, credentials in
-# /etc/wpa_supplicant/wpa_supplicant-wlan0.conf (not in this repo).
+# CM4 on-board WiFi. Wired is 10-wired.network (which matches end0 as well as
+# eth0); association here is am01-wifi.service, with credentials in
+# /etc/wpa_supplicant/wpa_supplicant-wlan0.conf -- gitignored, so a fresh
+# clone builds an image without it and that service skips rather than fails.
+#
+# Deliberately NO RequiredForOnline=no. systemd-networkd-wait-online ignores
+# links marked not-required, so setting it would mean the board never waits
+# for WiFi even when WiFi is its only network. Instead the wait is bounded to
+# 60s and set to --any, so whichever interface comes up first releases boot.
+# See systemd-networkd-wait-online.service.d/10-any.conf.
 
 [Match]
 Name=wlan0
-
-[Link]
-# systemd-networkd-wait-online blocks until every managed link is configured,
-# so an unassociated wlan0 held up boot for its full 120s timeout with
-# "Waiting for network to be configured". WiFi is the secondary route in --
-# eth0 is primary -- so it must not gate network-online.target.
-RequiredForOnline=no
 
 [Network]
 DHCP=yes

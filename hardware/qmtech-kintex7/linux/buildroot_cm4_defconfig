@@ -122,6 +122,14 @@ BR2_PACKAGE_LINUX_FIRMWARE_BRCM_BCM43XXX=y
 # the radio working perfectly.
 BR2_PACKAGE_WIRELESS_REGDB=y
 BR2_PACKAGE_WPA_SUPPLICANT=y
+# iw: needed to inspect or set the regulatory domain and to see association
+# state at all -- and odo-ui shells out to it directly ("iw dev wlan0 link",
+# "iw dev wlan0 scan"), so without it the UI's WiFi panel silently shows
+# nothing even when the radio is working.
+BR2_PACKAGE_IW=y
+# procps-ng for pkill/pgrep. Busybox provides kill/killall/pidof but not
+# these, which matters when hunting a stray process on the board.
+BR2_PACKAGE_PROCPS_NG=y
 BR2_PACKAGE_WPA_SUPPLICANT_NL80211=y
 BR2_PACKAGE_WPA_SUPPLICANT_CLI=y
 BR2_PACKAGE_WPA_SUPPLICANT_PASSPHRASE=y
@@ -131,6 +139,45 @@ BR2_PACKAGE_STRACE=y
 BR2_PACKAGE_NANO=y
 BR2_PACKAGE_LESS=y
 BR2_PACKAGE_HTOP=y
+
+# Diagnostics. Each of these was wanted during hardware bring-up and was not
+# there, which turned a one-command answer into a guessing round:
+#
+#  lsof      -- "who is holding this device?" A stray gpioset held two bus
+#               lines and made am01_bus_test fail with a message about
+#               opening the chip. lsof /dev/gpiochip0 answers that instantly.
+#  dtc       -- lets the RUNNING board be asked whether an overlay actually
+#               applied: dtc -I fs -O dts /sys/firmware/devicetree/base.
+#               am01-fpga-gpio has never been confirmed loaded on hardware.
+#  usbutils  -- lsusb. Needed for the Pi-driven FPGA programming path: the
+#               USB-Blaster has to enumerate on the board before
+#               openFPGALoader can use it.
+#  ethtool   -- link state and speed on end0. Distinguishes "no cable" from
+#               "no DHCP", which we could not tell apart.
+#  evtest    -- identifies which /dev/input/eventN is the touch panel, which
+#               odo-ui needs and cannot discover for you.
+#  iproute2  -- busybox's ip is a subset; ss and full ip route/addr matter
+#               when the pool will not connect.
+BR2_PACKAGE_LSOF=y
+BR2_PACKAGE_DTC=y
+BR2_PACKAGE_DTC_PROGRAMS=y
+BR2_PACKAGE_USBUTILS=y
+BR2_PACKAGE_ETHTOOL=y
+BR2_PACKAGE_EVTEST=y
+BR2_PACKAGE_IPROUTE2=y
+
+# NOTE: no rpi-userland / vcgencmd. The package was REMOVED from Buildroot
+# (it is in Config.in.legacy now), and setting it aborts the entire build with
+# "You have legacy configuration in your .config" -- which silently leaves the
+# previous image in place, so the build looks like it succeeded until you
+# check the artifact.
+#
+# The information it would have given is still reachable without it:
+#   SoC temperature   /sys/class/thermal/thermal_zone0/temp
+#   throttling flags  /sys/devices/platform/soc/soc:firmware/get_throttled
+#                     (or the vcio ioctl)
+# and the FPGA's own die temperature comes from am01_diag via XADC, which is
+# the more relevant number here anyway.
 
 # Hardware abstraction
 BR2_PACKAGE_LIBGPIOD=y

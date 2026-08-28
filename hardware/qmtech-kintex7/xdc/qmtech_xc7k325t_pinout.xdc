@@ -320,3 +320,28 @@ set_property IOSTANDARD LVCMOS33 [get_ports touch_cs_n]
 set_property IOSTANDARD LVCMOS33 [get_ports touch_irq]
 # XPT2046 PENIRQ is open-drain.
 set_property PULLUP true [get_ports touch_irq]
+
+# ---------------------------------------------------------------------------
+# Bitstream configuration for booting from the on-board SPI flash.
+#
+# None of this was set before, so Vivado used its defaults: SPI x1 at 3MHz.
+# An 11.4MB bitstream takes roughly 30 SECONDS to load at that rate -- long
+# enough that the board looks like it is simply not configuring, which is
+# exactly how it looked. The board is wired for quad SPI (FPGA_DQ0..DQ3 to
+# the S25FL128L, schematic sheet 2) and boots from it by default
+# (M0:M1:M2 = 1:0:0, manual figure 2-7), so there is no reason to crawl.
+#
+#   SPIx4 @ 33MHz  ~44x the read bandwidth: configures in well under a second
+#   COMPRESS       smaller bitstream, so both configuration AND the JTAG
+#                  flash write get shorter (that write takes ~1h over a
+#                  USB-Blaster, and is dominated by bytes)
+#   SPI_FALL_EDGE  needed for reliable reads once CONFIGRATE is raised
+#
+# These live in the XDC rather than build.tcl because BITSTREAM properties
+# apply to a design, and build.tcl only creates the project -- [current_design]
+# does not exist at that point.
+set_property CONFIG_MODE SPIx4 [current_design]
+set_property BITSTREAM.CONFIG.SPI_BUSWIDTH 4 [current_design]
+set_property BITSTREAM.CONFIG.CONFIGRATE 33 [current_design]
+set_property BITSTREAM.CONFIG.SPI_FALL_EDGE YES [current_design]
+set_property BITSTREAM.GENERAL.COMPRESS TRUE [current_design]
