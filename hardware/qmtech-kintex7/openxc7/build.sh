@@ -180,10 +180,29 @@ if [ -n "${REUSE_JSON:-}" ]; then
     fi
     echo "    reusing $REUSE_JSON -- synthesis SKIPPED"
     [ "$REUSE_JSON" -ef "$OUT/$TOP.json" ] || cp "$REUSE_JSON" "$OUT/$TOP.json"
-elif [ "${GROUPS:-0}" = "1" ]; then
-    "$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG $SRL_ARG; hdlname_recover; write_json $OUT/$TOP.json" "${SRCS[@]}"
 else
-    "$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG $SRL_ARG -json $OUT/$TOP.json" "${SRCS[@]}"
+    # DEFINES="NO_XADC FOO" passes Verilog defines. Sources normally ride as
+    # positional args, which leaves nowhere to put one, so when DEFINES is set
+    # they are read explicitly instead.
+    #
+    # Deliberately kept as two whole invocations rather than one assembled from
+    # fragments: a build WITHOUT defines must issue the exact command it always
+    # has -- same `-json` form, sources positional -- or results stop being
+    # comparable with every measurement taken so far.
+    if [ -n "${DEFINES:-}" ]; then
+        _defs=""
+        for _d in $DEFINES; do _defs="$_defs -D$_d"; done
+        echo "    defines:$_defs"
+        if [ "${GROUPS:-0}" = "1" ]; then
+            "$YOSYS" -p "read_verilog$_defs ${SRCS[*]}; synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG $SRL_ARG; hdlname_recover; write_json $OUT/$TOP.json"
+        else
+            "$YOSYS" -p "read_verilog$_defs ${SRCS[*]}; synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG $SRL_ARG; write_json $OUT/$TOP.json"
+        fi
+    elif [ "${GROUPS:-0}" = "1" ]; then
+        "$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG $SRL_ARG; hdlname_recover; write_json $OUT/$TOP.json" "${SRCS[@]}"
+    else
+        "$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG $SRL_ARG -json $OUT/$TOP.json" "${SRCS[@]}"
+    fi
 fi
 
 # Turn on the block RAM output register (DOA_REG/DOB_REG).

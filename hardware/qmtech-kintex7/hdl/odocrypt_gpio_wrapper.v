@@ -544,7 +544,11 @@ module odocrypt_gpio_wrapper #(
     always @(posedge bus_clk or negedge bus_rst_n) begin
         if (!bus_rst_n) begin
             fan_duty     <= 8'd255;   // full until we know better
-            fan_floor    <= 8'd0;
+            // fan_floor is NOT reset here. It is written by the bus state
+            // machine (ADDR_FAN), and a register driven from two always blocks
+            // is a multiple-driver conflict -- yosys reported exactly that on
+            // all 8 bits. This block only READS it, which is fine; ownership
+            // sits with the block that writes it, and the reset went with it.
             fan_pwm_cnt  <= 11'd0;
             fan_sec_cnt  <= 26'd0;
             fan_tach_acc <= 8'd0;
@@ -622,6 +626,17 @@ module odocrypt_gpio_wrapper #(
             header_lo_stage <= 16'h0;
             target_lo_stage <= 16'h0;
             nonce_valid_clear_pulse <= 1'b0;
+            // Host-settable fan floor. Owned here because this block writes it
+            // (S_WRITE/ADDR_FAN); the fan controller only reads it.
+            //
+            // 0 means "pure auto", which is the safe default: the automatic
+            // curve never falls below ~30% duty, so a zeroed floor cannot stop
+            // the fan. This reset is synchronous while the fan block's is
+            // asynchronous, so fan_floor now clears one bus_clk later than it
+            // used to. That is harmless -- fan_duty resets to 255 (full) and
+            // the PWM period is 2048 cycles, so a single stale cycle cannot
+            // show up as reduced cooling.
+            fan_floor       <= 8'd0;
         end else begin
             nonce_valid_clear_pulse <= 1'b0;
 
