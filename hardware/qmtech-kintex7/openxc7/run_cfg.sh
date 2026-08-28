@@ -39,14 +39,22 @@ rm -f "$DONE"
 # including parent shells and experiment chains meant to survive. See stoprun.sh.
 trap 'touch "$DONE"; rm -f "$PIDF"' EXIT
 
+# SEED is a nextpnr command-line option, not an env knob, so it cannot be passed
+# through "$@" with the others. It matters: measured seed spread on this design
+# is ~22 MHz, so a comparison run must pin the same seed as the result it is
+# being compared against, or the difference measured is mostly noise.
+SEED_ARG=()
+[ -n "${SEED:-}" ] && SEED_ARG=(--seed "$SEED")
+
 echo "== $TAG =="
 echo "   netlist: $JSON"
-echo "   knobs  : $*"
+echo "   knobs  : $*  ${SEED:+seed=$SEED}"
 env NEXTPNR_ARC_MAX_VISIT=2000000 NEXTPNR_ROUTER2_MAX_STALL=250 "$@" "$NEXTPNR" \
     --chipdb "$CHIPDB" \
     --json "$JSON" \
     --xdc "$XDC" \
     --freq 133.33 \
+    ${SEED_ARG[@]+"${SEED_ARG[@]}"} \
     --write "$OUT/placed_$TAG.json" \
     --fasm "$OUT/am01_qmtech_top_$TAG.fasm" \
     --log "$OUT/am01_qmtech_top_$TAG.pnr.log" &

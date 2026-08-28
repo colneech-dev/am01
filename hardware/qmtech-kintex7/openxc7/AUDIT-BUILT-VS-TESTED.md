@@ -551,6 +551,55 @@ bad code — it is code that was never once executed.**
 
 ---
 
+## Plan — BRAM output register (RTL pipeline change, ~1.2 ns)
+
+**Status: to do.** Not a tool change and NOT a Vivado-parity item — see the
+correction below before anyone treats it as catching up.
+
+All 420 BRAMs are inferred with `DOA_REG=0` / `DOB_REG=0`, because the RTL is a
+single registered read (`encrypt.v:3080-3083`):
+
+```verilog
+(* ram_style = "block" *) reg [9:0] mem[0:1023];
+always @(posedge clk) begin
+    a_out <= mem[a_in];
+end
+```
+
+Our own Vivado-extracted SDF (`make-bram-timing-db.sh`) gives:
+
+```
+DOA_REG_U_0  (output register OFF)  (1.353::2.454)
+DOA_REG_U_1  (output register ON)   (0.468::0.882)
+```
+
+nextpnr uses 2.08 ns (`XC7_BRAM_CLK_TO_DO_NS`), the register-OFF figure.
+Enabling it drops clock-to-DO to ~0.88 ns — **~1.2 ns off the critical path**,
+where only 0.2 ns is needed to reach 133.33 MHz. On the seed-3 path
+(2.1 + 3.8 + 0.2 + 1.3 + 0.2 = 7.7 ns) that lands near 6.5 ns ≈ **153 MHz**.
+
+**Cost:** one extra pipeline stage per S-box read. `encrypt.v`'s 172-stage
+`progress` shift register and the round timing must absorb it. `encrypt.v` is
+GENERATED, so this belongs in `odo_gen`, not in the generated file.
+
+> **CORRECTION — this is not a Vivado gap.** I initially presented it as the
+> next lever to catch Vivado. It is not. `netlist_norename_v68.v` — the netlist
+> **Vivado also reads** — carries `DOA_REG(32'd0)` on all 420 BRAMs, so Vivado
+> reaches 158.81 MHz with the *same* 2.1 ns clock-to-Q we have. The register is
+> an RTL optimisation available equally to both flows.
+>
+> Same 2.1 ns start in both cases:
+>
+> | | period | BRAM clk-Q | everything else |
+> |---|---|---|---|
+> | Vivado 158.81 | 6.30 ns | 2.1 | **4.2 ns** |
+> | us 129.79 | 7.70 ns | 2.1 | **5.5 ns** |
+>
+> So the entire remaining Vivado gap is **1.3 ns of routing and logic**, and
+> closing it is a separate problem from this item.
+
+---
+
 ## Plan — map the device's timing properly (upstreamable, NOT an Fmax lever)
 
 **Scope check first: three of the four layers already exist.**
@@ -656,3 +705,142 @@ Kept so the reasoning is auditable rather than silently rewritten.
 | 9a (`dfflegalize` necessity) **moved ahead of** 9b (replication pass) | cheap, and if the LUT3 layer is avoidable the net is never created |
 | `WIRE_DEMAND` promoted from screen curiosity to **next full route** | `WIRE_DEMAND=1.0` is the first config to beat baseline on timing cost *and* wirelength |
 | T15's "all FFs already CE=1/R=0" flagged as **unverified** | contradicted by the probe: 2 FDREs take the net on port `R` |
+
+---
+
+## BRAM output register (DOA_REG/DOB_REG) -- resolved 2026-08-28
+
+### The claim
+
+7-series block RAM has an optional output register. The Vivado-extracted SDF
+(`make-bram-timing-db.sh`) prices it:
+
+| config | clock-to-DO |
+|---|---|
+| `DOA_REG_U_0` (off) | 1.353 :: **2.454** ns |
+| `DOA_REG_U_1` (on)  | 0.468 :: **0.882** ns |
+
+~1.6 ns, on a critical path that spends 2.1 ns of a 7.7 ns period in exactly
+that arc. Only 0.2 ns is needed to reach 133.33 MHz.
+
+### Why the first attempt failed, and what was actually wrong
+
+`odo_gen --bram-out-reg` (commit `3e82a3b`) emits the two-register S-box that
+UG901 documents for registered-output inference. Synthesis put the second stage
+in **fabric flip-flops**, leaving `DOA_REG=0` on 418 of 420 BRAMs.
+
+Three successive theories, only the last correct:
+
+1. ~~"Vivado does this by default and we don't"~~ **WRONG.**
+   `netlist_norename_v68.v` carries `DOA_REG(32'd0)` on all 420 BRAMs and
+   Vivado reads that same netlist. Vivado reaches 158.81 MHz *without* the
+   output register. This is an optimisation available to both flows, not a
+   parity gap.
+2. ~~"`--bram-out-reg` inflates BRAM count 421 -> 441"~~ **WRONG.**
+   Recounted from the JSON: **420 -> 420, delta 0.** The earlier figure was a
+   miscount. The transform costs no block RAM.
+3. **`brams_xc6v_map.v` hardcodes it.** Lines 52-53 and 213-214 emit
+   `.DOA_REG(0)` / `.DOB_REG(0)`, and `synth_xilinx.cc:519` selects that map for
+   `family == "xc7"`.
+
+### This is a yosys limitation, and it is structural
+
+Not a missing line in one file:
+
+* The modern `memory_libmap` infrastructure that xc7 uses **has no
+  output-register concept at all** -- `memlib.cc` has no keyword for it.
+* The one `make_outreg` keyword in the tree belongs to the **old** `memory_bram`
+  pass, and `memory_bram.cc:1300` documents it as adding *"external
+  flip-flops"* -- the fabric flops we are trying to eliminate.
+
+**Consequence: no RTL coding style can reach `DOA_REG=1` through inference.**
+Restructuring the template ("option 1") is refuted, not merely untried. Every
+openXC7 user on any 7-series part is leaving ~1.6 ns of BRAM clock-to-Q
+unavailable.
+
+### Everything downstream already supports it
+
+The gap is *only* in synthesis:
+
+| stage | status | evidence |
+|---|---|---|
+| prjxray bitstream feature | present | `kintex7/segbits_bram_l.db`: `BRAM_L.RAMB18_Y0.DOA_REG 27_69` |
+| nextpnr FASM emission | present | `fasm.cc:2291` `write_bit("DOA_REG", ...)` |
+| nextpnr timing model | present | `arch.cc:2640` selects the faster clock-to-Q, so the win appears in reported Fmax, not only on silicon |
+| yosys | **absent** | above |
+
+### The fix: `absorb_bram_outreg.py`
+
+Attach the register **after mapping**, on the JSON netlist. Delete the fabric
+flop and turn the BRAM's own register on:
+
+```
+BRAM.DO --netX--> FDRE.D    FDRE.Q --netY-->     (before)
+BRAM.DO --netY-->                               (after, DOA_REG=1)
+```
+
+Guarded: a side is transformed only if every data bit drives exactly one load,
+that load is an `FDRE.D`, nothing escapes to a top-level port, and the flops
+share the BRAM's clock with `CE=1`/`R=0`. Refusing is always safe. The
+correctness crux is the single-load test -- a second load would still need the
+*unregistered* value, which no longer exists once the register is on.
+
+Measured on `am01_qmtech_top_outreg.json`:
+
+| | |
+|---|---|
+| BRAM sides registered | **840 of 840** (100%) |
+| flip-flops removed | **8400** |
+| cells | 79812 -> **71412** (baseline 70071, so +1341) |
+| absorbed flop control | uniformly `FDRE`, `CE=const 1`, `R=const 0`, `INIT=x` |
+
+### Verification, and its honest limits
+
+`verify_absorb_outreg.py` -- **PASS**: BRAM set unchanged, 8400 deletions all
+`FDRE`, every registered side has `REGCE=1`/`RSTREG=0`, all 8400 rewired bits
+trace to the correct flop `Q`, no net gained a second driver, **0 non-BRAM cells
+modified**.
+
+**Formal equivalence is NOT available here**, unlike the fanout transform's
+`equiv_replication.ys`. `RAMB18E1` in yosys's `cells_sim.v` is a timing-only
+shell: it declares `DOA_REG` and carries a specify block with the 2454/882
+numbers, but has **no `always`/`assign` body**. With no behavioural BRAM model
+there is nothing for a SAT solver to reason about. So correctness rests on two
+halves: `tb_outreg_equiv.v` for the extra pipeline stage at RTL, and the
+structural check above for the rewiring.
+
+### Throughput is NOT lost (checked, because it would have been fatal)
+
+Rounds go 2 -> 3 cycles, so latency grows 171 -> 252. That would be worth
+nothing if it raised the initiation interval -- a 50% throughput loss needs a
+50% Fmax gain just to break even.
+
+It does not. `keccak800.v:188` defines `THROUGHPUT` as **clocks per hash**,
+fixed at 4 by `miner.v:18`, and `write` is self-reported by the core via
+`progress[latency-1]`. The deeper pipeline simply holds more work in flight.
+**Hashrate is proportional to Fmax; latency does not enter.**
+
+The generator handled the interleaving on its own: `extra_delay` moved 1 -> 0 so
+`gcd(4, 3*21+0) = 1` still holds, leaving `state[]` at 21 stages. Note `state[]`
+counts **round stages, not clocks**, which is why its depth correctly stays
+`unrolling+extra_delay` while only `period[]` scales with `RoundCycles()`.
+
+### Status
+
+* `absorb_bram_outreg.py` -- built, structurally verified
+* `verify_absorb_outreg.py` -- built, passing
+* `build.sh` -- gained `BRAM_OUTREG=1` (opt-in) and `REUSE_JSON=<path>`
+  (skip the ~20 min synthesis when only re-routing)
+* `run_cfg.sh` -- gained `SEED=`, which it could not pass before; seed spread on
+  this design is ~22 MHz, so an unpinned comparison measures mostly noise
+* **route in flight**: tag `outregs3`, y-base 40, `CRIT_DIST=1.0`, seed 3 --
+  the exact config behind the 129.79 MHz best, so the delta is attributable
+* `tb_outreg_equiv.v` -- still running, independent confirmation of the RTL
+
+### Upstream
+
+A `memory_libmap`-era output-register capability, or a Xilinx-specific
+post-mapping absorption pass, would be a genuine yosys contribution:
+`absorb_bram_outreg.py` is the working prototype of the latter. **Do not file
+until the route confirms a real Fmax gain** -- the argument for upstreaming is
+the measurement, not the mechanism.

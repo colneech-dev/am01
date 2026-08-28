@@ -167,10 +167,44 @@ echo "==> [1/4] synthesis (yosys)${FLATTEN_ARG:+ , flattened} -- $(date -Is)"
 #
 # Off by default: it only adds attributes, but keeping the default byte-identical
 # means GROUPS=0 builds stay comparable with older ones.
-if [ "${GROUPS:-0}" = "1" ]; then
+#
+# REUSE_JSON=<path> skips synthesis entirely and adopts an existing netlist.
+# Synthesis is ~20 minutes on this design, so re-running it to try a different
+# seed or router setting is pure waste. It also makes post-synthesis netlist
+# transforms (absorb_bram_outreg.py, replicate_fanout_placed.py) testable
+# without a resynthesis round trip.
+if [ -n "${REUSE_JSON:-}" ]; then
+    if [ ! -f "$REUSE_JSON" ]; then
+        echo "REUSE_JSON=$REUSE_JSON does not exist" >&2
+        exit 1
+    fi
+    echo "    reusing $REUSE_JSON -- synthesis SKIPPED"
+    [ "$REUSE_JSON" -ef "$OUT/$TOP.json" ] || cp "$REUSE_JSON" "$OUT/$TOP.json"
+elif [ "${GROUPS:-0}" = "1" ]; then
     "$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG $SRL_ARG; hdlname_recover; write_json $OUT/$TOP.json" "${SRCS[@]}"
 else
     "$YOSYS" -p "synth_xilinx -top $TOP -family xc7 $FLATTEN_ARG $SRL_ARG -json $OUT/$TOP.json" "${SRCS[@]}"
+fi
+
+# Turn on the block RAM output register (DOA_REG/DOB_REG).
+#
+# Only meaningful on a netlist built from odo_gen --bram-out-reg, whose S-boxes
+# carry a second register stage; this moves that stage off the fabric and into
+# the BRAM, worth ~1.6 ns of clock-to-DO. yosys cannot emit the parameter
+# itself (memory_libmap has no output-register concept and brams_xc6v_map.v
+# hardcodes .DOA_REG(0)), so it has to be attached after mapping.
+#
+# The pass is a no-op on any other netlist -- it refuses rather than guesses --
+# so this is safe to leave off by default and switch on per build.
+if [ "${BRAM_OUTREG:-0}" = "1" ]; then
+    echo "==> [1/4b] absorb BRAM output registers"
+    if python3 "$(dirname "$0")/absorb_bram_outreg.py" \
+            "$OUT/$TOP.json" "$OUT/$TOP.outreg.json" \
+            --report "$OUT/$TOP.outreg.txt"; then
+        mv "$OUT/$TOP.outreg.json" "$OUT/$TOP.json"
+    else
+        echo "    absorption found nothing to do; continuing unchanged" >&2
+    fi
 fi
 
 # Optional RTL-hierarchy floorplan. Opt-in: default behaviour is unchanged.
