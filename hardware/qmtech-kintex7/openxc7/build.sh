@@ -325,10 +325,19 @@ echo "==> [2/4] place & route (nextpnr-xilinx) -- $(date -Is)"
 # every run and this step was broken for every build.sh invocation until it
 # was caught. env takes the expanded words as arguments and applies them as
 # assignments itself, which is why run_cfg.sh has always worked.
+# SEED pins nextpnr's placement seed. It is not a nicety on this design: the
+# measured spread is 16-25 MHz across seeds, wider than most effects being
+# measured, so an unpinned build is not reproducible and two configurations
+# cannot be compared without it. Left unset, nextpnr uses its own default and
+# behaviour is unchanged from every earlier build.
+SEED_ARG=()
+[ -n "${SEED:-}" ] && SEED_ARG=(--seed "$SEED")
+
 env NEXTPNR_ARC_MAX_VISIT="${NEXTPNR_ARC_MAX_VISIT:-2000000}" \
     NEXTPNR_ROUTER2_MAX_STALL="${NEXTPNR_ROUTER2_MAX_STALL:-250}" \
     ${CRIT_DIST:+NEXTPNR_CRIT_DIST_EXP="$CRIT_DIST"} \
     "$NEXTPNR" --chipdb "$CHIPDB" \
+    ${SEED_ARG[@]+"${SEED_ARG[@]}"} \
     --json "$PNR_JSON" --xdc "$XDC" \
     --fasm "$OUT/$TOP.fasm" --freq "$FREQ" \
     ${PNR_EXTRA[@]+"${PNR_EXTRA[@]}"} \

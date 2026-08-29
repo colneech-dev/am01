@@ -12,3 +12,6 @@ seed	variant	clk_h_MHz	iters	overuse
 6	outreg	82.90	10	0
 6	base	117.86	10	0
 1	noabs	112.42	38	0
+2	noabs	137.49	54	0
+3	noabs	121.65	12	0
+4	noabs	139.24	25	0
