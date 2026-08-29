@@ -67,4 +67,59 @@ for _p in "${RTL_PINNED_PATHS[@]}"; do
     fi
     RTL_SRCS+=("$_f")
 done
-unset _p _f _rtl_dir _rtl_repo
+
+# ---------------------------------------------------------------- STALENESS
+# UNPIN WHEN: the numbers this pin protects are no longer being compared
+# against. Concretely, unpin once EITHER
+#
+#   (a) the concurrent wrapper work (display path, register map) has landed and
+#       you are ready to spend one ~2 h synthesis re-measuring `base` on it, or
+#   (b) the placement experiments (GROUPS=1, folded floorplan, cols_per_round)
+#       are finished and the chosen configuration is being built for real.
+#
+# A pin is a debt, not a feature. Its whole purpose is to keep ONE comparison
+# honest; past that it means shipping and tuning RTL that nobody is editing any
+# more, and every later measurement inherits a design that has silently drifted
+# from the branch.
+#
+# TO UNPIN: bump RTL_PINNED_COMMIT to the new baseline commit, `rm -rf
+# gen/rtl_pinned`, then RE-MEASURE base and replace the reference numbers in
+# RESULTS.md and AUDIT-BUILT-VS-TESTED.md. Do NOT carry the old figures
+# (base median 114.81, noabs median 127.71 / best 160.93) across the change --
+# rebuild the control. To drop pinning altogether, delete this file and pass
+# the working-tree paths directly.
+#
+# The warning below exists because a comment is not a reminder: it prints on
+# every run, so the debt is visible rather than forgotten.
+if _behind=$(git -C "$_rtl_repo" rev-list --count "$RTL_PINNED_COMMIT"..HEAD 2>/dev/null); then
+    if [ "${_behind:-0}" -gt 0 ]; then
+        # Compare the EXTRACTED pinned content against the working tree
+        # directly, rather than asking git. Two things make `git diff` the wrong
+        # tool here: `git -C` resolves pathspecs in a way that misreported 5 of
+        # 6 files as drifted when only 1 had changed, and core.autocrlf=true in
+        # this repo means the LF blob and the CRLF worktree file differ as bytes
+        # while being identical as source. Stripping CR answers the question the
+        # warning is actually asking.
+        _drift=0
+        for _p in "${RTL_PINNED_PATHS[@]}"; do
+            _w="$_rtl_repo/$_p"
+            _q="$_rtl_dir/$(basename "$_p")"
+            [ -f "$_w" ] && [ -f "$_q" ] || continue
+            if ! diff -q <(tr -d '\r' < "$_q") <(tr -d '\r' < "$_w") >/dev/null 2>&1; then
+                _drift=$((_drift+1))
+                _drifted="${_drifted:+$_drifted }$(basename "$_p")"
+            fi
+        done
+        echo "    NOTE: RTL pinned at $RTL_PINNED_COMMIT, $_behind commit(s) behind HEAD." >&2
+        if [ "$_drift" -gt 0 ]; then
+            echo "          $_drift of ${#RTL_PINNED_PATHS[@]} pinned sources differ from the tree: $_drifted" >&2
+            echo "          Intentional -- see UNPIN WHEN in rtl_sources.sh. Once the placement" >&2
+            echo "          experiments are done, re-baseline and re-measure base." >&2
+        else
+            echo "          No pinned source differs from the tree yet -- the pin is currently" >&2
+            echo "          a no-op and can be removed as soon as nothing depends on it." >&2
+        fi
+    fi
+fi
+
+unset _p _f _w _q _behind _drift _drifted _rtl_dir _rtl_repo
