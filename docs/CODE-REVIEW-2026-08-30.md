@@ -51,6 +51,10 @@ These are defects in the XPT2046 and `LCD_DATA8` code added yesterday. **The
 0x0104 bitstream that was built and flashed contains all of them**, so its
 touch support should be treated as non-functional until they are fixed.
 
+**STATUS: fixed in the working tree, VERSION 0x0105. Not yet built or tested on
+hardware** -- the RTL compiles and the logic was reasoned through, but no
+bitstream has been produced from it and no XPT2046 has ever answered.
+
 ### 3. `lcd_start` re-arms and retransmits each byte 2–10 times
 
 `hdl/odocrypt_gpio_wrapper.v:511`
