@@ -32,6 +32,9 @@ BR2_LINUX_KERNEL_IMAGE=y
 BR2_LINUX_KERNEL_DTS_SUPPORT=y
 BR2_LINUX_KERNEL_INTREE_DTS_NAME="broadcom/bcm2711-rpi-cm4"
 BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
+# Extra kernel options on top of the bcm2711 defconfig -- currently just the
+# virtual framebuffer the ILI9341 push path needs. See the fragment for why.
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_AM01_PATH)/../linux/linux-am01.fragment"
 BR2_PACKAGE_KMOD=y
 BR2_PACKAGE_KMOD_TOOLS=y
 # REQUIRED, not optional. The RPi kernel sets CONFIG_MODULE_COMPRESS_XZ, so
@@ -83,6 +86,21 @@ BR2_TARGET_GENERIC_ISSUE=""
 BR2_TARGET_GENERIC_ROOT_PASSWD="changeme"
 BR2_SYSTEM_BIN_SH_BASH=y
 
+# Console keyboard layout: UK, not the "us" default.
+# BR2_PACKAGE_SYSTEMD_VCONSOLE is already default-y, but its keymap string
+# defaults to "us", which is what put a US layout on the HDMI console --
+# @"# and the pipe/backslash keys all land in the wrong places on a GB
+# keyboard. Setting this non-empty also auto-selects BR2_PACKAGE_KBD, which
+# supplies both loadkeys (systemd-vconsole-setup shells out to it) and the
+# keymap data itself (data/keymaps/i386/qwerty/uk.map.gz).
+#
+# This option only compiles the default INTO systemd; it does not write
+# /etc/vconsole.conf. The overlay ships that file explicitly as well, so the
+# layout does not depend on a compiled-in fallback.
+BR2_PACKAGE_SYSTEMD_VCONSOLE=y
+BR2_PACKAGE_SYSTEMD_VCONSOLE_DEFAULT_KEYMAP="uk"
+BR2_PACKAGE_KBD=y
+
 # Busybox
 BR2_PACKAGE_BUSYBOX=y
 
@@ -110,10 +128,22 @@ BR2_PACKAGE_WGET=y
 # Credentials are NOT in this repo; see /etc/wpa_supplicant.conf on the target.
 BR2_PACKAGE_LINUX_FIRMWARE=y
 BR2_PACKAGE_LINUX_FIRMWARE_BRCM_BCM43XX=y
-# BCM43XXX carries the 43455 parts the CM4 needs: the Raspberry Pi nvram .txt
-# and (via CYPRESS_CYW43XXX) the cyfmac43455 firmware and clm_blob. BCM43XX
-# alone stops at 4354 and leaves the radio without firmware.
-BR2_PACKAGE_LINUX_FIRMWARE_BRCM_BCM43XXX=y
+# Raspberry Pi own firmware set (LibreELEC/brcmfmac_sdio-firmware-rpi) rather
+# than linux-firmware BCM43XXX. Mutually exclusive: the _WIFI sub-option
+# depends on !BR2_PACKAGE_LINUX_FIRMWARE_BRCM_BCM43XXX.
+#
+# This was changed while chasing a WiFi fault and it did NOT fix it. The
+# theory was that the Cypress blob (cyfmac43455-sdio.bin, "7.45.234 CY")
+# was wrong for the Raspberry Pi kernel. It is not: this package ships the
+# SAME blob -- its brcmfmac43455-sdio.bin is itself a symlink to
+# cypress/cyfmac43455-sdio.bin, and it installs firmware/cypress/cyfmac*
+# alongside. 7.45.234 is the correct, official firmware for the CM4.
+#
+# Kept anyway because taking firmware and nvram from the vendor set that
+# targets this exact board is the more defensible default, but do not
+# expect it to change WiFi behaviour -- it is the same firmware.
+BR2_PACKAGE_BRCMFMAC_SDIO_FIRMWARE_RPI=y
+BR2_PACKAGE_BRCMFMAC_SDIO_FIRMWARE_RPI_WIFI=y
 # The wireless regulatory database. REQUIRED, not optional: the RPi kernel
 # sets CONFIG_CFG80211_REQUIRE_SIGNED_REGDB, so without regulatory.db and its
 # .p7s signature the country= setting in wpa_supplicant.conf can never apply.
@@ -132,6 +162,14 @@ BR2_PACKAGE_IW=y
 BR2_PACKAGE_PROCPS_NG=y
 BR2_PACKAGE_WPA_SUPPLICANT_NL80211=y
 BR2_PACKAGE_WPA_SUPPLICANT_CLI=y
+# WPA3/SAE. The router advertises SAE-H2E on its _premium SSIDs, and without
+# this wpa_supplicant does not merely fail to connect -- it refuses to parse a
+# config containing key_mgmt=SAE at all ("failed to parse key_mgmt SAE"),
+# exits, and leaves no control socket, so wpa_cli reports "failed to connect to
+# non-global ctrl_ifname: wlan0". That is a deeply misleading symptom for a
+# missing build option. openssl is already in the image for openssh, so this
+# costs only a wpa_supplicant rebuild.
+BR2_PACKAGE_WPA_SUPPLICANT_WPA3=y
 BR2_PACKAGE_WPA_SUPPLICANT_PASSPHRASE=y
 
 # Debugging

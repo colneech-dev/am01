@@ -24,6 +24,34 @@ BOARD_DIR="$(dirname "$0")"
 # dwc2 and g_serial have loaded.
 echo "root=/dev/mmcblk0p2 rootwait console=tty1" > "${BINARIES_DIR}/cmdline.txt"
 
+# A WiFi credential template on the FAT boot partition. That partition mounts
+# as a normal drive in Windows, so credentials can be set without a Linux box
+# and without rebuilding -- and, unlike the copy in the rootfs, they survive a
+# reflash. am01-wifi-provision.service installs it on boot once it is renamed
+# to wpa_supplicant.conf and the placeholder password is replaced.
+cat > "${BINARIES_DIR}/wpa_supplicant.conf.example" <<'WIFIEOF'
+# AM01 miner WiFi credentials.
+#
+# TO USE: rename this file to  wpa_supplicant.conf  (drop the .example),
+# replace the password below, then boot the board.
+#
+# Keep the QUOTES around psk. Quoted means the plaintext passphrase, which
+# wpa_supplicant hashes itself. Unquoted means a 64-hex-digit precomputed
+# hash -- and since that hash is salted with the SSID, one generated against
+# a mistyped SSID stays silently invalid even after the SSID is corrected.
+# Quoting avoids that trap completely.
+ctrl_interface=/var/run/wpa_supplicant
+update_config=1
+country=GB
+
+network={
+    ssid="vodafoneAAB7F3"
+    psk="PUT-YOUR-WIFI-PASSWORD-HERE"
+    key_mgmt=WPA-PSK
+    scan_ssid=1
+}
+WIFIEOF
+
 exec "${HOST_DIR}/bin/genimage" \
 	--rootpath "${TARGET_DIR}" \
 	--tmppath "${BUILD_DIR}/genimage.tmp" \

@@ -1,0 +1,43 @@
+# Installs WiFi credentials from the FAT boot partition, before wpa_supplicant
+# starts.
+#
+# Why this exists: the credential file lives in the rootfs, so every reflash
+# overwrites whatever was fixed on the running board -- and the psk baked into
+# the image is a PBKDF2 hash salted with the SSID, which cannot be checked or
+# corrected without the original passphrase. Putting the credentials on the
+# boot partition instead means they can be edited from Windows (the partition
+# mounts as a normal drive) and survive reflashing, the same arrangement
+# Raspberry Pi OS uses.
+#
+# Absent /boot/wpa_supplicant.conf, this does nothing and the image's built-in
+# credentials are used unchanged.
+
+[Unit]
+Description=AM01 WiFi credentials from the boot partition
+Documentation=https://github.com/colneech-dev/am01
+Requires=boot.mount
+After=boot.mount
+Before=am01-wifi.service
+ConditionPathExists=/boot/wpa_supplicant.conf
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Validated before installing: a file without a network={ block would leave
+# wpa_supplicant unable to parse its config, which presents as "failed to
+# connect to non-global ctrl_ifname" and is genuinely hard to diagnose from
+# that message alone. Refuse it and keep the working file instead.
+ExecStart=/bin/sh -c '\
+  if ! grep -q "network={" /boot/wpa_supplicant.conf; then \
+    echo "/boot/wpa_supplicant.conf has no network={ block -- ignoring it" >&2; \
+    exit 0; \
+  fi; \
+  if grep -q "PUT-YOUR-WIFI-PASSWORD-HERE" /boot/wpa_supplicant.conf; then \
+    echo "/boot/wpa_supplicant.conf still has the placeholder password -- ignoring it" >&2; \
+    exit 0; \
+  fi; \
+  install -D -m 600 /boot/wpa_supplicant.conf /etc/wpa_supplicant/wpa_supplicant-wlan0.conf; \
+  echo "installed WiFi credentials from /boot/wpa_supplicant.conf"'
+
+[Install]
+WantedBy=multi-user.target

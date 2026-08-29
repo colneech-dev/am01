@@ -1,0 +1,14 @@
+# Turn WiFi power saving off as soon as the interface appears.
+#
+# brcmfmac enables power save by default -- dmesg shows
+# "brcmf_cfg80211_set_power_mgmt: power save enabled" a few seconds into boot.
+# Under power save the AP buffers frames for the client and delivers them on
+# beacon DTIM boundaries, which on this driver has a history of losing EAPOL
+# key frames and stalling latency-sensitive traffic. For a mains-powered miner
+# there is nothing to gain from it.
+#
+# A udev rule rather than a one-shot service because the setting belongs to the
+# interface: it is re-applied whenever wlan0 is created, including after a
+# driver reload. am01-wifi.service also re-asserts it on start (ExecStartPost),
+# since bringing the supplicant up can put it back on.
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="wlan*", RUN+="/usr/bin/iw dev %k set power_save off"

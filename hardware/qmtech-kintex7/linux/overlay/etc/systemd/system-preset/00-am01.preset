@@ -10,6 +10,7 @@
 # am01-wifi.service, not wpa_supplicant@wlan0: preset-all cannot instantiate a
 # template for a given instance, so an enable line for one is silently ignored
 # and any hand-made instance symlink is removed. See am01-wifi.service.
+enable am01-wifi-provision.service
 enable am01-wifi.service
 disable wpa_supplicant.service
 

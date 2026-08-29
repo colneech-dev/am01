@@ -21,6 +21,10 @@ ConditionPathExists=/etc/wpa_supplicant/wpa_supplicant-wlan0.conf
 [Service]
 Type=simple
 ExecStart=/usr/bin/wpa_supplicant -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant-wlan0.conf
+# Re-assert power save off after the supplicant starts: bringing wpa_supplicant
+# up re-enables it even when udev already turned it off at interface creation.
+# "-" prefix so a failure here never stops WiFi coming up.
+ExecStartPost=-/bin/sh -c 'sleep 3; /usr/bin/iw dev wlan0 set power_save off'
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

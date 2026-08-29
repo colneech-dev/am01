@@ -16,32 +16,38 @@ arm_64bit=1
 # gadget -- see /etc/modules-load.d/am01-usb-gadget.conf. It appears as a COM
 # port on the machine at the other end of the cable.
 #
-# HOST mode: the four USB-A ports work, and there is NO gadget console on J14.
+# BOTH the USB-A ports and the gadget console are available, selected
+# automatically by whether a mini-USB cable is plugged in. VERIFIED ON HARDWARE
+# 2026-08-29: unplugged, the keyboard works; plugged, a COM port appears.
 #
-# These are mutually exclusive on this board and cannot both be had. Schematic
-# sheet 1: the FSUSB42MUX (U15) has its common port on the CM4's USB2_P/USB2_N,
-# output 1 (HSD1) on the USB2514 hub feeding the USB-A ports, output 2 (HSD2)
-# on the mini-USB J14. SEL is USBOTG_ID, pulled HIGH by R278 -- and per the
-# FSUSB42 truth table SEL high selects HSD2, the mini-USB. Peripheral mode also
-# means no VBUS on the host ports, so a keyboard gets no power.
+# How it works. Schematic sheet 1: the FSUSB42MUX (U15) has its common port on
+# the CM4's USB2_P/USB2_N, output 1 (HSD1) on the USB2514 hub feeding the USB-A
+# ports, output 2 (HSD2) on the mini-USB J14. SEL is USBOTG_ID -- the OTG ID
+# pin -- so the mux follows cable presence:
 #
-# dr_mode=otg does NOT split the difference: a pulled-up ID reads as
-# "B-device", so otg resolves to peripheral and the USB-A ports stay dead.
-# Host mode is what drives USBOTG_ID low, flipping the mux to the hub.
+#   mini-USB unplugged -> ID low  -> mux to HSD1 (hub)      -> role: host
+#   mini-USB plugged   -> ID high -> mux to HSD2 (mini-USB) -> role: peripheral
 #
-# Chosen because HDMI + USB keyboard is the only local console when there is
-# no network: a login prompt you cannot type at is no use. Switch back to the
-# gadget (dtoverlay=dwc2,dr_mode=peripheral, and drop otg_mode) once the board
-# is reachable over the network. rpiboot is unaffected either way -- it runs
-# before Linux.
+# dr_mode=otg makes the dwc2 driver take its role from that same ID pin, so the
+# software role and the mux track each other with no configuration at all.
 #
-# otg_mode=1, NOT dtoverlay=dwc2,dr_mode=host. On the CM4 the USB 2.0 host
-# controller is disabled by default, and dr_mode=host does not enable it --
-# it only tells the dwc2 driver which role to take. otg_mode=1 routes the OTG
-# port through the xHCI controller instead, which is what actually powers and
-# enumerates the USB-A ports behind the USB2514 hub. The two are alternatives:
-# do not set both.
-otg_mode=1
+# CORRECTION. Earlier revisions of this file asserted the opposite -- that the
+# two were "mutually exclusive and cannot both be had", that R278 pulls ID
+# permanently HIGH, and that "dr_mode=otg does NOT split the difference ... otg
+# resolves to peripheral and the USB-A ports stay dead". That was wrong, and it
+# was wrong in a way the board itself disproved: if ID were statically high the
+# mux would sit on the mini-USB permanently and the USB-A ports would never
+# work, yet a keyboard works whenever the mini-USB is unplugged. The claim came
+# from reading a pull-up off the schematic without checking it against the
+# board's actual behaviour.
+#
+# NOT otg_mode=1. That routes the OTG port through the xHCI controller, which
+# is host-only -- it pins the role and defeats the automatic switching above.
+# The cost of dropping it is that host duties fall to dwc2 rather than xHCI,
+# which is the slower path; fine for a keyboard behind the hub, which is all
+# this board needs locally. rpiboot is unaffected either way -- it runs before
+# Linux.
+dtoverlay=dwc2,dr_mode=otg
 
 # The FPGA parallel bus claims GPIO 0-23, so nothing else may drive them.
 # Disable the I2C/SPI peripherals that would otherwise take those pins.
@@ -55,5 +61,13 @@ dtoverlay=am01-fpga-gpio
 # No display attached by default; odo-ui is skipped when /dev/fb0 is absent.
 # Raise this and attach a screen if you want the touch UI.
 gpu_mem=64
+
+# odo-ui requires an RGB565 framebuffer -- it exits immediately with
+# "expected 16bpp framebuffer, got 32" against the default 32bpp one. RGB565 is
+# also the ILI9341 panel s native format, which is why the UI was written for it.
+framebuffer_depth=16
+# 16bpp with an alpha channel confuses the firmware s format selection; ignoring
+# alpha keeps it at a plain RGB565 surface.
+framebuffer_ignore_alpha=1
 
 disable_overscan=1
