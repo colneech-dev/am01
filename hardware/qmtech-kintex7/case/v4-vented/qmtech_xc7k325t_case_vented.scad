@@ -252,10 +252,39 @@ lid_fit_clearance = 0.3; // per-side gap between skirt and tray inner wall
 // connected-component analysis. That is why this stays off: a partial hole
 // set is exactly the kind of half-known number that produced the original
 // bug. Measure your board's holes with calipers and fill in standoff_xy_mm.
-enable_standoffs   = false;
-standoff_xy_mm     = [];   // board-local [x,y] per hole; [] = use the corner inset
+// ON, at MEASURED positions. The four corner holes are now known well
+// enough to sit a standoff under each.
+//
+// Derived from Dimension(Board_Top_View).pdf analysed numerically (see the
+// MEASURED note above), and cross-checked three ways rather than trusted:
+//   - the hole chain along the top reproduces the drawing's own printed
+//     dimensions to within 0.05mm: gaps of 26.38 / 32.97 / 16.86 / 76.22
+//     against a printed 26.4 / 33 / 16.8 / 76.2;
+//   - the vertical span measures 82.40mm against a printed 82.4;
+//   - the corners come out symmetric about both axes -- 3.70 and
+//     160-156.13=3.87 in X, 3.89 and 90-86.28=3.72 in Y -- which is what a
+//     four-corner pattern must look like and is not something a
+//     mis-detection would produce by chance.
+// Taken together that is a real measurement, not the "roughly the board
+// centre" guessing that produced the earlier faults.
+//
+// STILL only the four corners. The drawing also shows holes along the top
+// edge at x=30.08, 63.05 and 79.91, but a standoff is only useful where it
+// is certain: one landing under a bottom-side component lifts the board and
+// is worse than no standoff at all. Add them once confirmed with calipers.
+//
+// These are FLAT-TOPPED bosses with a pilot hole drilled through, not pegs
+// that locate in the board's holes -- see corner_standoff(). That is
+// deliberate. A locating peg is only as good as the position it is placed
+// at, and a peg that misses its hole jams against the board and holds it
+// proud, which is precisely how the v4.1 lid-screw bosses stopped the case
+// closing. A flat boss under an approximately-right position still just
+// supports the board. The pilot takes an M3 self-tap from underneath if you
+// want the board positively retained once you have confirmed the holes.
+enable_standoffs   = true;
+standoff_xy_mm     = [[3.8, 3.8], [156.2, 3.8], [3.8, 86.2], [156.2, 86.2]];
 standoff_inset_mm  = 5;    // fallback only, used when standoff_xy_mm is empty
-standoff_od        = 6.0;
+standoff_od        = 5.0;  // sits inside the 5.42mm pad seen on the drawing
 standoff_pilot_od  = 2.6;
 
 // ---- Corner lid-screw bosses -----------------------------------------
@@ -745,6 +774,23 @@ assert(boss_min_gap > 0,
 // from that face, so the real bearing width is the difference. This was
 // silently zero (worse: negative) before, which is how a lip that
 // supported nothing survived four revisions.
+// Assertion: the standoff tops and the lip top must be the SAME plane, so
+// the board sits flat on whichever it touches.
+//
+// An earlier version of this assert demanded standoffs stay clear of the lip
+// and failed at 0.5mm of overlap. That was the wrong invariant: both surfaces
+// finish at lip_z by construction (corner_standoff starts at floor_thickness
+// and is standoff_clearance tall; lip_z is floor_thickness +
+// standoff_clearance), so an overlapping standoff simply merges into a
+// thicker patch of ledge at the same height. Overlap is harmless. What would
+// NOT be harmless is the two disagreeing in height -- a standoff even a
+// fraction proud of the lip becomes a pivot and rocks the board.
+standoff_top_z = floor_thickness + standoff_clearance;
+echo(str("standoff top / lip top (mm): ", standoff_top_z, " / ", lip_z));
+assert(abs(standoff_top_z - lip_z) < 0.001,
+       str("standoff tops at ", standoff_top_z, " but the lip tops at ", lip_z,
+           " -- the board would rock. These must be equal."));
+
 lip_bearing_mm = lip_ledge - fit_gap;
 echo(str("lip bearing width under board edge (mm): ", lip_bearing_mm));
 assert(lip_bearing_mm >= 1.0,
