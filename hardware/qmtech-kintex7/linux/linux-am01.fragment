@@ -1,0 +1,17 @@
+# Extra kernel options for the AM01 miner, merged over the bcm2711 defconfig.
+
+# Virtual framebuffer, for the ILI9341 panel hanging off the FPGA.
+#
+# That panel is not a Linux framebuffer device: it is driven by an SPI master
+# inside the FPGA, reachable only through the CM4<->FPGA GPIO bus. odo-ui
+# renders to a framebuffer, so it needs one to exist.
+#
+# vfb provides a plain RGB565 surface in RAM. odo-ui draws into it and a
+# userspace push daemon copies changed regions out to the panel over the bus.
+# That avoids writing a kernel driver that would have to own the GPIO lines --
+# lines the miner already claims from userspace via libgpiod.
+#
+# Built as a module, not =y: vfb registers as fb0 when built in, which would
+# displace the real HDMI framebuffer the console and odo-ui currently use.
+# Loaded later it becomes fb1, leaving HDMI as fb0.
+CONFIG_FB_VIRTUAL=m

@@ -92,7 +92,8 @@ SOURCES_DAEMON := \
 	$(ODO_HPS)/miner_pipe.c \
 	$(ODO_HPS)/thermal.c \
 	miner_io_gpio.c \
-	$(GPIO_BUS)/am01_gpio_bus.c
+	$(GPIO_BUS)/am01_gpio_bus.c \
+	$(GPIO_BUS)/am01_panel.c
 
 OBJECTS_DAEMON := $(call objects,$(SOURCES_DAEMON) $(SOURCES_CRYPTO) \
 	$(SOURCES_KECCAK) $(SOURCES_STRATUM))
@@ -128,6 +129,19 @@ OBJECTS_DIAG := $(call objects,$(SOURCES_DIAG))
 LIBS_WEBD := $(LIBS_BASE)
 
 # =====================================================================
+# Binary: am01_busbench (measures bus throughput; no mining, write-only)
+#
+# Answers whether pushing pixels to the ILI9341 through this bus is viable
+# at all, which decides between full-frame blits and damage tracking.
+# =====================================================================
+
+SOURCES_BUSBENCH := \
+	$(GPIO_BUS)/am01_busbench.c \
+	$(GPIO_BUS)/am01_gpio_bus.c
+
+OBJECTS_BUSBENCH := $(call objects,$(SOURCES_BUSBENCH))
+
+# =====================================================================
 # Binary: odo-ui (touch screen UI, optional)
 # =====================================================================
 
@@ -147,12 +161,12 @@ LIBS_UI := $(LIBS_BASE) $(shell $(PKG_CONFIG) --libs libpng freetype2 fontconfig
 # =====================================================================
 
 .PHONY: all clean install help
-.PHONY: odo-miner odo-webd odo-ui am01_bus_test am01_diag
+.PHONY: odo-miner odo-webd odo-ui am01_bus_test am01_diag am01_busbench
 
 # Default: build all. am01_bus_test is included deliberately -- it is the
 # first thing to run on a new board (see ../cm4-firmware/README.md), so it
 # needs to be in the image rather than something to compile on the target.
-all: odo-miner odo-webd odo-ui am01_bus_test am01_diag
+all: odo-miner odo-webd odo-ui am01_bus_test am01_diag am01_busbench
 
 # Mining daemon (core)
 odo-miner: $(OBJECTS_DAEMON)
@@ -179,6 +193,12 @@ am01_diag: $(OBJECTS_DIAG)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS_MINER) -lm
 	@echo "✓ Built: $@"
 
+# Bus throughput benchmark. Uses -lm for the fps/timing arithmetic.
+am01_busbench: $(OBJECTS_BUSBENCH)
+	@echo "[LD] $@"
+	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS_MINER) -lm
+	@echo "✓ Built: $@"
+
 # Touch UI (framebuffer + touch input)
 odo-ui: $(OBJECTS_UI)
 	@echo "[LD] $@"
@@ -187,6 +207,7 @@ odo-ui: $(OBJECTS_UI)
 
 # Let make find the sources by basename, wherever they live.
 ALL_SOURCES := $(SOURCES_DAEMON) $(SOURCES_CRYPTO) $(SOURCES_KECCAK) \
+	$(SOURCES_BUSBENCH) \
 	$(SOURCES_STRATUM) $(SOURCES_WEBD) $(SOURCES_UI) $(SOURCES_BUSTEST) \
 	$(SOURCES_DIAG)
 vpath %.c $(sort $(dir $(ALL_SOURCES)))
@@ -199,7 +220,7 @@ $(OBJ_DIR)/%.o: %.c | $(OBJ_DIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f odo-miner odo-webd odo-ui am01_bus_test am01_diag
+	rm -f odo-miner odo-webd odo-ui am01_bus_test am01_diag am01_busbench
 	rm -rf $(OBJ_DIR)
 	@echo "Cleaned."
 
@@ -210,6 +231,7 @@ install: all
 	install -D -m 0755 odo-ui $(DESTDIR)$(PREFIX)/bin/odo-ui
 	install -D -m 0755 am01_bus_test $(DESTDIR)$(PREFIX)/bin/am01_bus_test
 	install -D -m 0755 am01_diag $(DESTDIR)$(PREFIX)/bin/am01_diag
+	install -D -m 0755 am01_busbench $(DESTDIR)$(PREFIX)/bin/am01_busbench
 	@echo "✓ Installed binaries to $(DESTDIR)$(PREFIX)/bin/"
 
 # Help

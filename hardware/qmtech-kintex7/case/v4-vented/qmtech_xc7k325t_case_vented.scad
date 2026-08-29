@@ -238,6 +238,20 @@ lid_fit_clearance = 0.3; // per-side gap between skirt and tray inner wall
 // all four sides, which is what design note 7 calls primary retention.
 // Re-enable only after measuring your own board's hole positions, and set
 // standoff_xy_mm to them.
+// MEASURED, 2026-08-29, from Dimension(Board_Top_View).pdf rendered at
+// 600dpi and analysed numerically (not read by eye -- that is how the I/O
+// positions went wrong). Calibration: the board outline resolves to a
+// 472x266px rectangle, aspect 1.774 vs the true 160/90 = 1.7778 (0.19%
+// error), giving 0.3387 mm/px -- exactly 600dpi/8, which is the check that
+// the scale is real.
+//   mounting hole pads:  5.42mm diameter
+//   vertical pitch:      82.40mm measured vs 82.4mm printed on the drawing
+//   so the holes sit 3.89mm and 3.72mm in from the top and bottom edges
+// The X positions are NOT recorded because only 4 of the ~6 holes could be
+// separated -- the corner ones merge into the board outline during
+// connected-component analysis. That is why this stays off: a partial hole
+// set is exactly the kind of half-known number that produced the original
+// bug. Measure your board's holes with calipers and fill in standoff_xy_mm.
 enable_standoffs   = false;
 standoff_xy_mm     = [];   // board-local [x,y] per hole; [] = use the corner inset
 standoff_inset_mm  = 5;    // fallback only, used when standoff_xy_mm is empty

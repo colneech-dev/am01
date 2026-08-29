@@ -10,6 +10,7 @@
 
 #include "miner_io_pipe.h"
 #include "am01_gpio_bus.h"
+#include "am01_panel.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -83,12 +84,20 @@ int miner_io_pipe_init(void)
     }
 
     g_initialized = 1;
+
+    /* Optional ILI9341 panel, off unless AM01_PANEL is set. Failure here is
+     * deliberately NOT fatal: the panel is a convenience, mining is not, and
+     * a display that will not start must never stop the miner starting. */
+    if (am01_panel_init(g_bus) != 0)
+        fprintf(stderr, "miner_io_pipe_init: panel unavailable, mining anyway\n");
+
     return 0;
 }
 
 void miner_io_pipe_shutdown(void)
 {
     if (g_bus) {
+        am01_panel_shutdown(g_bus);
         am01_bus_close(g_bus);
         g_bus = NULL;
     }
@@ -183,8 +192,26 @@ int miner_io_pipe_wait(int timeout_ms)
     if (am01_bus_wait_irq(g_bus, ms) == 0)
         return 0;
 
-    if (errno == ETIMEDOUT)
+    if (errno == ETIMEDOUT) {
+        /* Cooperative display slice.
+         *
+         * Only here, and only on the timeout path: reaching this point means
+         * the IRQ did not fire, so no nonce is pending and the bus is idle.
+         * Pushing tiles before the wait, or after a real edge, would delay a
+         * nonce that had already arrived.
+         *
+         * The budget bounds the worst case. A nonce arriving mid-slice waits
+         * at most one budget plus the tile in flight -- a number chosen here
+         * rather than left to chance. 2ms against a 5ms poll interval keeps
+         * the miner's duty cycle essentially unchanged, and the panel simply
+         * repaints more slowly when hashing is busy, which is the correct
+         * priority.
+         *
+         * am01_panel_slice() is a no-op when the panel is disabled, and never
+         * reports errors upward -- see am01_panel.h. */
+        (void)am01_panel_slice(g_bus, 2000u);
         return 1;
+    }
 
     /* Anything else (bus error, line revoked) is worth surfacing, but the
      * caller's contract only distinguishes ready/not-ready, so degrade to a
