@@ -325,7 +325,16 @@ lid_screw_clearance_od = 3.4; // clearance hole through the lid itself
 // Development_Board's real Allegro ECAD export) cross-referenced
 // against the real schematic's ref-des
 // (QMTECH-XC7K325T-DEVELOPMENT-BOARD_SCHEMATIC_20231120_V01.pdf).
-cutout_margin = 3.0;
+// 3.0 was chosen to absorb positions that were guessed off a drawing. Every
+// connector is measured now, so that much slack is no longer needed -- and it
+// was actively harmful: the gaps between adjacent connectors on this board are
+// only 4mm, so a 3mm margin each side overlapped them and merged four separate
+// windows into two long slots. 1.0mm still gives a connector 1mm of clearance
+// all round while leaving a 2mm pillar between neighbours.
+//
+// The margin also sets vertical clearance (see wall_cutout_z0/h), where 1mm
+// above and below a measured body height is likewise plenty.
+cutout_margin = 1.0;
 
 // LEFT wall (x=0, board_width=90mm long): HDMI0 (P3) and HDMI1 (P4),
 // both Type-A jacks mounted flush to this edge stacked vertically, plus
@@ -914,6 +923,32 @@ echo(str("RIGHT wall:"));
 for (c = right_connector_positions_mm)
     echo(str("   ", c[0], "  board ", c[1], "  -> model ", board_y(c[1])));
 echo(str("   DC_JACK_JP1  board ", dc_jack_y_mm, "  -> model ", board_y(dc_jack_y_mm)));
+
+// Assertion: adjacent cutouts on a wall must leave material between them.
+//
+// Each opening spans centre +/- (width/2 + cutout_margin), so neighbours merge
+// silently once the margin exceeds half their gap. That is what turned the
+// left wall into one slot from 30mm to 82mm and the bottom wall into one from
+// 11mm to 74mm -- structurally weaker, worse for dust, and nothing warned
+// about it because each individual cutout was still correct.
+//
+// Both lists are in ascending centre order, which this relies on.
+function min_separator(lst) =
+    len(lst) < 2 ? 999 :
+    min([ for (i = [0 : len(lst) - 2])
+          (lst[i+1][1] - lst[i+1][2]/2 - cutout_margin)
+        - (lst[i][1]   + lst[i][2]/2   + cutout_margin) ]);
+
+left_sep_mm   = min_separator(connector_positions_mm);
+bottom_sep_mm = min_separator(bottom_connector_positions_mm);
+echo(str("narrowest separator -- left wall: ", left_sep_mm,
+         "mm, bottom wall: ", bottom_sep_mm, "mm"));
+assert(left_sep_mm > 0.8,
+       str("left-wall cutouts merge or nearly touch (", left_sep_mm,
+           "mm between them). Reduce cutout_margin."));
+assert(bottom_sep_mm > 0.8,
+       str("bottom-wall cutouts merge or nearly touch (", bottom_sep_mm,
+           "mm between them). Reduce cutout_margin."));
 
 lip_bearing_mm = lip_ledge - fit_gap;
 echo(str("lip bearing width under board edge (mm): ", lip_bearing_mm));
