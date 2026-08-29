@@ -336,10 +336,30 @@ cutout_margin = 3.0;
 // wall cutout: "not full sides" -- fixed here, see design note 0b).
 // Heights are generous-but-realistic connector body heights, not a
 // datasheet measurement.
+// MEASURED ON THE BOARD 2026-08-29 with calipers, then converted from
+// bottom-referenced to this file's top-referenced Y. The spans measured, up
+// from the bottom edge, were P3 67-82, P4 41-57, J9 22-37, J14 11-18 --
+// i.e. 8-23, 33-49, 53-68 and 72-79 measured down from the top. Centre and
+// width below. Checked against pixel positions in the vendor drawing and all
+// four agree to within about 1mm.
+//
+// This supersedes positions read off that drawing by eye, which were wrong on
+// the printed case. Two entries move materially: HDMI0_P3 by 6.5mm
+// (22 -> 15.5) and MICRO_SD_J9 by 4.5mm (65 -> 60.5). HDMI1_P4 was already
+// right, which is a fair reminder that a wrong method can still get some
+// entries correct -- it does not validate the method.
+//
+// J14 the mini-USB is HERE, on the left wall. It was previously on the BOTTOM
+// wall: an entire connector on the wrong side of the case.
+//
+// Body heights are measured above the PCB top surface and come out far lower
+// than the 13mm previously assumed for the HDMIs -- a standard HDMI-A
+// receptacle is about 6mm tall, not 13.
 connector_positions_mm = [
-    ["HDMI0_P3",    22, 16, 13],
-    ["HDMI1_P4",    41, 16, 13],
-    ["MICRO_SD_J9", 65, 14,  5],
+    ["HDMI0_P3",     15.5, 15, 6],
+    ["HDMI1_P4",     41.0, 16, 6],
+    ["MICRO_SD_J9",  60.5, 15, 2],
+    ["MINI_USB_J14", 75.5,  7, 4],
 ];
 
 // BOTTOM wall (y=board_width, board_length=160mm long): mini-USB (J14,
@@ -350,7 +370,10 @@ connector_positions_mm = [
 // (see design note 6). v4 had NONE of this: zero cutouts on this wall.
 // [name, x_center, width, cutout_height_above_board]
 bottom_connector_positions_mm = [
-    ["MINI_USB_J14",  14, 12,  6],
+    // MINI_USB_J14 removed: measured on the board, it is on the LEFT wall.
+    // NOT YET MEASURED and therefore still suspect -- J6, J7 and JP5 below
+    // are still positions read off the drawing by eye, the same method that
+    // put the left wall wrong.
     ["USB_A_J6",      31, 18, 17],   // 2 stacked USB-A ports
     ["USB_A_J7",      51, 18, 17],   // 2 more stacked USB-A ports
     ["GPIO_HDR_JP5", 119, 58, 12],   // cable pass-through, not a connector body
