@@ -368,9 +368,32 @@ fi
 # Timing. nextpnr reports FAIL at INFO level and does not escalate
 # (timing_analysis is called with warn_on_failure = false), so this is the only
 # place it becomes an error.
-if grep -q 'FAIL at' "$OUT/$TOP.pnr.log"; then
-    echo "ERROR: timing not met:"
-    grep 'FAIL at' "$OUT/$TOP.pnr.log" | sed 's/^/       /'
+#
+# Judge the FINAL report only. nextpnr emits timing TWICE -- once after
+# placement (an estimate, always pessimistic since routing has not run) and
+# once after routing (authoritative). A passing log holds two lines per clock:
+#
+#   Max frequency for clock   'clk_h': 130.89 MHz (FAIL at 133.33 MHz)  <- est
+#   Max frequency for clock   'clk_h': 137.49 MHz (PASS at 133.33 MHz)  <- final
+#
+# `grep -q 'FAIL at'` matched anywhere and so refused to build a design that
+# MEETS timing. That never fired while nothing passed; it now blocks precisely
+# the builds worth making. Keep the last line per clock instead. If routing
+# never ran there is only one report, and the last is then the only one --
+# still the right thing to judge.
+_timing_fail=$(awk '
+    /Max frequency for clock/ {
+        name = $0
+        sub(/.*Max frequency for clock[ ]*/, "", name)
+        sub(/:.*/, "", name)
+        last[name] = $0
+    }
+    END { for (c in last) if (last[c] ~ /FAIL at/) print last[c] }
+' "$OUT/$TOP.pnr.log")
+
+if [ -n "$_timing_fail" ]; then
+    echo "ERROR: timing not met (final post-route report):"
+    echo "$_timing_fail" | sed 's/^/       /'
     echo "       Set OPENXC7_ALLOW_TIMING_FAIL=1 to build anyway."
     [ -n "${OPENXC7_ALLOW_TIMING_FAIL:-}" ] || exit 1
     echo "       OPENXC7_ALLOW_TIMING_FAIL set -- continuing anyway."
