@@ -331,6 +331,27 @@ snap_lead_in   = 0.6;   // chamfer under the bead, for assembly
 // above and below a measured body height is likewise plenty.
 cutout_margin = 1.0;
 
+// ---- Removable USB cap (a SEPARATE printed part) --------------------
+// The right-angle adapter in J6's lower socket stands 11mm proud of the USB-A
+// connector face, so a flat wall there is impossible: it would foul the
+// adapter. Instead the wall carries a plain rectangular opening over the whole
+// J6 stack, and a cap clips over it to make a bump.
+//
+// The cap being REMOVABLE is the point. The adapter has to be plugged in and
+// unplugged, and with a moulded-in bump the only access would be through the
+// lid, reaching down a 50mm box past the board.
+//
+// It snaps on with two L-hooks that pass through the opening and catch the
+// wall's inner face -- the same idea as the switch arms, so there is one
+// fastening principle in this design rather than three.
+usb_cap_opening_mm = [18, 21];   // the hole in the wall. 21 wide left ZERO gap to
+                                 // J7 -- the separator assert caught it.
+usb_cap_clearance  = 11;         // adapter projection past the connector face
+usb_cap_wall       = 2.0;
+usb_cap_fit        = 0.35;       // spigot to opening, per side
+usb_cap_hook       = 1.0;        // how far the hooks catch behind the wall
+usb_cap_x_mm       = 21;         // board-local X, over the J6 stack (14-29)
+
 // LEFT wall (x=0, board_width=90mm long): HDMI0 (P3) and HDMI1 (P4),
 // both Type-A jacks mounted flush to this edge stacked vertically, plus
 // the micro-SD slot (J9) below them. [name, y_center, footprint_len,
@@ -385,18 +406,14 @@ bottom_connector_positions_mm = [
     // sitting to the RIGHT of where they belong. Two 15-16mm connectors
     // displaced by most of their own width is why the printed case would not
     // line up here.
-    // LOWER PORT DELIBERATELY BLANKED. J6 is a stacked pair and the lower
-    // socket is used internally: a right-angle adapter turns the plug upward
-    // so the FT232H sits inside the case above the board, wired to J1 for
-    // openFPGALoader. Leaving that socket open to the outside would invite
-    // someone to plug into a port that already has something in it.
-    //
-    // A dual USB-A stack is 17mm tall overall, so the upper socket occupies
-    // roughly the top 8mm. The window therefore starts 9mm above the board
-    // surface instead of at it. Adjust the 9 and the 8 together if the split
-    // is not where these assume -- they were taken from the stack's overall
-    // height, not measured port by port.
-    ["USB_A_J6",      21.5, 15,  8, 9],   // upper socket only; lower is internal
+    // J6 is now a plain rectangular opening sized for the removable cap, not
+    // a window shaped to the connector. The lower socket is used internally by
+    // the FT232H's right-angle adapter, which projects 11mm past the connector
+    // face -- further than any wall can accommodate -- so the cap makes a bump
+    // over the whole stack and comes off for access. Dimensions come from
+    // usb_cap_opening_mm so the wall and the cap cannot drift apart.
+    ["USB_A_J6", usb_cap_x_mm, usb_cap_opening_mm[0] - 2*cutout_margin,
+                               usb_cap_opening_mm[1] - 2*cutout_margin],
     ["USB_A_J7",      41.0, 16, 17],   // 2 more stacked USB-A ports
 
     // ETHERNET RESTORED. v4.1 deleted this cutout after concluding the board
@@ -503,12 +520,22 @@ kan28_above_pcb    = 26;    // button centre above the PCB top surface
 // lands on a stop, and a lip at the top holds it down. No fasteners at all.
 ft232h_pcb_mm      = [43, 29];
 ft232h_pcb_t       = 1.8;   // 1.6mm board plus fit
-ft232h_rail_w      = 3.0;   // rail cross-section
-ft232h_fit         = 0.5;   // clearance on the PCB width
-ft232h_x_mm        = 68;    // board-local X of the holder centre. 80 put the
-                            // holder 9mm into the heatsink zone -- caught by
-                            // the assertion below, not by eye.
+
+// ASSUMED, NOT MEASURED: hole spacing. The four corner holes are clearly
+// visible in a photograph but nobody has put callipers on them. 3mm in from
+// each edge is the usual inset for a board this size, giving 37 x 23.
+// Measure yours and correct these two numbers -- everything else follows.
+ft232h_hole_pitch  = [37, 23];
+ft232h_post_od     = 5.0;
+ft232h_post_ht     = 4.0;   // lifts the board off the wall for its solder side
+ft232h_post_pilot  = 2.4;   // M2.5 self-tap
+
+// Between the board's own standoffs at x=80 and x=156.2, over toward the
+// power end. It sits against the TOP wall (board y=0) while the heatsink is at
+// y=45, so the two never share space even where their X ranges overlap.
+ft232h_x_mm        = 118;
 ft232h_above_pcb   = 12;    // bottom edge of the PCB, above the board surface
+
 
 
 // ---- Lid cutouts: features that mount with pins/actuators pointing UP
@@ -751,41 +778,24 @@ module right_edge_cutouts() {
     }
 }
 
-// Slot holder for the FT232H, on the inner face of the TOP wall (board y=0,
-// which is the model's maximum-Y wall). Two grooved rails plus a bottom stop;
-// the board drops in from above and a lip at the top retains it.
-module ft232h_holder() {
+// Four standoffs for the FT232H, on the inner face of the TOP wall (board
+// y=0, the model's maximum-Y wall). Posts rather than the slot rails that were
+// here before: asked for explicitly, and they hold the board positively
+// instead of relying on edge friction.
+module ft232h_posts() {
     xc = board_origin[0] + ft232h_x_mm;
-    yw = outer_width - wall_thickness;          // inner face of that wall
-    z0 = lip_z + board_thickness + ft232h_above_pcb;
-    w  = ft232h_pcb_mm[0] + 2*ft232h_fit;
-    h  = ft232h_pcb_mm[1];
-    d  = ft232h_pcb_t;                          // groove depth away from wall
-
-    // two rails, one at each end of the board
-    for (xs = [-1, 1])
-        translate([xc + xs*(w/2 + ft232h_rail_w/2) - ft232h_rail_w/2,
-                   yw - (d + ft232h_rail_w), z0])
-            difference() {
-                cube([ft232h_rail_w, d + ft232h_rail_w, h + 4]);
-                // groove facing inward, so the PCB edge slides into it
-                translate([-1, ft232h_rail_w, -1])
-                    cube([ft232h_rail_w + 2, d + 1, h + 6]);
-            }
-
-    // rails need a web back to the wall or they are unsupported columns
-    for (xs = [-1, 1])
-        translate([xc + xs*(w/2 + ft232h_rail_w/2) - ft232h_rail_w/2,
-                   yw - ft232h_rail_w, z0])
-            cube([ft232h_rail_w, ft232h_rail_w, h + 4]);
-
-    // bottom stop, the board rests on this
-    translate([xc - w/2 - ft232h_rail_w, yw - (d + ft232h_rail_w), z0 - 2])
-        cube([w + 2*ft232h_rail_w, d + ft232h_rail_w, 2]);
-
-    // retaining lip at the top, overhanging into the slot
-    translate([xc - w/2, yw - (d + 0.8), z0 + h + 1])
-        cube([w, 0.8, 1.6]);
+    yw = outer_width - wall_thickness;
+    zc = lip_z + board_thickness + ft232h_above_pcb + ft232h_pcb_mm[1]/2;
+    for (dx = [-1, 1], dz = [-1, 1])
+        translate([xc + dx*ft232h_hole_pitch[0]/2,
+                   yw,
+                   zc + dz*ft232h_hole_pitch[1]/2])
+            rotate([90, 0, 0])
+                difference() {
+                    cylinder(h = ft232h_post_ht, d = ft232h_post_od, $fn = 24);
+                    translate([0, 0, -1])
+                        cylinder(h = ft232h_post_ht + 2, d = ft232h_post_pilot, $fn = 16);
+                }
 }
 
 // Button clearance through the LEFT wall.
@@ -796,36 +806,30 @@ module left_edge_switch_hole() {
             cylinder(h = wall_thickness + 2, d = kan28_boss_d, $fn = 32);
 }
 
-// Clip nest on the INNER face of the left wall. A three-sided surround the
-// size of the switch body, with a lip along the top and bottom that the body
-// snaps past. Open on the inboard side so the switch slides in and the lips
-// flex rather than having to stretch a closed frame.
+// Two L-shaped snap arms on the inner face of the left wall -- not a box.
+//
+// A closed surround meant threading the switch into a pocket; two arms let it
+// go straight in and click. Each arm is an L in section: a post standing off
+// the wall by the switch's body depth, with a hook at its end that overhangs
+// the body and holds it against the wall. They sit above and below the body,
+// so the sides stay completely open for the terminals and wiring.
 module left_edge_switch_clips() {
     yc = board_y(kan28_y_mm);
     zc = lip_z + board_thickness + kan28_above_pcb;
-    w  = kan28_body_mm[0] + 2*kan28_clip_fit;   // along Y
-    h  = kan28_body_mm[1] + 2*kan28_clip_fit;   // along Z
+    w  = kan28_body_mm[0] + 2*kan28_clip_fit;   // along Y, the arm's width
+    h  = kan28_body_mm[1] + 2*kan28_clip_fit;   // along Z, the gap between arms
     d  = kan28_body_depth;
 
-    translate([wall_thickness, yc, zc]) {
-        difference() {
-            // outer block, standing off the wall
-            translate([0, -(w/2 + kan28_clip_wall), -(h/2 + kan28_clip_wall)])
-                cube([d + kan28_clip_wall, w + 2*kan28_clip_wall, h + 2*kan28_clip_wall]);
-            // pocket for the body, open toward the wall
-            translate([-0.01, -w/2, -h/2])
-                cube([d + 0.02, w, h]);
-            // relieve the middle of the long sides so the lips can flex
-            translate([-0.01, -w/2 - kan28_clip_wall - 1, -h/2 + 2])
-                cube([d + 0.02, kan28_clip_wall + 1.2, h - 4]);
-            translate([-0.01, w/2 - 0.2, -h/2 + 2])
-                cube([d + 0.02, kan28_clip_wall + 1.2, h - 4]);
+    for (zs = [-1, 1])
+        translate([wall_thickness, yc - w/2, zc + zs*(h/2)]) {
+            // upright of the L: stands off the wall
+            translate([0, 0, (zs > 0) ? 0 : -kan28_clip_wall])
+                cube([d, w, kan28_clip_wall]);
+            // foot of the L: hooks back over the switch body
+            translate([d - kan28_clip_lip, 0,
+                       (zs > 0) ? -kan28_clip_lip : -kan28_clip_wall])
+                cube([kan28_clip_lip, w, kan28_clip_lip + kan28_clip_wall]);
         }
-        // retaining lips at the open end, overhanging into the pocket
-        for (zs = [-1, 1])
-            translate([d - 0.6, -w/2, zs*(h/2) - (zs > 0 ? 0 : kan28_clip_lip)])
-                cube([0.6, w, kan28_clip_lip]);
-    }
 }
 
 module right_edge_antenna_hole() {
@@ -914,7 +918,7 @@ module base_tray() {
         retaining_lip_ridge();
         standoffs();
         left_edge_switch_clips();
-        ft232h_holder();
+        ft232h_posts();
     }
 }
 
@@ -1124,16 +1128,25 @@ echo(str("   of which above the PCB top surface:   ",
          internal_above_board_mm - board_thickness, "mm"));
 
 
-// Assertion: the FT232H holder must clear the heatsink. It sits on the top
-// wall above the board, and the heatsink is the tallest thing in the box.
-ft232h_x0 = ft232h_x_mm - ft232h_pcb_mm[0]/2 - ft232h_rail_w;
-ft232h_x1 = ft232h_x_mm + ft232h_pcb_mm[0]/2 + ft232h_rail_w;
-heatsink_x0 = heatsink_center_mm[0] - heatsink_lwh_mm[0]/2 - heatsink_xy_margin_mm;
-echo(str("FT232H holder spans board x ", ft232h_x0, "..", ft232h_x1,
-         "; heatsink zone starts ", heatsink_x0));
-assert(ft232h_x1 < heatsink_x0,
-       str("FT232H holder overlaps the heatsink zone by ",
-           ft232h_x1 - heatsink_x0, "mm"));
+// Assertion: the FT232H must clear the heatsink -- in BOTH axes.
+//
+// The first version of this compared X only and rejected a position that was
+// perfectly fine, pushing the holder 50mm from where it belonged. The board
+// sits against the top wall at board y around 0 to 5, while the heatsink zone
+// is y 23.5 to 66.5, so their X ranges can overlap freely. Checking one axis
+// of a two-axis clearance is worse than not checking, because it looks like a
+// check.
+ft232h_x0 = ft232h_x_mm - ft232h_pcb_mm[0]/2;
+ft232h_x1 = ft232h_x_mm + ft232h_pcb_mm[0]/2;
+ft232h_y1 = ft232h_post_ht + ft232h_pcb_t;      // how far it reaches off the wall
+hs_x0 = heatsink_center_mm[0] - heatsink_lwh_mm[0]/2 - heatsink_xy_margin_mm;
+hs_x1 = heatsink_center_mm[0] + heatsink_lwh_mm[0]/2 + heatsink_xy_margin_mm;
+hs_y0 = heatsink_center_mm[1] - heatsink_lwh_mm[1]/2 - heatsink_xy_margin_mm;
+ft232h_overlaps = (ft232h_x1 > hs_x0) && (ft232h_x0 < hs_x1) && (ft232h_y1 > hs_y0);
+echo(str("FT232H spans board x ", ft232h_x0, "..", ft232h_x1,
+         ", reaching ", ft232h_y1, "mm off the top wall; heatsink zone y starts ",
+         hs_y0));
+assert(!ft232h_overlaps, "FT232H overlaps the heatsink zone in both axes");
 
 lip_bearing_mm = lip_ledge - fit_gap;
 echo(str("lip bearing width under board edge (mm): ", lip_bearing_mm));
@@ -1149,6 +1162,45 @@ assert(lip_bearing_mm >= 1.0,
 base_tray();
 translate([0, outer_width + 15, 0])
     lid();
+
+// =====================================================================
+// SEPARATE PART: the USB cap. Printed on its own, clipped on afterwards.
+// Modelled at the origin rather than in place, so it slices flat.
+// =====================================================================
+module usb_cap() {
+    w = usb_cap_opening_mm[0];
+    h = usb_cap_opening_mm[1];
+    d = usb_cap_clearance + usb_cap_wall;
+
+    // outer shell, closed on the outside, open toward the case
+    difference() {
+        translate([-(w/2 + usb_cap_wall), -(h/2 + usb_cap_wall), 0])
+            cube([w + 2*usb_cap_wall, h + 2*usb_cap_wall, d]);
+        translate([-w/2, -h/2, -0.01])
+            cube([w, h, d - usb_cap_wall + 0.01]);
+    }
+
+    // spigot that enters the opening, minus a fit allowance
+    translate([-(w/2 - usb_cap_fit), -(h/2 - usb_cap_fit), -wall_thickness])
+        difference() {
+            cube([w - 2*usb_cap_fit, h - 2*usb_cap_fit, wall_thickness]);
+            translate([usb_cap_wall, usb_cap_wall, -0.01])
+                cube([w - 2*usb_cap_fit - 2*usb_cap_wall,
+                      h - 2*usb_cap_fit - 2*usb_cap_wall,
+                      wall_thickness + 0.02]);
+        }
+
+    // two L-hooks, top and bottom, reaching through and catching the inner
+    // face. The arm is thin so it can flex; the barb is what holds.
+    for (zs = [-1, 1])
+        translate([-(w/2 - usb_cap_fit) + 3,
+                   zs*(h/2 - usb_cap_fit - usb_cap_wall) - (zs > 0 ? 0 : usb_cap_wall),
+                   -(wall_thickness + usb_cap_hook + 0.6)]) {
+            cube([w - 2*usb_cap_fit - 6, usb_cap_wall, wall_thickness + usb_cap_hook + 0.6]);
+            translate([0, zs > 0 ? usb_cap_wall : -usb_cap_hook, 0])
+                cube([w - 2*usb_cap_fit - 6, usb_cap_hook, usb_cap_hook + 0.6]);
+        }
+}
 
 // ---- Reference: board footprint ghost (preview only) ----
 module board_ghost() {
