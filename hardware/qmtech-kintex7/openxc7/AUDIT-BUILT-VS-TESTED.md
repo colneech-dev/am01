@@ -994,3 +994,81 @@ control that could refute it. The control -- same RTL, absorption the only
 variable -- was cheap and existed all along; it was simply built last, after two
 confident explanations had already been written into this file. **Build the
 control first, especially when a mechanism feels obvious.**
+
+---
+
+## FINAL: the target is met, and the absorption verdict is reversed again
+
+Supersedes the two corrections above. This is the complete table; everything
+before it was written from a partial one.
+
+### Results
+
+Seed-swept, `CRIT_DIST=1.0`, y-base 40, pinned RTL at `cb224b6`:
+
+| variant | schedule | 2nd register | n | median | range | pass ≥133.33 |
+|---|---|---|---|---|---|---|
+| `base`   | 2-cyc `e=1` | none   | 6  | 114.81 | 104-120 | **0%** |
+| `outreg` | 3-cyc `e=0` | BRAM   | 6  |  82.90 |  81-85  | **0%** |
+| `noabs`  | 3-cyc `e=0` | fabric | 11 | 127.71 | 112-161 | **45%** |
+| **`e2`** | 3-cyc **`e=2`** | BRAM | 5 | **134.19** | 130-140 | **60%** |
+
+**`e2`'s median is above the target.** That is qualitatively different from
+`noabs`: the typical build passes rather than a lucky seed passing. It also has
+by far the tightest spread -- 10.4 MHz against `noabs`'s 48.8.
+
+### ~~"Absorption is refuted; keep it as a negative result"~~ WRONG, AGAIN
+
+That was written when only `outreg` (82.90) and `noabs` (127.71) existed.
+Absorption is fine -- it just cannot be done without a relay in the
+recirculation path.
+
+### The mechanism, which now explains all four cells
+
+Something must break the recirculation path from the last round back to
+`state[0]`. There are two independent ways to get one:
+
+* a **fabric flop**, which is placeable and therefore acts as its own relay
+  (`noabs`, even at `e=0`)
+* the **`extra_delay` pass-through stages** (`e2`)
+
+`outreg` had **neither**: its register was pinned inside the BRAM *and* the
+gcd search had accepted `extra_delay=0`. Hence 82.90. Restoring the relay is
+worth **+51 MHz** on that same absorbed netlist (82.90 -> 134.19).
+
+`e2` beats `noabs` even though its register is slower (0.9 ns pinned vs 0.1 ns
+placeable fabric), because two relay stages buy more than 0.8 ns of clock-to-Q.
+That is the wire-limited finding restated: **pipeline relays beat register
+speed on this design.**
+
+Both earlier diagnoses were half right. `extra_delay` mattered AND absorption
+mattered; each time one control arrived I attributed the whole gap to it.
+
+### Status of the work, corrected
+
+* `odo_gen --bram-out-reg` -- **use it**. The 3-cycle schedule is the basis of
+  every configuration that passes.
+* `extra_delay >= 1` (commit `3422a12`) -- **correct and necessary**, and its
+  original justification was right after all. `e2` uses `extra_delay=2`.
+* `absorb_bram_outreg.py` -- **viable**, given the relay. `BRAM_OUTREG=1` plus
+  `extra_delay>=1` is the best measured configuration.
+* The yosys capability gap is real and now HAS a performance case behind it,
+  contrary to the previous entry.
+
+### Open cell in the 2x2
+
+|  | `e=0` (no relay) | `e=2` (relay) |
+|---|---|---|
+| register in **fabric** | `noabs` 127.71 | **running (`e2nb`)** |
+| register in **BRAM**   | `outreg` 82.90 | `e2` **134.19** |
+
+The untested cell has both the fast placeable register and the relay, so on the
+mechanism above it should be best of the four. If it is not, the mechanism is
+incomplete and should be revisited rather than patched.
+
+### Method lesson, restated
+
+Three successive confident conclusions, each overturned by the next control:
+`extra_delay` -> absorption -> both. The failure was not any single reasoning
+step; it was **reporting a mechanism as settled while cells of the design
+matrix were still empty.** Draw the matrix first, then fill it, then conclude.
