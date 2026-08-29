@@ -392,13 +392,19 @@ bottom_connector_positions_mm = [
     // tall, which is consistent with a standard RJ45 at about 13.5mm.
     ["ETH_P1",        62.0, 18, 14],
 
-    // NOT MEASURED. Still a position read off the drawing by eye, the same
-    // method that put every other connector on this wall wrong by up to 10mm.
-    // Treat as suspect until measured. It also may not want a wall cutout at
-    // all: JP5's pins point UP, so a ribbon plugs down onto it and the opening
-    // it really needs is in the LID, with the wall slot only for a cable to
-    // escape. It carries the display ribbon, the touch lines and the fan lead.
-    ["GPIO_HDR_JP5", 119, 58, 12],   // cable pass-through, not a connector body
+    // JP5 IS INTERNAL -- deliberately no cutout.
+    //
+    // Its pins point up, and everything on it stays inside the case: the
+    // display mounts on the LID (see display_center_mm and
+    // lid_display_standoffs), the touch lines run to the same module, and the
+    // fan sits in the enclosure blowing on the heatsink. Nothing needs to
+    // leave through this wall, so a 58mm-wide slot would only weaken it and
+    // let dust in.
+    //
+    // This also retires the last unmeasured position on the case. The 119mm
+    // that used to sit here was read off the drawing by eye -- the same method
+    // that put every other connector on this wall out by up to 10mm -- so
+    // removing it is a small correctness win as well as a structural one.
 ];
 
 // TOP wall (y=0, board_length=160mm long): DC barrel jack (JP1) only --
