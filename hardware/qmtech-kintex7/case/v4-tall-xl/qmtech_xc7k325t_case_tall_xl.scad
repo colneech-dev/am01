@@ -268,10 +268,17 @@ lid_fit_clearance = 0.3; // per-side gap between skirt and tray inner wall
 // Taken together that is a real measurement, not the "roughly the board
 // centre" guessing that produced the earlier faults.
 //
-// STILL only the four corners. The drawing also shows holes along the top
-// edge at x=30.08, 63.05 and 79.91, but a standoff is only useful where it
-// is certain: one landing under a bottom-side component lifts the board and
-// is worse than no standoff at all. Add them once confirmed with calipers.
+// SIX holes: four corners plus the two mid-span ones, confirmed against the
+// board. x=80.0 is arrived at three independent ways, which is why it is
+// trusted: it is 76.2 out from the left corner (3.8+76.2), 76.2 back from the
+// right one (156.2-76.2), and exactly half of the 160mm board. 76.2 is itself
+// a dimension PRINTED on the drawing, and the numeric detection independently
+// put a hole at 79.91.
+//
+// The drawing shows further holes along the top edge at x=30.08 and 63.05
+// with no matching pair on the bottom edge, so they are left alone: a
+// standoff is only useful where its position is certain, and one landing on a
+// bottom-side component lifts the board -- worse than no standoff at all.
 //
 // These are FLAT-TOPPED bosses with a pilot hole drilled through, not pegs
 // that locate in the board's holes -- see corner_standoff(). That is
@@ -282,7 +289,8 @@ lid_fit_clearance = 0.3; // per-side gap between skirt and tray inner wall
 // supports the board. The pilot takes an M3 self-tap from underneath if you
 // want the board positively retained once you have confirmed the holes.
 enable_standoffs   = true;
-standoff_xy_mm     = [[3.8, 3.8], [156.2, 3.8], [3.8, 86.2], [156.2, 86.2]];
+standoff_xy_mm     = [[3.8, 3.8],  [80.0, 3.8],  [156.2, 3.8],
+                      [3.8, 86.2], [80.0, 86.2], [156.2, 86.2]];
 standoff_inset_mm  = 5;    // fallback only, used when standoff_xy_mm is empty
 standoff_od        = 5.0;  // sits inside the 5.42mm pad seen on the drawing
 standoff_pilot_od  = 2.6;
