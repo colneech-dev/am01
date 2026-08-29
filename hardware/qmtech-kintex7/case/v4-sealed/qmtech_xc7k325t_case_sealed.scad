@@ -411,9 +411,32 @@ bottom_connector_positions_mm = [
 // for symmetry with the other two walls in case a future revision
 // needs one), so the DC jack gets its own round-hole module below
 // instead of going through that generic array.
+// The TOP wall (y=0) carries nothing. The Pmods J11-J13 along that edge are
+// lid features, not wall ones -- their pins point up.
 top_connector_positions_mm = [];
-dc_jack_x_mm     = 154; // JP1, board-local X on the top wall (y=0)
-dc_jack_diameter = 12;
+
+// RIGHT wall (x=board_length). MEASURED ON THE BOARD 2026-08-29: spans up
+// from the bottom edge were SW4 46-59 and JP1 63-73, i.e. 31-44 and 17-27
+// measured down from the top. Cross-checked against the vendor drawing, where
+// SW4's body sits at about 29-45mm and JP1's at 17-28mm from the top edge.
+//
+// Both were previously on the TOP wall -- dc_jack_x_mm put the barrel hole at
+// x=154 on the y=0 face, which is the adjacent corner rather than the right
+// face. A hole in the wrong wall entirely, the same class of error as the
+// mini-USB.
+right_connector_positions_mm = [
+    ["PWR_SW4", 37.5, 13, 7],
+];
+
+// JP1 barrel jack, on the RIGHT wall.
+//
+// The diameter was 12mm and measures 7. More importantly the hole was centred
+// at lip_z + wall_height/2 -- the middle of the wall, 23.4mm up on Tall-XL --
+// whereas the jack's real centre is 6mm above the PCB, so about 13mm up. It
+// was in the wrong wall AND 10mm too high.
+dc_jack_y_mm             = 22.0; // board-local Y of the barrel centre
+dc_jack_diameter         = 7;    // measured barrel outer diameter
+dc_jack_centre_above_pcb = 6;    // measured, PCB top surface to barrel centre
 
 // ---- Lid cutouts: features that mount with pins/actuators pointing UP
 // through the board, accessed from directly above (X,Y = top-left
@@ -598,9 +621,24 @@ module top_edge_cutouts() {
 // as a round hole, and it's the one wall feature worth the extra
 // module). See design note 0: this replaces v4's mistaken lid-panel
 // hole 20mm inset from the edge.
-module top_edge_dc_jack() {
-    translate([board_origin[0] + dc_jack_x_mm, -1, lip_z + wall_height/2])
-        rotate([-90, 0, 0])
+// RIGHT wall (x = outer_length). Mirror of left_edge_cutouts().
+module right_edge_cutouts() {
+    for (c = right_connector_positions_mm) {
+        y_center = board_origin[1] + c[1];
+        h = c[2] + 2*cutout_margin;
+        translate([outer_length - wall_thickness - 1, y_center - h/2, wall_cutout_z0()])
+            cube([wall_thickness + 2, h, wall_cutout_h(c[3])]);
+    }
+}
+
+// The barrel jack gets a round hole at its MEASURED height, not at the middle
+// of the wall: a barrel plug's cable approaches horizontally and the shell has
+// to line up with the socket, so being 10mm high is as bad as being sideways.
+module right_edge_dc_jack() {
+    translate([outer_length - wall_thickness - 1,
+               board_origin[1] + dc_jack_y_mm,
+               lip_z + board_thickness + dc_jack_centre_above_pcb])
+        rotate([0, 90, 0])
             cylinder(h = wall_thickness + 2, d = dc_jack_diameter + cutout_margin, $fn = 32);
 }
 
@@ -659,7 +697,8 @@ module base_tray() {
                 left_edge_cutouts();
                 bottom_edge_cutouts();
                 top_edge_cutouts();
-                top_edge_dc_jack();
+                right_edge_cutouts();
+                right_edge_dc_jack();
             }
         }
         retaining_lip_ridge();
