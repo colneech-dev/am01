@@ -491,6 +491,25 @@ kan28_clip_fit     = 0.4;   // clearance around the body
 kan28_y_mm         = 15.5;  // board-local Y -- same as HDMI0_P3
 kan28_above_pcb    = 26;    // button centre above the PCB top surface
 
+// FT232H breakout, 43 x 29mm, mounted inside for openFPGALoader and wired to
+// J1. Its USB goes to a right-angle adapter in J6's lower socket, on a cable,
+// so the board itself can sit anywhere -- which is why it goes on the TOP
+// wall (board y=0), the only long wall with no connectors on it.
+//
+// SLOT-mounted, not screwed. Its four corner holes are visible but their
+// spacing has not been measured, and inventing hole positions is what produced
+// the bosses and standoffs that stopped earlier revisions assembling. Two
+// grooved rails take the PCB by its edges instead: it drops in from above,
+// lands on a stop, and a lip at the top holds it down. No fasteners at all.
+ft232h_pcb_mm      = [43, 29];
+ft232h_pcb_t       = 1.8;   // 1.6mm board plus fit
+ft232h_rail_w      = 3.0;   // rail cross-section
+ft232h_fit         = 0.5;   // clearance on the PCB width
+ft232h_x_mm        = 68;    // board-local X of the holder centre. 80 put the
+                            // holder 9mm into the heatsink zone -- caught by
+                            // the assertion below, not by eye.
+ft232h_above_pcb   = 12;    // bottom edge of the PCB, above the board surface
+
 
 // ---- Lid cutouts: features that mount with pins/actuators pointing UP
 // through the board, accessed from directly above (X,Y = top-left
@@ -732,6 +751,43 @@ module right_edge_cutouts() {
     }
 }
 
+// Slot holder for the FT232H, on the inner face of the TOP wall (board y=0,
+// which is the model's maximum-Y wall). Two grooved rails plus a bottom stop;
+// the board drops in from above and a lip at the top retains it.
+module ft232h_holder() {
+    xc = board_origin[0] + ft232h_x_mm;
+    yw = outer_width - wall_thickness;          // inner face of that wall
+    z0 = lip_z + board_thickness + ft232h_above_pcb;
+    w  = ft232h_pcb_mm[0] + 2*ft232h_fit;
+    h  = ft232h_pcb_mm[1];
+    d  = ft232h_pcb_t;                          // groove depth away from wall
+
+    // two rails, one at each end of the board
+    for (xs = [-1, 1])
+        translate([xc + xs*(w/2 + ft232h_rail_w/2) - ft232h_rail_w/2,
+                   yw - (d + ft232h_rail_w), z0])
+            difference() {
+                cube([ft232h_rail_w, d + ft232h_rail_w, h + 4]);
+                // groove facing inward, so the PCB edge slides into it
+                translate([-1, ft232h_rail_w, -1])
+                    cube([ft232h_rail_w + 2, d + 1, h + 6]);
+            }
+
+    // rails need a web back to the wall or they are unsupported columns
+    for (xs = [-1, 1])
+        translate([xc + xs*(w/2 + ft232h_rail_w/2) - ft232h_rail_w/2,
+                   yw - ft232h_rail_w, z0])
+            cube([ft232h_rail_w, ft232h_rail_w, h + 4]);
+
+    // bottom stop, the board rests on this
+    translate([xc - w/2 - ft232h_rail_w, yw - (d + ft232h_rail_w), z0 - 2])
+        cube([w + 2*ft232h_rail_w, d + ft232h_rail_w, 2]);
+
+    // retaining lip at the top, overhanging into the slot
+    translate([xc - w/2, yw - (d + 0.8), z0 + h + 1])
+        cube([w, 0.8, 1.6]);
+}
+
 // Button clearance through the LEFT wall.
 module left_edge_switch_hole() {
     translate([-1, board_y(kan28_y_mm),
@@ -858,6 +914,7 @@ module base_tray() {
         retaining_lip_ridge();
         standoffs();
         left_edge_switch_clips();
+        ft232h_holder();
     }
 }
 
@@ -1066,6 +1123,17 @@ echo(str("internal height, board underside to lid: ", internal_above_board_mm, "
 echo(str("   of which above the PCB top surface:   ",
          internal_above_board_mm - board_thickness, "mm"));
 
+
+// Assertion: the FT232H holder must clear the heatsink. It sits on the top
+// wall above the board, and the heatsink is the tallest thing in the box.
+ft232h_x0 = ft232h_x_mm - ft232h_pcb_mm[0]/2 - ft232h_rail_w;
+ft232h_x1 = ft232h_x_mm + ft232h_pcb_mm[0]/2 + ft232h_rail_w;
+heatsink_x0 = heatsink_center_mm[0] - heatsink_lwh_mm[0]/2 - heatsink_xy_margin_mm;
+echo(str("FT232H holder spans board x ", ft232h_x0, "..", ft232h_x1,
+         "; heatsink zone starts ", heatsink_x0));
+assert(ft232h_x1 < heatsink_x0,
+       str("FT232H holder overlaps the heatsink zone by ",
+           ft232h_x1 - heatsink_x0, "mm"));
 
 lip_bearing_mm = lip_ledge - fit_gap;
 echo(str("lip bearing width under board edge (mm): ", lip_bearing_mm));
