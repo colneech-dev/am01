@@ -446,6 +446,38 @@ dc_jack_y_mm             = 22.0; // board-local Y of the barrel centre
 dc_jack_diameter         = 7;    // measured barrel outer diameter
 dc_jack_centre_above_pcb = 6;    // measured, PCB top surface to barrel centre
 
+// WiFi antenna pass-through, right wall -- the power end, which is also the
+// end JP5 runs to. Clear of JP1 (board y 17-27) and SW4 (31-44); y=78 puts it
+// down toward the bottom corner with the header.
+antenna_hole_d       = 6;
+// The bulkhead thread has a flat on it for anti-rotation, so the hole is a D
+// rather than a circle -- a round hole lets the connector spin when the
+// antenna is screwed on or off, which eventually twists the pigtail off.
+// 2.5mm from centre gives 5.5mm across the flat against a 6mm thread, the
+// usual RP-SMA figure.
+antenna_flat_from_centre = 2.5;
+antenna_hole_y_mm    = 78;
+antenna_hole_above_pcb = 12;
+
+// KAN-28 self-locking push button, on the right wall with the other power
+// controls. From the manufacturer drawing: a 9mm boss carrying a 5.6mm
+// button, a 17.9 x 11.9mm body, and two mounting ears 25.5mm apart with
+// roughly 2.25mm holes.
+//
+// The switch mounts from INSIDE, its ears bearing on the wall's inner face,
+// so the wall needs a 9mm clearance hole for the boss plus two screw holes.
+// Fixing from inside means nothing shows on the outside but the button.
+//
+// y=60 is the only gap left on this wall: SW4 ends at board y=44 and the
+// antenna hole is at 78, and the ears reach +/-12.75mm from centre, so this
+// spans 47.25 to 72.75. Asserted below, because it is tight enough that a
+// small move would collide.
+kan28_boss_d       = 9.4;   // 9mm boss plus fit
+kan28_ear_pitch    = 25.5;  // between ear hole centres
+kan28_ear_hole_d   = 2.4;   // M2 clearance
+kan28_y_mm         = 60;    // board-local Y of the button centre
+kan28_above_pcb    = 25;    // button centre above the PCB top surface
+
 // ---- Lid cutouts: features that mount with pins/actuators pointing UP
 // through the board, accessed from directly above (X,Y = top-left
 // corner of the window, offset from the board's own origin same as the
@@ -668,6 +700,31 @@ module right_edge_cutouts() {
     }
 }
 
+// Boss clearance plus the two ear screw holes, all through the right wall.
+module right_edge_switch() {
+    zc = lip_z + board_thickness + kan28_above_pcb;
+    yc = board_y(kan28_y_mm);
+    for (o = [0, -kan28_ear_pitch/2, kan28_ear_pitch/2])
+        translate([outer_length - wall_thickness - 1, yc + o, zc])
+            rotate([0, 90, 0])
+                cylinder(h = wall_thickness + 2,
+                         d = (o == 0) ? kan28_boss_d : kan28_ear_hole_d,
+                         $fn = 32);
+}
+
+module right_edge_antenna_hole() {
+    translate([outer_length - wall_thickness - 1,
+               board_y(antenna_hole_y_mm),
+               lip_z + board_thickness + antenna_hole_above_pcb])
+        rotate([0, 90, 0])
+            linear_extrude(height = wall_thickness + 2)
+                difference() {
+                    circle(d = antenna_hole_d, $fn = 48);
+                    translate([-antenna_hole_d, antenna_flat_from_centre])
+                        square([2*antenna_hole_d, antenna_hole_d]);
+                }
+}
+
 // The barrel jack gets a round hole at its MEASURED height, not at the middle
 // of the wall: a barrel plug's cable approaches horizontally and the shell has
 // to line up with the socket, so being 10mm high is as bad as being sideways.
@@ -734,6 +791,8 @@ module base_tray() {
                 top_edge_cutouts();
                 right_edge_cutouts();
                 right_edge_dc_jack();
+                right_edge_antenna_hole();
+                right_edge_switch();
             }
         }
         retaining_lip_ridge();
@@ -798,6 +857,36 @@ module lid_snap_bead() {
 // The case is fully enclosed either way: this never opens a hole big
 // enough to expose the heatsink to open air, unlike v3's chimney.
 
+// Through-window for the screen's viewable area, plus a shallow locating
+// recess in the lid's UNDERSIDE for its side flanges. The module goes in from
+// inside the case and looks out through the window.
+module lid_screen_cutout() {
+    cx = board_origin[0] + screen_center_mm[0];
+    cy = board_y(screen_center_mm[1]);
+
+    translate([cx - (screen_window_mm[0] + screen_fit_gap)/2,
+               cy - (screen_window_mm[1] + screen_fit_gap)/2, -1])
+        cube([screen_window_mm[0] + screen_fit_gap,
+              screen_window_mm[1] + screen_fit_gap,
+              lid_thickness + 2]);
+
+    translate([cx - (screen_module_mm[0] + 2*screen_fit_gap)/2,
+               cy - (screen_module_mm[1] + 2*screen_fit_gap)/2, -0.001])
+        cube([screen_module_mm[0] + 2*screen_fit_gap,
+              screen_module_mm[1] + 2*screen_fit_gap,
+              screen_recess_mm]);
+}
+
+// True when a vent hole would land on the screen module's footprint. Holes
+// there would perforate the flange ledges the module sits on, and holes inside
+// the window are meaningless because it is already open.
+function vent_clear_of_screen(x, y) =
+    let (cx = board_origin[0] + screen_center_mm[0],
+         cy = board_y(screen_center_mm[1]),
+         hx = screen_module_mm[0]/2 + 2,
+         hy = screen_module_mm[1]/2 + 2)
+    !(x > cx - hx && x < cx + hx && y > cy - hy && y < cy + hy);
+
 module lid_fpga_vent_holes() {
     if (VARIANT_VENTED) {
         // Centred on the BOARD, not the FPGA. The grid used to be a patch
@@ -812,8 +901,10 @@ module lid_fpga_vent_holes() {
         y0 = cy - (ny-1)*vent_hole_pitch/2;
         for (i = [0:nx-1])
             for (j = [0:ny-1])
-                translate([x0 + i*vent_hole_pitch, y0 + j*vent_hole_pitch, -1])
-                    cylinder(h = lid_thickness + 2, d = vent_hole_d, $fn = 16);
+                if (vent_clear_of_screen(x0 + i*vent_hole_pitch,
+                                         y0 + j*vent_hole_pitch))
+                    translate([x0 + i*vent_hole_pitch, y0 + j*vent_hole_pitch, -1])
+                        cylinder(h = lid_thickness + 2, d = vent_hole_d, $fn = 16);
     }
 }
 
@@ -831,10 +922,8 @@ module lid() {
                 lid_skirt();
                 lid_snap_bead();
             }
-            // Air holes only. The header slots, button holes, sensor hole and
-            // screen window are all gone: the Pmods and buttons are unused,
-            // the sensor is not fitted, and the screen has moved to a wall.
             lid_fpga_vent_holes();
+            lid_screen_cutout();
         }
     }
 }
@@ -907,6 +996,28 @@ assert(bottom_sep_mm > 0.8,
        str("bottom-wall cutouts merge or nearly touch (", bottom_sep_mm,
            "mm between them). Reduce cutout_margin."));
 
+
+// The case is sized by what has to fit ABOVE the board: heatsink plus a fan.
+// Measured from the board's underside to the lid's inner face, which is the
+// dimension that matters when choosing a fan.
+internal_above_board_mm = tray_height - lip_z;
+echo(str("internal height, board underside to lid: ", internal_above_board_mm, "mm"));
+echo(str("   of which above the PCB top surface:   ",
+         internal_above_board_mm - board_thickness, "mm"));
+
+// Assertion: the right wall is crowded -- JP1, SW4, the antenna hole and now
+// the KAN-28 with ears reaching 12.75mm either side of its centre. Check the
+// switch clears its neighbours rather than discovering it in a print.
+kan28_y0 = kan28_y_mm - kan28_ear_pitch/2 - kan28_ear_hole_d/2;
+kan28_y1 = kan28_y_mm + kan28_ear_pitch/2 + kan28_ear_hole_d/2;
+sw4_y1   = right_connector_positions_mm[0][1] + right_connector_positions_mm[0][2]/2;
+ant_y0   = antenna_hole_y_mm - antenna_hole_d/2;
+echo(str("right wall: SW4 ends ", sw4_y1, ", switch spans ", kan28_y0, "..",
+         kan28_y1, ", antenna starts ", ant_y0));
+assert(kan28_y0 > sw4_y1,
+       str("KAN-28 overlaps SW4 by ", sw4_y1 - kan28_y0, "mm"));
+assert(kan28_y1 < ant_y0,
+       str("KAN-28 overlaps the antenna hole by ", kan28_y1 - ant_y0, "mm"));
 
 lip_bearing_mm = lip_ledge - fit_gap;
 echo(str("lip bearing width under board edge (mm): ", lip_bearing_mm));
