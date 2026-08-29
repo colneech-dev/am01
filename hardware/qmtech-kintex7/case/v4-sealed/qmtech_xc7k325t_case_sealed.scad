@@ -359,7 +359,10 @@ cutout_margin = 1.0;
 // It snaps on with two L-hooks that pass through the opening and catch the
 // wall's inner face -- the same idea as the switch arms, so there is one
 // fastening principle in this design rather than three.
-usb_cap_opening_mm = [18, 21];   // the hole in the wall. 21 wide left ZERO gap to
+// MEASURED: the protruding USB assembly is 12mm wide and needs 24mm of
+// height cleared. 18 wide gives it 3mm either side and is as wide as this
+// wall allows -- 21 left zero gap to J7 and the separator assert rejected it.
+usb_cap_opening_mm = [18, 24];   // the hole in the wall. 21 wide left ZERO gap to
                                  // J7 -- the separator assert caught it.
 usb_cap_clearance  = 11;         // adapter projection past the connector face
 usb_cap_wall       = 2.0;
