@@ -374,8 +374,30 @@ bottom_connector_positions_mm = [
     // NOT YET MEASURED and therefore still suspect -- J6, J7 and JP5 below
     // are still positions read off the drawing by eye, the same method that
     // put the left wall wrong.
-    ["USB_A_J6",      31, 18, 17],   // 2 stacked USB-A ports
-    ["USB_A_J7",      51, 18, 17],   // 2 more stacked USB-A ports
+    // MEASURED ON THE BOARD 2026-08-29, spans along the bottom edge from the
+    // left corner: J6 14-29, J7 33-49, P1 53-71. Centre and width below.
+    //
+    // Both USB stacks were badly out -- J6 by 9.5mm and J7 by 10mm, each
+    // sitting to the RIGHT of where they belong. Two 15-16mm connectors
+    // displaced by most of their own width is why the printed case would not
+    // line up here.
+    ["USB_A_J6",      21.5, 15, 17],   // 2 stacked USB-A ports
+    ["USB_A_J7",      41.0, 16, 17],   // 2 more stacked USB-A ports
+
+    // ETHERNET RESTORED. v4.1 deleted this cutout after concluding the board
+    // had no Ethernet jack, on the grounds that the schematic's magjack had no
+    // matching footprint in the placement drawing. That was wrong twice over:
+    // the jack is real, and it is P1 on the BOTTOM edge -- not where the
+    // deleted cutout had been. Measured 53-71mm from the left corner, 14mm
+    // tall, which is consistent with a standard RJ45 at about 13.5mm.
+    ["ETH_P1",        62.0, 18, 14],
+
+    // NOT MEASURED. Still a position read off the drawing by eye, the same
+    // method that put every other connector on this wall wrong by up to 10mm.
+    // Treat as suspect until measured. It also may not want a wall cutout at
+    // all: JP5's pins point UP, so a ribbon plugs down onto it and the opening
+    // it really needs is in the LID, with the wall slot only for a cable to
+    // escape. It carries the display ribbon, the touch lines and the fan lead.
     ["GPIO_HDR_JP5", 119, 58, 12],   // cable pass-through, not a connector body
 ];
 
