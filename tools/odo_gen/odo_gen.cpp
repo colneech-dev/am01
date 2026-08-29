@@ -47,6 +47,27 @@ static bool g_bram_out_reg = false;
 // plus one more when the output register is enabled.
 static int RoundCycles() { return g_bram_out_reg ? 3 : 2; }
 
+// Which period[] tap feeds round i's key.
+//
+// full_round applies the key COMBINATIONALLY after the sboxes:
+//     pbox0 -> apply_sboxes (clocked) -> pbox1 -> rotations -> apply_round_key
+// so the key must be valid when the sbox output emerges, and get_round_key is
+// itself clocked, so a tap read at X yields a key at X+1:
+//
+//     block reaches state[i] at   t0 + RoundCycles*i
+//     sbox output emerges at      + sbox_latency
+//     tap period[T] gives key at  t0 + T + 1
+//     => T = RoundCycles*i + sbox_latency - 1
+//
+// RoundCycles = sbox_latency + 1 (the sbox, then the state register), so this
+// is RoundCycles*(i+1) - 2: exactly 2*i for a single-register sbox, and 3*i+1
+// once --bram-out-reg makes the sbox two deep.
+//
+// Emitting RoundCycles()*i here -- scaling for the round but not for the deeper
+// sbox -- made the key arrive ONE CYCLE EARLY and produced a core that ran at
+// full speed and computed wrong results. Caught by tb_sched_equiv.v +blocks=1.
+static int RoundKeyTap(int i) { return RoundCycles() * (i + 1) - 2; }
+
 template<typename T, size_t sz1, size_t sz2>
 void GenerateSboxes(const T (&sbox)[sz1][sz2], bool dual_port, const char* prefix, const char* suffix, FILE* f)
 {
@@ -397,7 +418,7 @@ void OdoVerilog::Generate(int throughput, const char* prefix, FILE* f) const
             fprintf(f, "    always @(posedge clk) period[%d] <= period[%d];\n", i, i-1);
         for (int i = 0; i < unrolling; i++)
         {
-            fprintf(f, "    %sget_round_key%d get_key%d(clk, period[%d], roundkey[%d]);\n", prefix, i, i, RoundCycles()*i, i);
+            fprintf(f, "    %sget_round_key%d get_key%d(clk, period[%d], roundkey[%d]);\n", prefix, i, i, RoundKeyTap(i), i);
             fprintf(f, "    %sfull_round round%d(clk, roundkey[%d], state[%d], next[%d]);\n", prefix, i, i, i, i);
         }
         fprintf(f, "    always @(posedge clk) begin\n");

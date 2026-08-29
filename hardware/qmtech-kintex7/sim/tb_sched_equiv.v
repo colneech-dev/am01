@@ -47,10 +47,17 @@ module tb;
     // long (to actually prove something) without recompiling -- compilation of
     // two 640-bit cores is itself minutes.
     integer N       = 700;
+    // Set from a plusarg in an initial block that runs before any clock
+    // edge, so in_tst is settled before the first read.
     integer brk     = 0;
     integer progress_every = 25;
     integer drain = 20;
+    // How many blocks to feed. 0 = unlimited. With blocks=1 exactly one
+    // block is in flight, so interleaving and read-phase effects cannot
+    // contribute and any mismatch is the scheduling arithmetic itself.
+    integer blocks = 0;
 
+    localparam THROUGHPUT = 4;   // must match the odo_gen throughput argument
     localparam MIN_SEQ = 8;     // refuse to call it a PASS below this
     localparam MAXQ    = 4096;
 
@@ -62,13 +69,21 @@ module tb;
     wire [639:0] out_ref, out_tst;
     wire         write_ref, write_tst;
 
-    ref_4encrypt u_ref (clk, in, read, out_ref, write_ref);
-    tst_4encrypt u_tst (clk, in, read, out_tst, write_tst);
+    // NEGATIVE CONTROL: the test core gets its OWN input, identical to `in`
+    // except once the control fires. Perturbing the shared `in` (which an
+    // earlier version did) changes BOTH cores equally, so they still agree
+    // and the control passes -- measured, +brk=3 gave PASS. A control that
+    // cannot fail makes the positive result meaningless.
+    wire [639:0] in_tst = (brk != 0 && fed >= brk) ? (in ^ 640'd1) : in;
+
+    ref_4encrypt u_ref (clk, in,     read, out_ref, write_ref);
+    tst_4encrypt u_tst (clk, in_tst, read, out_tst, write_tst);
 
     reg [639:0] qref [0:MAXQ-1];
     reg [639:0] qtst [0:MAXQ-1];
     integer nref = 0, ntst = 0;
     integer i, k, mismatches = 0;
+    integer fed = 0;
     time     t_start;
 
     always @(negedge clk) begin
@@ -81,21 +96,31 @@ module tb;
         if (!$value$plusargs("brk=%d", brk)) brk = 0;
         if (!$value$plusargs("every=%d", progress_every)) progress_every = 25;
         if (!$value$plusargs("drain=%d", drain)) drain = 20;
+        if (!$value$plusargs("blocks=%d", blocks)) blocks = 0;
 
-        $display("  N=%0d brk=%0d  (ref latency 172, test latency 253)", N, brk);
+        $display("  N=%0d brk=%0d blocks=%0d  (ref latency 172, test latency 253)",
+                 N, brk, blocks);
         t_start = $time;
 
         in = 640'd0; read = 0;
         @(negedge clk);
 
         for (i = 0; i < N; i = i + 1) begin
-            if (i % 8 == 0) begin
+            // Feed every THROUGHPUT cycles, matching miner.v: it asserts advance
+            // (this core.s read) when counter == THROUGHPUT-1, i.e. 1 cycle in 4.
+            // Feeding slower is NOT harmless -- state[0] is rewritten every cycle
+            // (from in on read, else from the recirculation), so a read at the
+            // wrong phase destroys an in-flight block. The two cores have
+            // different pipeline depths (43 vs 65 period slots), so one fixed
+            // cadence that is not the designed one corrupts them differently and
+            // the comparison is meaningless. An 8-cycle cadence produced
+            // FAIL -- 5 of 13 differ, with results 0-7 matching and divergence
+            // only once the pipe filled: the signature of a harness fault, not
+            // of broken scheduling arithmetic.
+            if ((i % THROUGHPUT == 0) && (blocks == 0 || fed < blocks)) begin
                 in = {8{ {2{i[31:0]}}, 32'hA5A5_5A5A, i[31:0] }};
-                // Negative control: perturb once the test core has emitted brk
-                // results. Both cores see it, so what this really proves is
-                // that the comparison would NOTICE a divergence at all.
-                if (brk != 0 && ntst >= brk) in[0] = ~in[0];
                 read = 1;
+                fed = fed + 1;
             end else read = 0;
             @(negedge clk);
             // Progress, so a slow run is distinguishable from a stuck one.
