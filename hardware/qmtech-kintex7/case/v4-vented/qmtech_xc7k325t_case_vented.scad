@@ -164,7 +164,9 @@ VARIANT_VENTED       = true;  // VENTED variant: perforated lid panel over the F
 // ---- Board ----
 board_length    = 160;   // X, the manual's Figure 2-1 dimension
 board_width     = 90;    // Y
-board_thickness = 1.6;   // standard PCB thickness
+board_thickness = 2.0;   // MEASURED. Not the usual 1.6 -- this is a thick,
+                         // many-layer board, and it matters: every wall
+                         // cutout is positioned relative to the board.
 
 // ---- Fit tolerances ----
 // 0.6 was too tight to actually assemble: across a 160mm span, FDM
@@ -459,24 +461,25 @@ antenna_flat_from_centre = 2.5;
 antenna_hole_y_mm    = 78;
 antenna_hole_above_pcb = 12;
 
-// KAN-28 self-locking push button, on the right wall with the other power
-// controls. From the manufacturer drawing: a 9mm boss carrying a 5.6mm
-// button, a 17.9 x 11.9mm body, and two mounting ears 25.5mm apart with
-// roughly 2.25mm holes.
+// KAN-28 self-locking push button, on the LEFT (HDMI) wall, directly above
+// HDMI0/P3 -- the port nearest the board edge.
 //
-// The switch mounts from INSIDE, its ears bearing on the wall's inner face,
-// so the wall needs a 9mm clearance hole for the boss plus two screw holes.
-// Fixing from inside means nothing shows on the outside but the button.
+// Retained by printed CLIPS, not screws. Screw holes meant finding two M2
+// screws and nuts and reaching inside a 50mm-deep box to hold them; a clip
+// nest is printed in place and the switch pushes in from behind until the
+// lips catch its body.
 //
-// y=60 is the only gap left on this wall: SW4 ends at board y=44 and the
-// antenna hole is at 78, and the ears reach +/-12.75mm from centre, so this
-// spans 47.25 to 72.75. Asserted below, because it is tight enough that a
-// small move would collide.
+// From the manufacturer drawing: 9mm boss carrying a 5.6mm button, body
+// 17.9 x 11.9mm, 6.3mm deep behind the flange.
 kan28_boss_d       = 9.4;   // 9mm boss plus fit
-kan28_ear_pitch    = 25.5;  // between ear hole centres
-kan28_ear_hole_d   = 2.4;   // M2 clearance
-kan28_y_mm         = 60;    // board-local Y of the button centre
-kan28_above_pcb    = 25;    // button centre above the PCB top surface
+kan28_body_mm      = [17.9, 11.9];
+kan28_body_depth   = 6.3;
+kan28_clip_wall    = 2.0;   // wall of the nest around the switch body
+kan28_clip_lip     = 0.9;   // how far the retaining lips overhang
+kan28_clip_fit     = 0.4;   // clearance around the body
+kan28_y_mm         = 15.5;  // board-local Y -- same as HDMI0_P3
+kan28_above_pcb    = 26;    // button centre above the PCB top surface
+
 
 // ---- Lid cutouts: features that mount with pins/actuators pointing UP
 // through the board, accessed from directly above (X,Y = top-left
@@ -541,8 +544,11 @@ sensor_hole_d = 5;
 // exist only on the left and right. The window therefore spans the module's
 // full height and the recess below leaves two side ledges, not a closed
 // picture frame.
-screen_module_mm  = [82, 50];   // overall outline
-screen_window_mm  = [70, 50];   // viewable area -> the through-window
+// PORTRAIT: the module stands on its short edge, so the 82mm dimension runs
+// across the board's width. Everything downstream (the window, the recess and
+// the vent exclusion) follows from these two.
+screen_module_mm  = [50, 82];   // overall outline
+screen_window_mm  = [50, 70];   // viewable area -> the through-window
 screen_body_mm    = 6;          // deepest point, protrudes into the case
 screen_flange_mm  = 2;          // flange thickness
 
@@ -555,7 +561,9 @@ screen_fit_gap    = 0.5;        // per side, module to pocket
 
 // At the HDMI end of the lid, as asked. Board-local; 41 is as far right as it
 // can sit while clearing J11's lid cutout, which starts at x=82.
-screen_center_mm  = [39, 45];
+// Still the HDMI end. 82mm tall on a 90mm board leaves 4mm top and bottom,
+// so it has to sit centred in Y; x=30 keeps it clear of the case wall.
+screen_center_mm  = [30, 45];
 
 // No screw posts. The module's mounting-hole positions have not been measured,
 // and inventing them is exactly what produced the standoffs and bosses that
@@ -643,7 +651,14 @@ module retaining_lip_ridge() {
 // of solid material below the wall's actual top -- so every wall keeps
 // a full, continuous top edge above its windows.
 wall_roof_min_mm = 3.0;
-function wall_cutout_z0() = lip_z - cutout_margin;
+// Cutouts start below the board's TOP surface, not its underside.
+//
+// This was lip_z - cutout_margin, i.e. referenced to where the board sits on
+// the lip. But connectors stand ON the board, so every window was a whole
+// board-thickness too low: a 6mm HDMI occupies 7.4 to 13.4 while its opening
+// ran 4.4 to 12.4, missing the top of the connector and wasting the same
+// amount of wall below it. Referencing the top surface fixes both ends.
+function wall_cutout_z0() = lip_z + board_thickness - cutout_margin;
 function wall_cutout_h(body_h) =
     min(body_h + 2*cutout_margin,
         (tray_height - wall_roof_min_mm) - wall_cutout_z0());
@@ -700,16 +715,44 @@ module right_edge_cutouts() {
     }
 }
 
-// Boss clearance plus the two ear screw holes, all through the right wall.
-module right_edge_switch() {
-    zc = lip_z + board_thickness + kan28_above_pcb;
+// Button clearance through the LEFT wall.
+module left_edge_switch_hole() {
+    translate([-1, board_y(kan28_y_mm),
+               lip_z + board_thickness + kan28_above_pcb])
+        rotate([0, 90, 0])
+            cylinder(h = wall_thickness + 2, d = kan28_boss_d, $fn = 32);
+}
+
+// Clip nest on the INNER face of the left wall. A three-sided surround the
+// size of the switch body, with a lip along the top and bottom that the body
+// snaps past. Open on the inboard side so the switch slides in and the lips
+// flex rather than having to stretch a closed frame.
+module left_edge_switch_clips() {
     yc = board_y(kan28_y_mm);
-    for (o = [0, -kan28_ear_pitch/2, kan28_ear_pitch/2])
-        translate([outer_length - wall_thickness - 1, yc + o, zc])
-            rotate([0, 90, 0])
-                cylinder(h = wall_thickness + 2,
-                         d = (o == 0) ? kan28_boss_d : kan28_ear_hole_d,
-                         $fn = 32);
+    zc = lip_z + board_thickness + kan28_above_pcb;
+    w  = kan28_body_mm[0] + 2*kan28_clip_fit;   // along Y
+    h  = kan28_body_mm[1] + 2*kan28_clip_fit;   // along Z
+    d  = kan28_body_depth;
+
+    translate([wall_thickness, yc, zc]) {
+        difference() {
+            // outer block, standing off the wall
+            translate([0, -(w/2 + kan28_clip_wall), -(h/2 + kan28_clip_wall)])
+                cube([d + kan28_clip_wall, w + 2*kan28_clip_wall, h + 2*kan28_clip_wall]);
+            // pocket for the body, open toward the wall
+            translate([-0.01, -w/2, -h/2])
+                cube([d + 0.02, w, h]);
+            // relieve the middle of the long sides so the lips can flex
+            translate([-0.01, -w/2 - kan28_clip_wall - 1, -h/2 + 2])
+                cube([d + 0.02, kan28_clip_wall + 1.2, h - 4]);
+            translate([-0.01, w/2 - 0.2, -h/2 + 2])
+                cube([d + 0.02, kan28_clip_wall + 1.2, h - 4]);
+        }
+        // retaining lips at the open end, overhanging into the pocket
+        for (zs = [-1, 1])
+            translate([d - 0.6, -w/2, zs*(h/2) - (zs > 0 ? 0 : kan28_clip_lip)])
+                cube([0.6, w, kan28_clip_lip]);
+    }
 }
 
 module right_edge_antenna_hole() {
@@ -792,11 +835,12 @@ module base_tray() {
                 right_edge_cutouts();
                 right_edge_dc_jack();
                 right_edge_antenna_hole();
-                right_edge_switch();
+                left_edge_switch_hole();
             }
         }
         retaining_lip_ridge();
         standoffs();
+        left_edge_switch_clips();
     }
 }
 
@@ -1005,19 +1049,6 @@ echo(str("internal height, board underside to lid: ", internal_above_board_mm, "
 echo(str("   of which above the PCB top surface:   ",
          internal_above_board_mm - board_thickness, "mm"));
 
-// Assertion: the right wall is crowded -- JP1, SW4, the antenna hole and now
-// the KAN-28 with ears reaching 12.75mm either side of its centre. Check the
-// switch clears its neighbours rather than discovering it in a print.
-kan28_y0 = kan28_y_mm - kan28_ear_pitch/2 - kan28_ear_hole_d/2;
-kan28_y1 = kan28_y_mm + kan28_ear_pitch/2 + kan28_ear_hole_d/2;
-sw4_y1   = right_connector_positions_mm[0][1] + right_connector_positions_mm[0][2]/2;
-ant_y0   = antenna_hole_y_mm - antenna_hole_d/2;
-echo(str("right wall: SW4 ends ", sw4_y1, ", switch spans ", kan28_y0, "..",
-         kan28_y1, ", antenna starts ", ant_y0));
-assert(kan28_y0 > sw4_y1,
-       str("KAN-28 overlaps SW4 by ", sw4_y1 - kan28_y0, "mm"));
-assert(kan28_y1 < ant_y0,
-       str("KAN-28 overlaps the antenna hole by ", kan28_y1 - ant_y0, "mm"));
 
 lip_bearing_mm = lip_ledge - fit_gap;
 echo(str("lip bearing width under board edge (mm): ", lip_bearing_mm));
