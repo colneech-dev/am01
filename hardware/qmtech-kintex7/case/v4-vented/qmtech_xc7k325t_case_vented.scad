@@ -218,8 +218,10 @@ heatsink_margin_mm = case_interior_clearance_mm - heatsink_total_clearance_mm; /
 
 // Footprint the vent-hole grid (if VARIANT_VENTED) is centered on --
 // oversized around the heatsink body the same way the old chimney was.
-vent_zone_mm = [heatsink_lwh_mm[0] + 2*heatsink_xy_margin_mm,
-                 heatsink_lwh_mm[1] + 2*heatsink_xy_margin_mm]; // = [43,43]
+// Venting is now the WHOLE lid, not a patch over the FPGA. A sealed box
+// around a part that already ran too hot to touch was the wrong default; the
+// grid is cheap to print and costs nothing but a little rigidity.
+vent_zone_mm = [board_length, board_width];
 vent_hole_d       = 3;
 vent_hole_pitch   = 7; // center-to-center spacing
 
@@ -295,29 +297,20 @@ standoff_inset_mm  = 5;    // fallback only, used when standoff_xy_mm is empty
 standoff_od        = 5.0;  // sits inside the 5.42mm pad seen on the drawing
 standoff_pilot_od  = 2.6;
 
-// ---- Corner lid-screw bosses -----------------------------------------
-// These are now EXTERNAL ears, outside the case walls.
+// ---- Snap-fit lid (no screws, no corner bosses) ---------------------
+// The lid is held by a bead running round the outside of its skirt, engaging
+// a groove in the tray's inner wall. Nothing protrudes outside the case, which
+// is what retires the external corner ears -- those ears only existed because
+// the bosses could not go inside without fouling the board.
 //
-// They used to sit at boss_inset = wall_thickness + 3 = 5.4mm in from the
-// outer edge, as full-height (wall_height + floor_thickness) pillars. With
-// board_origin at wall_thickness + fit_gap, that put a 7mm-diameter pillar
-// centre only 3.39mm from the board's own corner -- less than its 3.5mm
-// radius. Each of the four bosses therefore stood about 1.1mm inside the
-// board's footprint, floor to lid. A rigid PCB with square corners cannot
-// be lowered past four such pillars: this is why the board would not go
-// into the tray, and why it then sat proud and stopped the lid closing.
-// The old comment ("bosses sit just inside the wall corners") reasoned
-// about boss-vs-standoff interference and never checked boss-vs-board.
-//
-// Moving the boss centres 1mm OUTSIDE each case corner puts them 4.81mm
-// from the interior corner and 5.66mm from the board corner, both
-// comfortably clear of the 3.5mm radius, while still overlapping the
-// corner solidly enough to fuse to the wall. Nothing intrudes on the
-// interior at all now.
-boss_od       = 7.0;
-boss_pilot_od = 2.6;   // M3 self-tap/heat-set pilot
-boss_ear_offset = 1.0; // how far outside each case corner the boss centre sits
-lid_screw_clearance_od = 3.4; // clearance hole through the lid itself
+// 0.6mm of interference is the usual figure for PETG or ABS at this wall
+// thickness: enough to hold, little enough to snap over by hand. The bead is
+// chamfered on its underside so the lid leads in and only resists on the way
+// out.
+snap_bead_mm   = 0.6;   // radial interference
+snap_bead_h    = 1.2;   // bead height
+snap_lead_in   = 0.6;   // chamfer under the bead, for assembly
+
 
 // ---- Wall cutouts: THREE walls carry real connectors (see design note
 // 0 -- v4 wrongly put everything on one wall). All positions read off
@@ -560,17 +553,6 @@ board_origin = [wall_thickness + fit_gap, wall_thickness + fit_gap]; // XY of bo
 // Y must go through it.
 function board_y(y_from_top) = board_origin[1] + (board_width - y_from_top);
 
-// Lid-screw boss centres: one per corner, boss_ear_offset OUTSIDE the case
-// so nothing reaches into the board's footprint. Defined once and used by
-// both the tray (solid bosses) and the lid (matching ears + clearance
-// holes) -- the old code hardcoded "wall_thickness + 3" separately in each
-// of those two places, so the tray and lid could drift apart silently.
-boss_positions = [
-    [-boss_ear_offset,                -boss_ear_offset],
-    [outer_length + boss_ear_offset,  -boss_ear_offset],
-    [-boss_ear_offset,                outer_width + boss_ear_offset],
-    [outer_length + boss_ear_offset,  outer_width + boss_ear_offset],
-];
 
 // ---- Base tray -----------------------------------------------------
 
@@ -724,24 +706,21 @@ module standoffs() {
     }
 }
 
-// Full-height bosses for the lid screws, on EXTERNAL corner ears. See the
-// boss_ear_offset comment in the parameter block for why these are no
-// longer inside the case: as internal corner pillars they stood ~1.1mm
-// inside the board's own footprint and physically blocked the board from
-// seating.
-module lid_screw_boss(x, y) {
-    fuse_eps = 0.05;
-    translate([x, y, -fuse_eps])
+// Groove in the inner wall face for the lid's snap bead.
+module snap_groove() {
+    z0 = tray_height - lid_skirt_depth + snap_lead_in;
+    translate([0, 0, z0])
         difference() {
-            cylinder(h = wall_height + floor_thickness + fuse_eps, d = boss_od, $fn = 32);
-            translate([0,0,-1])
-                cylinder(h = wall_height + floor_thickness + fuse_eps + 2, d = boss_pilot_od, $fn = 24);
+            linear_extrude(height = snap_bead_h)
+                translate([wall_thickness - snap_bead_mm, wall_thickness - snap_bead_mm])
+                    square([outer_length - 2*(wall_thickness - snap_bead_mm),
+                            outer_width  - 2*(wall_thickness - snap_bead_mm)]);
+            translate([0, 0, -1])
+                linear_extrude(height = snap_bead_h + 2)
+                    translate([wall_thickness, wall_thickness])
+                        square([outer_length - 2*wall_thickness,
+                                outer_width  - 2*wall_thickness]);
         }
-}
-
-module lid_screw_bosses() {
-    for (p = boss_positions)
-        lid_screw_boss(p[0], p[1]);
 }
 
 module base_tray() {
@@ -749,6 +728,7 @@ module base_tray() {
         difference() {
             tray_shell();
             union() {
+                snap_groove();
                 left_edge_cutouts();
                 bottom_edge_cutouts();
                 top_edge_cutouts();
@@ -758,7 +738,6 @@ module base_tray() {
         }
         retaining_lip_ridge();
         standoffs();
-        lid_screw_bosses();
     }
 }
 
@@ -790,38 +769,28 @@ module lid_skirt() {
 // Matching ears on the lid, so the screws have something to pass through
 // now that the bosses are outside the walls. Same boss_positions list as
 // the tray, so the two halves cannot drift apart.
-module lid_ears() {
-    for (p = boss_positions)
-        translate([p[0], p[1], 0])
-            cylinder(h = lid_thickness, d = boss_od, $fn = 32);
+// Bead around the outside of the skirt, engaging snap_groove() in the tray.
+// Chamfered underneath so the lid leads in easily and resists coming off.
+module lid_snap_bead() {
+    z0 = -lid_skirt_depth + snap_lead_in;
+    inset = wall_thickness + lid_fit_clearance;
+    translate([0, 0, z0])
+        difference() {
+            linear_extrude(height = snap_bead_h)
+                translate([inset - snap_bead_mm, inset - snap_bead_mm])
+                    square([outer_length - 2*(inset - snap_bead_mm),
+                            outer_width  - 2*(inset - snap_bead_mm)]);
+            translate([0, 0, -1])
+                linear_extrude(height = snap_bead_h + 2)
+                    translate([inset + wall_thickness, inset + wall_thickness])
+                        square([outer_length - 2*(inset + wall_thickness),
+                                outer_width  - 2*(inset + wall_thickness)]);
+        }
 }
 
-module lid_screw_clearance_holes() {
-    for (p = boss_positions)
-        translate([p[0], p[1], -1])
-            cylinder(h = lid_thickness + lid_skirt_depth + 2, d = lid_screw_clearance_od, $fn = 24);
-}
-
-module lid_top_edge_cutouts() {
-    // Individual, discrete windows -- replaces v1's fully-open top edge.
-    for (c = lid_top_cutouts_mm) {
-        x0 = board_origin[0] + c[1] - cutout_margin;
-        y0 = board_y(c[2]) - cutout_margin;
-        w  = c[3] + 2*cutout_margin;
-        h  = c[4] + 2*cutout_margin;
-        translate([x0, y0, -1])
-            cube([w, h, lid_thickness + 2]);
-    }
-}
 
 // Two small round holes for the real user push-buttons SW2/SW3 (see
 // lid_button_positions_mm above) -- v4 didn't expose these at all.
-module lid_buttons() {
-    for (b = lid_button_positions_mm) {
-        translate([board_origin[0] + b[1], board_y(b[2]), -1])
-            cylinder(h = lid_thickness + 2, d = lid_button_d + cutout_margin, $fn = 24);
-    }
-}
 
 // ---- FPGA vent zone: EITHER nothing (fully solid lid, VARIANT_VENTED
 // = false) OR a grid of small drilled holes through the solid lid
@@ -831,8 +800,12 @@ module lid_buttons() {
 
 module lid_fpga_vent_holes() {
     if (VARIANT_VENTED) {
-        cx = board_origin[0] + heatsink_center_mm[0];
-        cy = board_y(heatsink_center_mm[1]);
+        // Centred on the BOARD, not the FPGA. The grid used to be a patch
+        // over the heatsink; now that it covers the whole lid, centring it on
+        // heatsink_center_mm left a blank strip at one end and ran off the
+        // other.
+        cx = board_origin[0] + board_length/2;
+        cy = board_y(board_width/2);
         nx = max(1, floor(vent_zone_mm[0] / vent_hole_pitch));
         ny = max(1, floor(vent_zone_mm[1] / vent_hole_pitch));
         x0 = cx - (nx-1)*vent_hole_pitch/2;
@@ -844,49 +817,24 @@ module lid_fpga_vent_holes() {
     }
 }
 
-module lid_sensor_passthrough() {
-    translate([board_origin[0] + sensor_hole_center_mm[0],
-                board_y(sensor_hole_center_mm[1]), -1])
-        cylinder(h = lid_thickness + 2, d = sensor_hole_d, $fn = 24);
-}
 
 // Through-window for the viewable area, plus a shallow locating recess in the
 // lid's UNDERSIDE for the side flanges. The module goes in from inside the
 // case; its flanges bear on the recess and the screen looks out through the
 // window.
-module lid_screen_cutout() {
-    cx = board_origin[0] + screen_center_mm[0];
-    cy = board_y(screen_center_mm[1]);
-
-    // viewable area, all the way through
-    translate([cx - (screen_window_mm[0] + screen_fit_gap)/2,
-               cy - (screen_window_mm[1] + screen_fit_gap)/2, -1])
-        cube([screen_window_mm[0] + screen_fit_gap,
-              screen_window_mm[1] + screen_fit_gap,
-              lid_thickness + 2]);
-
-    // flange recess, cut UP from the underside (z=0) only
-    translate([cx - (screen_module_mm[0] + 2*screen_fit_gap)/2,
-               cy - (screen_module_mm[1] + 2*screen_fit_gap)/2, -0.001])
-        cube([screen_module_mm[0] + 2*screen_fit_gap,
-              screen_module_mm[1] + 2*screen_fit_gap,
-              screen_recess_mm]);
-}
 
 module lid() {
     union() {
         difference() {
             union() {
                 lid_panel();
-                lid_ears();
                 lid_skirt();
+                lid_snap_bead();
             }
-            lid_screw_clearance_holes();
-            lid_top_edge_cutouts();
-            lid_buttons();
+            // Air holes only. The header slots, button holes, sensor hole and
+            // screen window are all gone: the Pmods and buttons are unused,
+            // the sensor is not fitted, and the screen has moved to a wall.
             lid_fpga_vent_holes();
-            lid_sensor_passthrough();
-            lid_screen_cutout();
         }
     }
 }
@@ -898,23 +846,6 @@ echo(str("heatsink clearance margin (mm): ", heatsink_margin_mm,
          " [interior provides ", case_interior_clearance_mm,
          ", heatsink needs ", heatsink_total_clearance_mm, "]"));
 
-// Assertion: no lid-screw boss may reach into the board's footprint.
-// This is the bug that made the printed case unusable -- the bosses stood
-// ~1.1mm inside the board's corners, full height, so the board could not
-// be lowered in and the lid then would not close. An echo alone would have
-// scrolled past unread, so this is a hard assert: the render FAILS rather
-// than quietly producing an unassemblable STL again.
-function _dist_to_board(p) =
-    let (dx = max(board_origin[0] - p[0], 0, p[0] - (board_origin[0] + board_length)),
-         dy = max(board_origin[1] - p[1], 0, p[1] - (board_origin[1] + board_width)))
-    sqrt(dx*dx + dy*dy);
-
-boss_min_gap = min([ for (p = boss_positions) _dist_to_board(p) ]) - boss_od/2;
-echo(str("lid-screw boss clearance to board edge (mm): ", boss_min_gap));
-assert(boss_min_gap > 0,
-       str("lid-screw boss intrudes into the board footprint by ",
-           -boss_min_gap, "mm -- the board cannot be fitted. ",
-           "Increase boss_ear_offset or reduce boss_od."));
 
 // Assertion: the lip must actually reach under the board. lip_ledge is
 // measured from the inner wall face, and the board edge sits fit_gap in
@@ -976,36 +907,6 @@ assert(bottom_sep_mm > 0.8,
        str("bottom-wall cutouts merge or nearly touch (", bottom_sep_mm,
            "mm between them). Reduce cutout_margin."));
 
-// Assertion: the screen must not overlap anything else on the lid.
-//
-// It is 82mm wide on a lid whose next feature (J11 pin cutout) starts at
-// board-local x=82, so there is very little room and a small nudge would put
-// them into each other. The vent grid over the FPGA is the other neighbour.
-// Both are silent failures in a preview -- overlapping cutouts just merge --
-// so they are checked rather than eyeballed.
-screen_x0 = screen_center_mm[0] - screen_module_mm[0]/2;
-screen_x1 = screen_center_mm[0] + screen_module_mm[0]/2;
-screen_y0 = screen_center_mm[1] - screen_module_mm[1]/2;
-screen_y1 = screen_center_mm[1] + screen_module_mm[1]/2;
-
-// nearest lid header cutout to the right of the screen
-lid_cut_x0 = min([ for (c = lid_top_cutouts_mm) c[1] - c[3]/2 ]);
-screen_to_header_mm = lid_cut_x0 - screen_x1;
-
-vent_x0 = heatsink_center_mm[0] - vent_zone_mm[0]/2;
-screen_to_vent_mm = vent_x0 - screen_x1;
-
-echo(str("screen spans board x ", screen_x0, "..", screen_x1,
-         ", y ", screen_y0, "..", screen_y1));
-echo(str("screen clearance -- to nearest lid header: ", screen_to_header_mm,
-         "mm, to vent zone: ", screen_to_vent_mm, "mm"));
-assert(screen_to_header_mm > 0,
-       str("screen overlaps a lid header cutout by ", -screen_to_header_mm, "mm"));
-assert(screen_to_vent_mm > 0,
-       str("screen overlaps the FPGA vent zone by ", -screen_to_vent_mm, "mm"));
-assert(screen_recess_mm < lid_thickness - 1.0,
-       str("screen recess ", screen_recess_mm, "mm leaves only ",
-           lid_thickness - screen_recess_mm, "mm of lid above it"));
 
 lip_bearing_mm = lip_ledge - fit_gap;
 echo(str("lip bearing width under board edge (mm): ", lip_bearing_mm));
