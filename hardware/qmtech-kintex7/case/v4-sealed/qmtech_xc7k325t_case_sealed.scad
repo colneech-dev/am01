@@ -467,7 +467,10 @@ lid_top_cutouts_mm = [
     ["J11", 90,  0, 16, 12],
     ["J12", 110, 0, 16, 12],
     ["J13", 130, 0, 16, 12],
-    ["SW4", 148, 14, 12, 8],
+    // SW4 removed: it is a right-WALL cutout now, measured on the board.
+    // This lid hole was a leftover from when it was thought to be on the
+    // top edge, and at [148,14] it does not match the measured position
+    // either -- it would simply have been a spurious hole in the lid.
 ];
 // Small round holes for the two user push-buttons (SW2/SW3), near JP5
 // on the board's lower-right, above the bottom-wall GPIO header window.
@@ -485,7 +488,9 @@ lid_button_d = 6;
 
 // DS18B20 sensor cable pass-through, tucked into the gap between the
 // display and the FPGA vent zone (checked clear of both below).
-sensor_hole_center_mm = [70, 50];
+// Moved clear of the screen. At [70,50] this fell INSIDE the screen's
+// 82x50 footprint, so it would have been a hole into the back of the display.
+sensor_hole_center_mm = [90, 80];
 sensor_hole_d = 5;
 
 // ---- Display mounting (KMRTM28028-SPI 2.8" ILI9341+XPT2046, see design
@@ -503,13 +508,34 @@ sensor_hole_d = 5;
 //   PCB footprint  x=[8.5,61.5]  y=[7,83]   -- clear of vent zone (61.5 < 95.5)
 //   Active cutout  x=[13,57]     y=[16,74]  -- within board 0-160 x 0-90
 //   Mount holes    x=[11.5,58.5] y=[10,80]
-display_pcb_mm       = [53, 76];  // W x H, ROTATED from the module's native 76x53
-display_active_mm    = [44, 58];  // ditto, rotated
-display_hole_spacing_mm = [47, 70]; // ditto, rotated
-display_center_mm    = [35, 45];  // left region of the lid, clear of vent zone/headers
-display_standoff_od  = 6.0;
-display_standoff_ht  = 4.0;       // clears the module's underside components
-display_screw_pilot_od = 2.2;     // M2/M2.5 self-tap pilot
+// SCREEN, measured: an 82 x 50mm module, 6mm thick at its deepest, with a
+// 70 x 50mm viewable area. The 6mm strip down each side is a 2mm-thick flange
+// -- 82 less 70 is 12, i.e. 6 per side.
+//
+// Note the module and the viewable area are BOTH 50mm in Y, so the flanges
+// exist only on the left and right. The window therefore spans the module's
+// full height and the recess below leaves two side ledges, not a closed
+// picture frame.
+screen_module_mm  = [82, 50];   // overall outline
+screen_window_mm  = [70, 50];   // viewable area -> the through-window
+screen_body_mm    = 6;          // deepest point, protrudes into the case
+screen_flange_mm  = 2;          // flange thickness
+
+// The recess is deliberately SHALLOWER than the 2mm flange. A pocket the full
+// flange depth would leave only lid_thickness - 2 = 0.4mm of lid above it,
+// which is fragile and would very likely tear during printing or handling.
+// 1.0mm locates the module laterally and still leaves 1.4mm of lid.
+screen_recess_mm  = 1.0;
+screen_fit_gap    = 0.5;        // per side, module to pocket
+
+// At the HDMI end of the lid, as asked. Board-local; 41 is as far right as it
+// can sit while clearing J11's lid cutout, which starts at x=82.
+screen_center_mm  = [39, 45];
+
+// No screw posts. The module's mounting-hole positions have not been measured,
+// and inventing them is exactly what produced the standoffs and bosses that
+// stopped earlier revisions assembling. The recess locates it; fixing is by
+// adhesive or a bracket until real hole positions exist.
 
 // ============================================================
 // Derived geometry
@@ -824,26 +850,27 @@ module lid_sensor_passthrough() {
         cylinder(h = lid_thickness + 2, d = sensor_hole_d, $fn = 24);
 }
 
-module lid_display_cutout() {
-    cx = board_origin[0] + display_center_mm[0];
-    cy = board_y(display_center_mm[1]);
-    translate([cx - display_active_mm[0]/2, cy - display_active_mm[1]/2, -1])
-        cube([display_active_mm[0], display_active_mm[1], lid_thickness + 2]);
-}
+// Through-window for the viewable area, plus a shallow locating recess in the
+// lid's UNDERSIDE for the side flanges. The module goes in from inside the
+// case; its flanges bear on the recess and the screen looks out through the
+// window.
+module lid_screen_cutout() {
+    cx = board_origin[0] + screen_center_mm[0];
+    cy = board_y(screen_center_mm[1]);
 
-module lid_display_standoffs() {
-    fuse_eps = 0.05; // overlap into lid_panel, same reason as lid_skirt() above
-    cx = board_origin[0] + display_center_mm[0];
-    cy = board_y(display_center_mm[1]);
-    hx = display_hole_spacing_mm[0]/2;
-    hy = display_hole_spacing_mm[1]/2;
-    for (p = [[-hx,-hy],[hx,-hy],[-hx,hy],[hx,hy]])
-        translate([cx + p[0], cy + p[1], lid_thickness - fuse_eps])
-            difference() {
-                cylinder(h = display_standoff_ht + fuse_eps, d = display_standoff_od, $fn = 24);
-                translate([0,0,-1])
-                    cylinder(h = display_standoff_ht + fuse_eps + 2, d = display_screw_pilot_od, $fn = 16);
-            }
+    // viewable area, all the way through
+    translate([cx - (screen_window_mm[0] + screen_fit_gap)/2,
+               cy - (screen_window_mm[1] + screen_fit_gap)/2, -1])
+        cube([screen_window_mm[0] + screen_fit_gap,
+              screen_window_mm[1] + screen_fit_gap,
+              lid_thickness + 2]);
+
+    // flange recess, cut UP from the underside (z=0) only
+    translate([cx - (screen_module_mm[0] + 2*screen_fit_gap)/2,
+               cy - (screen_module_mm[1] + 2*screen_fit_gap)/2, -0.001])
+        cube([screen_module_mm[0] + 2*screen_fit_gap,
+              screen_module_mm[1] + 2*screen_fit_gap,
+              screen_recess_mm]);
 }
 
 module lid() {
@@ -859,9 +886,8 @@ module lid() {
             lid_buttons();
             lid_fpga_vent_holes();
             lid_sensor_passthrough();
-            lid_display_cutout();
+            lid_screen_cutout();
         }
-        lid_display_standoffs();
     }
 }
 
@@ -949,6 +975,37 @@ assert(left_sep_mm > 0.8,
 assert(bottom_sep_mm > 0.8,
        str("bottom-wall cutouts merge or nearly touch (", bottom_sep_mm,
            "mm between them). Reduce cutout_margin."));
+
+// Assertion: the screen must not overlap anything else on the lid.
+//
+// It is 82mm wide on a lid whose next feature (J11 pin cutout) starts at
+// board-local x=82, so there is very little room and a small nudge would put
+// them into each other. The vent grid over the FPGA is the other neighbour.
+// Both are silent failures in a preview -- overlapping cutouts just merge --
+// so they are checked rather than eyeballed.
+screen_x0 = screen_center_mm[0] - screen_module_mm[0]/2;
+screen_x1 = screen_center_mm[0] + screen_module_mm[0]/2;
+screen_y0 = screen_center_mm[1] - screen_module_mm[1]/2;
+screen_y1 = screen_center_mm[1] + screen_module_mm[1]/2;
+
+// nearest lid header cutout to the right of the screen
+lid_cut_x0 = min([ for (c = lid_top_cutouts_mm) c[1] - c[3]/2 ]);
+screen_to_header_mm = lid_cut_x0 - screen_x1;
+
+vent_x0 = heatsink_center_mm[0] - vent_zone_mm[0]/2;
+screen_to_vent_mm = vent_x0 - screen_x1;
+
+echo(str("screen spans board x ", screen_x0, "..", screen_x1,
+         ", y ", screen_y0, "..", screen_y1));
+echo(str("screen clearance -- to nearest lid header: ", screen_to_header_mm,
+         "mm, to vent zone: ", screen_to_vent_mm, "mm"));
+assert(screen_to_header_mm > 0,
+       str("screen overlaps a lid header cutout by ", -screen_to_header_mm, "mm"));
+assert(screen_to_vent_mm > 0,
+       str("screen overlaps the FPGA vent zone by ", -screen_to_vent_mm, "mm"));
+assert(screen_recess_mm < lid_thickness - 1.0,
+       str("screen recess ", screen_recess_mm, "mm leaves only ",
+           lid_thickness - screen_recess_mm, "mm of lid above it"));
 
 lip_bearing_mm = lip_ledge - fit_gap;
 echo(str("lip bearing width under board edge (mm): ", lip_bearing_mm));
