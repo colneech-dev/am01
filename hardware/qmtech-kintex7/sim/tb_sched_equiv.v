@@ -147,10 +147,19 @@ module tb;
                 mismatches = mismatches + 1;
             end
 
-        if (k < MIN_SEQ)
-            $display("  RESULT: INCONCLUSIVE -- only %0d results, need >= %0d", k, MIN_SEQ);
-        else if (mismatches != 0)
+        // Order matters. A detected mismatch is a FAIL at ANY sample size --
+        // one differing result disproves equivalence. Too few samples only
+        // means there is not enough evidence to declare a PASS.
+        //
+        // Testing k < MIN_SEQ first (as this did) made +blocks=1 print
+        // INCONCLUSIVE even when the single result mismatched, so the verdict
+        // read identically before and after the round-key bug was fixed. The
+        // bug was caught only because the separate MISMATCH line prints too.
+        if (mismatches != 0)
             $display("  RESULT: FAIL -- %0d of %0d differ", mismatches, k);
+        else if (k < MIN_SEQ)
+            $display("  RESULT: INCONCLUSIVE -- only %0d results, need >= %0d (no mismatches seen)",
+                     k, MIN_SEQ);
         else
             $display("  RESULT: PASS -- %0d results identical", k);
         $finish;
