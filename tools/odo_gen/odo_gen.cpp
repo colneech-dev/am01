@@ -185,7 +185,25 @@ void OdoVerilog::Generate(int throughput, const char* prefix, FILE* f) const
     }
 
     int unrolling = (ROUNDS-1) / throughput + 1;
-    int extra_delay = 0;
+    // Start at 1, not 0. extra_delay adds REGISTERED pass-through stages
+    // (see the `assign next[i+unrolling] = state[i+unrolling]` loop below),
+    // and those stages sit in the recirculation path from the last round back
+    // to state[0]. With extra_delay=0 that feedback crosses the entire design
+    // combinationally; the rounds are spread across the die by the BRAM
+    // floorplan, so it becomes the critical path.
+    //
+    // Measured, six seeds each, identical apart from this: extra_delay=1 gives
+    // 104-120 MHz and a critical path ending mid-pipeline at next[10..16];
+    // extra_delay=0 gives 81-85 MHz and a critical path ending at state[0] on
+    // EVERY seed. A 31 MHz median difference with no distribution overlap.
+    //
+    // The search previously began at 0 and took the first coprime value, so
+    // whether a relay existed was arithmetic luck -- throughput 4 with 2
+    // cycles/round happened to be bumped to 1, while 3 cycles/round accepted 0.
+    //
+    // Costs one pipeline stage of latency, which does not affect hashrate:
+    // THROUGHPUT is clocks-per-hash and the core self-reports `write`.
+    int extra_delay = 1;
     while (gcd(throughput, RoundCycles()*unrolling+extra_delay) != 1)
         extra_delay++;
     int periods = (ROUNDS-1) / unrolling + 1;

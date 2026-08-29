@@ -220,6 +220,15 @@ if [ "${BRAM_OUTREG:-0}" = "1" ]; then
     if python3 "$(dirname "$0")/absorb_bram_outreg.py" \
             "$OUT/$TOP.json" "$OUT/$TOP.outreg.json" \
             --report "$OUT/$TOP.outreg.txt"; then
+        # Keep the pre-absorption netlist. Overwriting it destroys the only
+        # control that isolates what absorption did: --bram-out-reg changes the
+        # RTL SCHEDULE too (2 -> 3 cycles per round, extra_delay 1 -> 0), so
+        # comparing an absorbed build against a baseline build confounds the two
+        # and cannot attribute the difference. The honest comparison is this
+        # netlist with and without absorption, and that needs both to survive.
+        # Learned the hard way: the first A/B measured the pair together, and
+        # recovering the control meant a 52-minute resynthesis.
+        cp "$OUT/$TOP.json" "$OUT/$TOP.preabsorb.json"
         mv "$OUT/$TOP.outreg.json" "$OUT/$TOP.json"
     else
         echo "    absorption found nothing to do; continuing unchanged" >&2
