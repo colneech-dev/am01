@@ -912,3 +912,85 @@ folded into a script is not exercised until something runs that script.
 
 `REUSE_JSON` (added the same day) makes build.sh cheap enough to run for real,
 which is what would have caught this on day one.
+
+---
+
+## CORRECTION: the BRAM output register is refuted, and so were both my diagnoses
+
+Written after the controls finally existed. Two confident explanations in this
+document were wrong; both are struck through rather than deleted.
+
+### The measurements
+
+Six seeds each unless noted, identical apart from the stated variable:
+
+| variant | schedule | 2nd register | n | median | all |
+|---|---|---|---|---|---|
+| `base`   | 2-cyc, `extra_delay=1` | none | 6 | **114.81** | 104.22 111.54 114.81 117.44 117.86 120.19 |
+| `outreg` | 3-cyc, `extra_delay=0` | in BRAM (absorbed) | 6 | **82.90** | 81.49 82.29 82.90 83.11 83.32 85.16 |
+| `noabs`  | 3-cyc, `extra_delay=0` | in fabric | 1+ | **112.42** | 112.42 |
+
+`noabs` differs from `outreg` **only** by absorption. 112.42 vs 82.90.
+
+### ~~"extra_delay=0 removes the recirculation relay and costs 31 MHz"~~ WRONG
+
+`noabs` runs that exact `extra_delay=0` schedule and reaches 112.42, inside
+base's range. The schedule is roughly neutral (114.81 vs 112.42). The commit
+`3422a12` message asserts this explanation; the code change it makes is
+harmless and arguably still good practice, but its stated justification does
+not hold.
+
+### ~~"DOA_REG=1 saves 1.6 ns (2.454 -> 0.882) so absorbing is a win"~~ WRONG PREMISE
+
+The comparison was against the wrong alternative. Three clock-to-Q figures, all
+measured in these runs:
+
+| register | clk->Q |
+|---|---|
+| fabric flip-flop | **0.1 ns** |
+| BRAM output register (`DOA_REG=1`) | **0.9 ns** |
+| BRAM unregistered | **2.1 ns** |
+
+`--bram-out-reg` adds a second register **either way**. The only question is
+where it lives. Unabsorbed it is a fabric flop at 0.1 ns that the placer may put
+anywhere; absorbed it becomes the BRAM output register at 0.9 ns, pinned to the
+BRAM site. **Absorption costs 0.8 ns of clock-to-Q and loses placement
+freedom.** It could never have won.
+
+The arithmetic closes: 0.8 ns slower register + ~2.5 ns of routing from losing a
+placeable relay (routing 8.1 -> 10.2 ns) ~= the observed 12.1 vs 8.9 ns.
+
+`DOA_REG=1` beats an unregistered BRAM. It loses to a fabric flop. Since the
+RTL that enables it also creates a fabric flop, the win is unreachable.
+
+### Status of the work
+
+* `absorb_bram_outreg.py` / `verify_absorb_outreg.py` -- correct, verified, and
+  **not to be merged into the flow**. Kept as a documented negative result.
+  `BRAM_OUTREG` stays default-off in build.sh.
+* The yosys gap is real and still worth reporting upstream as a *capability*
+  gap, but **not** with a performance claim attached -- on this design it makes
+  things worse.
+* `odo_gen --bram-out-reg` -- no reason to use it.
+
+### THE ACTUAL CONSTRAINT: this design is wire-limited, not logic-limited
+
+The most useful thing to come out of this. Critical-path splits:
+
+| variant | logic | routing | share routing |
+|---|---|---|---|
+| `base`  | 2.6 ns | 5.7-6.4 ns | **~70%** |
+| `noabs` | 0.8 ns | 8.1 ns | **~91%** |
+
+`noabs` traded 1.8 ns of logic for 2.2 ns of routing and came out behind.
+**Adding registers does not shorten wires.** Every remaining lever has to reduce
+physical distance, not logic depth. That retires a whole class of ideas
+(pipelining, register retiming, the output register) and points at placement.
+
+### Method lesson
+
+Both wrong diagnoses came from reasoning about a mechanism before building the
+control that could refute it. The control -- same RTL, absorption the only
+variable -- was cheap and existed all along; it was simply built last, after two
+confident explanations had already been written into this file. **Build the
+control first, especially when a mechanism feels obvious.**
