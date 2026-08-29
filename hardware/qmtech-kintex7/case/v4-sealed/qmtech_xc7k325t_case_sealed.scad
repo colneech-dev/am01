@@ -385,7 +385,18 @@ bottom_connector_positions_mm = [
     // sitting to the RIGHT of where they belong. Two 15-16mm connectors
     // displaced by most of their own width is why the printed case would not
     // line up here.
-    ["USB_A_J6",      21.5, 15, 17],   // 2 stacked USB-A ports
+    // LOWER PORT DELIBERATELY BLANKED. J6 is a stacked pair and the lower
+    // socket is used internally: a right-angle adapter turns the plug upward
+    // so the FT232H sits inside the case above the board, wired to J1 for
+    // openFPGALoader. Leaving that socket open to the outside would invite
+    // someone to plug into a port that already has something in it.
+    //
+    // A dual USB-A stack is 17mm tall overall, so the upper socket occupies
+    // roughly the top 8mm. The window therefore starts 9mm above the board
+    // surface instead of at it. Adjust the 9 and the 8 together if the split
+    // is not where these assume -- they were taken from the stack's overall
+    // height, not measured port by port.
+    ["USB_A_J6",      21.5, 15,  8, 9],   // upper socket only; lower is internal
     ["USB_A_J7",      41.0, 16, 17],   // 2 more stacked USB-A ports
 
     // ETHERNET RESTORED. v4.1 deleted this cutout after concluding the board
@@ -676,11 +687,17 @@ module left_edge_cutouts() {
 // expansion header -- see bottom_connector_positions_mm above. Same
 // oversized-rectangle-through-the-wall approach as left_edge_cutouts(),
 // now also height-capped the same way.
+// Connector rows may carry an optional 5th field: how far ABOVE the board's
+// top surface the cutout starts. Without it a cutout begins at the board
+// surface, which is right for a connector standing on the board. It exists so
+// one port of a stacked pair can be left solid -- see USB_A_J6 below.
+function cutout_z_from(c) = (len(c) > 4) ? c[4] : 0;
+
 module bottom_edge_cutouts() {
     for (c = bottom_connector_positions_mm) {
         x_center = board_origin[0] + c[1];
         w = c[2] + 2*cutout_margin;
-        translate([x_center - w/2, -1, wall_cutout_z0()])
+        translate([x_center - w/2, -1, wall_cutout_z0() + cutout_z_from(c)])
             cube([w, wall_thickness + 2, wall_cutout_h(c[3])]);
     }
 }
