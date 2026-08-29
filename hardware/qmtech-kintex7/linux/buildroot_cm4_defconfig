@@ -132,7 +132,24 @@ BR2_PACKAGE_LINUX_FIRMWARE_BRCM_BCM43XX=y
 # than linux-firmware BCM43XXX. Mutually exclusive: the _WIFI sub-option
 # depends on !BR2_PACKAGE_LINUX_FIRMWARE_BRCM_BCM43XXX.
 #
-# This was changed while chasing a WiFi fault and it did NOT fix it. The
+# UPDATE 2026-08-30: WiFi now works -- associated on 5GHz, DHCP, and pinging
+# the internet. Several things changed at once (this firmware package, power
+# save off from boot, WPA3 support, and correct credentials supplied through
+# /boot), so no single one of them can be credited.
+#
+# What CAN be said is that the undervoltage was NOT the cause, though it was
+# asserted as the root cause at the time. get_throttled still reads 0x50005 --
+# under-volted and throttling -- and WiFi works regardless. The likeliest
+# culprits are the credentials and power save: under power save the AP buffers
+# frames for DTIM delivery, and losing EAPOL there would explain the zero-EAPOL
+# signature seen on every AP tried, including a phone hotspot.
+#
+# The original note follows, and its narrow claim still holds: this package
+# ships the same Cypress .bin. Its nvram may differ, which is the one way it
+# could have contributed.
+#
+# This was changed while chasing a WiFi fault and it did NOT fix it on its own.
+# The
 # theory was that the Cypress blob (cyfmac43455-sdio.bin, "7.45.234 CY")
 # was wrong for the Raspberry Pi kernel. It is not: this package ships the
 # SAME blob -- its brcmfmac43455-sdio.bin is itself a symlink to
