@@ -13,3 +13,4 @@ toolchain.local
 # WiFi credentials for the CM4 miner -- keep the PSK out of the repo.
 # Ships as a template; fill it in locally or on the running board.
 hardware/qmtech-kintex7/linux/overlay/etc/wpa_supplicant/wpa_supplicant-wlan0.conf
+hardware/qmtech-kintex7/openxc7/gen/
