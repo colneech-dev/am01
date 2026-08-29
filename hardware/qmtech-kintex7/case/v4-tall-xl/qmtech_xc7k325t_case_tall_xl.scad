@@ -224,8 +224,23 @@ heatsink_margin_mm = case_interior_clearance_mm - heatsink_total_clearance_mm; /
 // around a part that already ran too hot to touch was the wrong default; the
 // grid is cheap to print and costs nothing but a little rigidity.
 vent_zone_mm = [board_length, board_width];
-vent_hole_d       = 3;
-vent_hole_pitch   = 7; // center-to-center spacing
+// HEXAGONS, hex-packed. Circles in a square grid gave about 14% open area:
+// a circle leaves four wasted corners against its neighbours, and square
+// packing wastes more again. A hexagon tiles the plane completely, so the only
+// material left is the web itself.
+//
+// Bridging is not a consideration -- the lid prints flat, so every hole is
+// just a perimeter in each layer whatever its shape. What limits this is web
+// strength and print time: below about 1.2mm the webs get fragile, and many
+// small holes means a lot of perimeters.
+//
+// vent_hole_d is ACROSS FLATS for a hex, or the diameter for a circle. The
+// pitch is centre to centre along a row; rows are staggered by half a pitch
+// and spaced pitch*sin(60), which is what makes it hex-packed rather than
+// square.
+vent_shape        = "hex";   // "hex" or "circle"
+vent_hole_d       = 3.4;     // across flats
+vent_hole_pitch   = 4.6;     // centre to centre -> 1.2mm webs
 
 // ---- Lid ----
 lid_skirt_depth = 3.0;   // how far the lid's alignment skirt reaches down inside the tray
@@ -1011,30 +1026,33 @@ function vent_clear_of_screen(x, y) =
 
 module lid_fpga_vent_holes() {
     if (VARIANT_VENTED) {
-        // Centred on the BOARD, not the FPGA. The grid used to be a patch
-        // over the heatsink; now that it covers the whole lid, centring it on
-        // heatsink_center_mm left a blank strip at one end and ran off the
-        // other.
         cx = board_origin[0] + board_length/2;
         cy = board_y(board_width/2);
+        row_dy = vent_hole_pitch * sin(60);
         nx = max(1, floor(vent_zone_mm[0] / vent_hole_pitch));
-        ny = max(1, floor(vent_zone_mm[1] / vent_hole_pitch));
+        ny = max(1, floor(vent_zone_mm[1] / row_dy));
         x0 = cx - (nx-1)*vent_hole_pitch/2;
-        y0 = cy - (ny-1)*vent_hole_pitch/2;
-        for (i = [0:nx-1])
-            for (j = [0:ny-1])
-                if (vent_clear_of_screen(x0 + i*vent_hole_pitch,
-                                         y0 + j*vent_hole_pitch))
-                    translate([x0 + i*vent_hole_pitch, y0 + j*vent_hole_pitch, -1])
-                        cylinder(h = lid_thickness + 2, d = vent_hole_d, $fn = 16);
+        y0 = cy - (ny-1)*row_dy/2;
+        // circle(d=..., $fn=6) is measured across CORNERS, so scale up to get
+        // the requested across-flats dimension.
+        hex_d = vent_hole_d * 2 / sqrt(3);
+        for (j = [0:ny-1]) {
+            // stagger alternate rows by half a pitch -- this is what makes the
+            // packing hexagonal rather than square
+            xoff = (j % 2 == 0) ? 0 : vent_hole_pitch/2;
+            for (i = [0:nx-1]) {
+                px = x0 + i*vent_hole_pitch + xoff;
+                py = y0 + j*row_dy;
+                if (vent_clear_of_screen(px, py))
+                    translate([px, py, -1])
+                        linear_extrude(height = lid_thickness + 2)
+                            rotate([0, 0, 30])
+                                circle(d = (vent_shape == "hex") ? hex_d : vent_hole_d,
+                                       $fn = (vent_shape == "hex") ? 6 : 16);
+            }
+        }
     }
 }
-
-
-// Through-window for the viewable area, plus a shallow locating recess in the
-// lid's UNDERSIDE for the side flanges. The module goes in from inside the
-// case; its flanges bear on the recess and the screen looks out through the
-// window.
 
 module lid() {
     union() {
@@ -1147,6 +1165,16 @@ echo(str("FT232H spans board x ", ft232h_x0, "..", ft232h_x1,
          ", reaching ", ft232h_y1, "mm off the top wall; heatsink zone y starts ",
          hs_y0));
 assert(!ft232h_overlaps, "FT232H overlaps the heatsink zone in both axes");
+
+// Open area of the vent grid, so a change to the hole size or pitch shows
+// its effect immediately instead of being guessed at.
+vent_cell_area = (sqrt(3)/2) * vent_hole_pitch * vent_hole_pitch;
+vent_open_area = (vent_shape == "hex")
+    ? (sqrt(3)/2) * vent_hole_d * vent_hole_d
+    : PI/4 * vent_hole_d * vent_hole_d;
+echo(str("vent: ", vent_shape, " ", vent_hole_d, "mm at ", vent_hole_pitch,
+         "mm pitch -> web ", vent_hole_pitch - vent_hole_d, "mm, open area ",
+         round(1000 * vent_open_area / vent_cell_area)/10, "%"));
 
 lip_bearing_mm = lip_ledge - fit_gap;
 echo(str("lip bearing width under board edge (mm): ", lip_bearing_mm));
