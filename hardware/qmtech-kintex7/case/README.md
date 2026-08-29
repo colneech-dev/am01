@@ -1,9 +1,74 @@
-# QMTECH XC7K325T dev board -- 3D-printable case (v4.1, real I/O)
+# QMTECH XC7K325T dev board -- 3D-printable case (v4.2, assembly fixes)
 
 A two-part case (base tray + closed lid) for the
 [QMTECH XC7K325T dev board](../README.md), sized from the vendor's own
 real ECAD dimension export. Parametric OpenSCAD, FDM-print friendly (no
 supports needed).
+
+## v4.2: the printed case would not assemble
+
+v4.1 was printed and the board would not go into the tray, and the lid
+would not close. Both came from the same two geometry bugs, neither of
+which any previous "verified numerically" pass caught, because every one
+of those checks compared the model against *itself* rather than against
+the board:
+
+- **The four lid-screw bosses stood inside the board's footprint.** They
+  sat at `wall_thickness + 3` = 5.4mm in from the outer edge, as
+  full-height (floor-to-lid) pillars of `boss_od` 7mm. With `board_origin`
+  at `wall_thickness + fit_gap`, each boss centre was only **3.39mm** from
+  the board's corner -- less than its own **3.5mm radius**. So each boss
+  intruded about **1.1mm** into the board area, over the full height of
+  the case. A rigid PCB with square corners cannot be lowered past four
+  such pillars. That is why the board would not fit; the board then sat
+  proud on top of them, which is why the lid would not close. The old
+  comment ("bosses sit just inside the wall corners") reasoned only about
+  boss-vs-standoff interference and never checked boss-vs-board.
+
+  **Fixed:** the bosses are now **external corner ears**, 1mm outside each
+  case corner. They clear the interior corner by 4.81mm and the board
+  corner by 5.66mm, both well past the 3.5mm radius, while still
+  overlapping the corner enough to fuse to the wall. Nothing reaches into
+  the interior at all now. The case grows 4.5mm at each corner and not
+  anywhere else.
+
+- **The retaining lip supported nothing.** It built its ring between
+  `wall_thickness - lip_ledge` (0.9mm) and `wall_thickness` (2.4mm) --
+  entirely *within* the wall's own thickness, so it added no material to
+  the interior. It was also extruded upward *from* `lip_z`, level with the
+  board rather than beneath it. Design note 7 called this "the primary
+  retention"; it had been a no-op since v1, so the board's only support
+  was the four corner standoffs, which are themselves at an unverified
+  position. **Fixed:** the ring now runs inward from the inner wall face
+  and sits directly below `lip_z`, giving 1.8mm of bearing surface under
+  the board edge all round.
+
+Two supporting changes came with those:
+
+- `fit_gap` 0.6mm -> **1.2mm** per side. Across a 160mm span, FDM
+  shrinkage plus elephant's foot eats most of 0.6mm and the board fouls
+  the walls before it reaches the lip. `lip_ledge` went 1.5 -> 3.0 to keep
+  real bearing width once the gap grew.
+- **Corner standoffs are now OFF by default.** They were at a generic 5mm
+  inset that design note 7 admitted was never transcribed from the
+  drawing. The real mounting holes are on an **82.4mm** vertical pitch
+  (`Dimension(Board_Top_View).pdf`), i.e. 3.8mm in from the top and bottom
+  edges -- so a 6mm post at a 5mm inset misses the hole and lands on the
+  underside of the PCB, holding the board up instead of locating it. Set
+  `standoff_xy_mm` to your own measured hole positions and flip
+  `enable_standoffs` back on.
+
+Both bugs are now **hard `assert()`s**, not echoes -- the render fails
+rather than quietly producing an unassemblable STL again:
+
+```
+ECHO: "lid-screw boss clearance to board edge (mm): 3.00538"
+ECHO: "lip bearing width under board edge (mm): 1.8"
+```
+
+**Still not verified against the real board:** the connector cutout
+positions, and the RJ45 opening is still missing entirely (see the
+retraction below). This release fixes assembly, not I/O alignment.
 
 ## v4.1: the I/O is now real, not a photo guess
 
@@ -197,13 +262,17 @@ listing.
    `bottom_connector_positions_mm` gives it a real cutout to route a
    cable through. No RTL/driver exists yet either way.
 7. **Board retention and standoffs**: a perimeter lip is the primary
-   retention (works regardless of where the real mounting holes are), 4
-   corner standoffs are a secondary generic-default fixation, not
-   transcribed with confidence from any dimension drawing.
+   retention (works regardless of where the real mounting holes are).
+   **It was a no-op until v4.2** -- see the v4.2 section; it now gives
+   1.8mm of bearing under the board edge, asserted at render time. The 4
+   corner standoffs were a secondary generic-default fixation, never
+   transcribed with confidence from any dimension drawing, and are **off
+   by default now** for exactly that reason.
 8. **Lid attachment**: a friction-fit alignment skirt seats inside the
    tray's top opening, secured by 4 corner screws (M3 self-tap or
-   heat-set insert) into full-height bosses, separate from the shorter
-   board-support standoffs.
+   heat-set insert) into full-height bosses. Those bosses are **outside
+   the walls** as of v4.2 -- as internal corner pillars they blocked the
+   board from seating at all.
 9. **Square corners.** `hull()`-based rounding previously produced CGAL
    boolean geometry where cutout subtraction silently didn't intersect --
    confirmed by A/B vertex-count testing back in v1. These files never
@@ -229,6 +298,13 @@ listing.
       continuous slot rather than three separate windows -- expected
       given how close J14/J6/J7 sit to each other on the real board, not
       a bug; some enclosures do this deliberately for a USB cluster.
+    - **v4.2: the numeric checks above were the problem, not the
+      safeguard.** Every one of them compared the model against itself
+      (does this cut change the vertex count? is this margin positive?),
+      so a boss standing inside the board's footprint and a lip made of
+      no material both passed cleanly through four revisions and a print.
+      The two new asserts measure geometry against the *board* instead,
+      which is the only thing that could have caught either.
     - v4.1 (2nd pass): every wall cutout back to v1 notched through to
       the wall's own top edge instead of stopping inside solid material
       -- "not full sides". Fixed by capping cutout height with
@@ -260,7 +336,12 @@ this close to one, especially in the Sealed variant with no venting.
   variants (Sealed / Vented / Tall-XL) instead of one fixed geometry.
   I/O cutouts were still estimates read off a manual photo, all on one
   wall.
-- **v4.1 (current)**: replaced the estimated I/O with real positions
+- **v4.2 (current)**: fixed the two bugs that made a printed v4.1
+  physically unassemblable -- lid-screw bosses standing inside the
+  board's footprint, and a retaining lip that had never added any
+  material. Both are asserted at render time now. Corner standoffs off
+  by default, `fit_gap` and `lip_ledge` opened up for FDM reality.
+- **v4.1**: replaced the estimated I/O with real positions
   read from the vendor's own schematic + ECAD placement drawing. Removed
   the RJ45 port (**wrongly -- see the retraction above; the jack is
   populated and its cutout still needs restoring**), added the 2 missing

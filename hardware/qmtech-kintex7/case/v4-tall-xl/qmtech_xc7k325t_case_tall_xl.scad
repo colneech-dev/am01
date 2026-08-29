@@ -41,12 +41,17 @@
 // 0. WHAT CHANGED FROM v4 (real I/O, not estimates): reading the
 //    vendor's actual schematic + ECAD drawing instead of guessing off
 //    a manual photo turned up real errors, not just imprecision:
-//      - This board has NO Ethernet jack. The schematic's Ethernet
-//        section (HR911130A RJ45 magjack, TRD0-3 pairs straight from
-//        the CM4's B2B connector) is a reference design block that
-//        isn't populated on this board -- no matching footprint exists
-//        anywhere in the vendor's own placement drawing. v4's "RJ45"
-//        cutout is REMOVED.
+//      - RETRACTED, AND STILL A DEFECT: v4.1 claimed "this board has NO
+//        Ethernet jack" and deleted the RJ45 cutout. That was wrong. The
+//        HR911130A magjack IS populated -- it appears in every board
+//        photograph in the user manual (Figure 2-3 and the CM4-docked
+//        photo in section 2.2.9), and 2.2.9 lists "ethernet interface"
+//        among the CM4 interfaces this board provides. Absence from one
+//        placement drawing was treated as evidence of absence. The
+//        cutout has NOT been restored yet -- doing that needs the jack's
+//        real position, and this file has already been wrong once from
+//        reading positions off a drawing. Measure it. Until then a
+//        printed case covers the Ethernet port.
 //      - There are FOUR USB-A ports, not two: J6 and J7 are each a
 //        stacked "Dual USB-A" connector (2 ports per shell), driven by
 //        a real USB2514QFN36 hub chip off the CM4's single USB2 OTG
@@ -162,8 +167,15 @@ board_width     = 90;    // Y
 board_thickness = 1.6;   // standard PCB thickness
 
 // ---- Fit tolerances ----
-fit_gap        = 0.6;    // extra clearance around the board footprint, all sides
-lip_ledge      = 1.5;    // how far the retaining lip overlaps the board edge
+// 0.6 was too tight to actually assemble: across a 160mm span, FDM
+// shrinkage plus elephant's foot on the first layers eats most of it, and
+// the board fouls the walls before it reaches the lip. 1.2mm per side is
+// still a snug fit and leaves the lip plenty of overlap (lip_ledge 1.5).
+fit_gap        = 1.2;    // extra clearance around the board footprint, all sides
+// The lip must reach past the board's edge by more than fit_gap, or there
+// is nothing under the board to carry it. At fit_gap 1.2 a 1.5mm ledge
+// would leave only 0.3mm of bearing surface; 3.0 leaves 1.8mm all round.
+lip_ledge      = 3.0;    // how far the lip reaches in from the inner wall face
 lip_thickness  = 2.0;    // Z height of the lip step the board rests on
 
 // ---- Tray shell ----
@@ -216,14 +228,44 @@ lid_skirt_depth = 3.0;   // how far the lid's alignment skirt reaches down insid
 lid_fit_clearance = 0.3; // per-side gap between skirt and tray inner wall
 
 // ---- Corner standoffs (board support, short -- see v1 note 3) ----
-enable_standoffs   = true;
-standoff_inset_mm  = 5;
+// OFF by default now. These were placed at a generic 5mm inset that was
+// never transcribed from the dimension drawing (old design note 7 admitted
+// as much). The real board's mounting holes are on an 82.4mm vertical
+// pitch (Dimension(Board_Top_View).pdf), i.e. 3.8mm in from the top and
+// bottom edges -- so a 6mm-diameter post at a 5mm inset misses the hole
+// and lands on the underside of the PCB instead, holding the board up
+// rather than locating it. The perimeter lip already retains the board on
+// all four sides, which is what design note 7 calls primary retention.
+// Re-enable only after measuring your own board's hole positions, and set
+// standoff_xy_mm to them.
+enable_standoffs   = false;
+standoff_xy_mm     = [];   // board-local [x,y] per hole; [] = use the corner inset
+standoff_inset_mm  = 5;    // fallback only, used when standoff_xy_mm is empty
 standoff_od        = 6.0;
 standoff_pilot_od  = 2.6;
 
-// ---- Corner lid-screw bosses (full height, separate from the above) ----
+// ---- Corner lid-screw bosses -----------------------------------------
+// These are now EXTERNAL ears, outside the case walls.
+//
+// They used to sit at boss_inset = wall_thickness + 3 = 5.4mm in from the
+// outer edge, as full-height (wall_height + floor_thickness) pillars. With
+// board_origin at wall_thickness + fit_gap, that put a 7mm-diameter pillar
+// centre only 3.39mm from the board's own corner -- less than its 3.5mm
+// radius. Each of the four bosses therefore stood about 1.1mm inside the
+// board's footprint, floor to lid. A rigid PCB with square corners cannot
+// be lowered past four such pillars: this is why the board would not go
+// into the tray, and why it then sat proud and stopped the lid closing.
+// The old comment ("bosses sit just inside the wall corners") reasoned
+// about boss-vs-standoff interference and never checked boss-vs-board.
+//
+// Moving the boss centres 1mm OUTSIDE each case corner puts them 4.81mm
+// from the interior corner and 5.66mm from the board corner, both
+// comfortably clear of the 3.5mm radius, while still overlapping the
+// corner solidly enough to fuse to the wall. Nothing intrudes on the
+// interior at all now.
 boss_od       = 7.0;
 boss_pilot_od = 2.6;   // M3 self-tap/heat-set pilot
+boss_ear_offset = 1.0; // how far outside each case corner the boss centre sits
 lid_screw_clearance_od = 3.4; // clearance hole through the lid itself
 
 // ---- Wall cutouts: THREE walls carry real connectors (see design note
@@ -344,6 +386,18 @@ tray_height  = floor_thickness + standoff_clearance + board_thickness + wall_hei
 lip_z = floor_thickness + standoff_clearance; // board rests here
 board_origin = [wall_thickness + fit_gap, wall_thickness + fit_gap]; // XY of board's own (0,0)
 
+// Lid-screw boss centres: one per corner, boss_ear_offset OUTSIDE the case
+// so nothing reaches into the board's footprint. Defined once and used by
+// both the tray (solid bosses) and the lid (matching ears + clearance
+// holes) -- the old code hardcoded "wall_thickness + 3" separately in each
+// of those two places, so the tray and lid could drift apart silently.
+boss_positions = [
+    [-boss_ear_offset,                -boss_ear_offset],
+    [outer_length + boss_ear_offset,  -boss_ear_offset],
+    [-boss_ear_offset,                outer_width + boss_ear_offset],
+    [outer_length + boss_ear_offset,  outer_width + boss_ear_offset],
+];
+
 // ---- Base tray -----------------------------------------------------
 
 module tray_shell() {
@@ -357,19 +411,36 @@ module tray_shell() {
     }
 }
 
+// The ledge the board actually rests on, running the full perimeter.
+//
+// This was a no-op in every version up to now. It built its ring between
+// inset = wall_thickness - lip_ledge (0.9mm) and wall_thickness (2.4mm) --
+// entirely WITHIN the wall's own 0..2.4mm thickness, so it added no
+// material to the interior and supported nothing. It was also extruded
+// upward FROM lip_z, i.e. level with the board rather than beneath it.
+// With the lip doing nothing, the board's only support was the four corner
+// standoffs, which are themselves at an unverified position (see
+// enable_standoffs above) -- so the board had no reliable seat at all.
+//
+// Correct now: the ring runs inward from the inner wall face by lip_ledge,
+// and sits directly BELOW lip_z so the board's underside lands on it.
 module retaining_lip_ridge() {
-    ridge_w = lip_ledge;
-    inset = wall_thickness - ridge_w;
-    translate([0,0,lip_z])
+    // The outer rectangle deliberately spans the WHOLE footprint rather
+    // than starting at the inner wall face. Starting it exactly at
+    // wall_thickness would leave the lip touching the wall on a single
+    // coincident plane, which is the same CGAL non-fusion trap that
+    // corner_standoff()/lid_screw_boss()/lid_skirt() all use fuse_eps to
+    // avoid -- it renders as two volumes that merely abut, not one solid.
+    // Everything outside the inner wall face is inside wall material
+    // anyway, so the overlap costs nothing.
+    translate([0, 0, lip_z - lip_thickness])
     difference() {
-        translate([inset, inset, 0])
-            linear_extrude(height = lip_thickness)
-                square([outer_length - 2*inset, outer_width - 2*inset]);
-        translate([0,0,-1])
-        linear_extrude(height = lip_thickness + 2)
-            translate([wall_thickness, wall_thickness])
-                square([outer_length - 2*wall_thickness,
-                        outer_width  - 2*wall_thickness]);
+        linear_extrude(height = lip_thickness)
+            square([outer_length, outer_width]);
+        translate([wall_thickness + lip_ledge, wall_thickness + lip_ledge, -1])
+            linear_extrude(height = lip_thickness + 2)
+                square([outer_length - 2*(wall_thickness + lip_ledge),
+                        outer_width  - 2*(wall_thickness + lip_ledge)]);
     }
 }
 
@@ -455,14 +526,20 @@ function corner_xy(inset) = [
 ];
 
 module standoffs() {
-    if (enable_standoffs)
-        for (p = corner_xy(standoff_inset_mm))
+    if (enable_standoffs) {
+        pts = len(standoff_xy_mm) > 0
+            ? [ for (h = standoff_xy_mm) [board_origin[0] + h[0], board_origin[1] + h[1]] ]
+            : corner_xy(standoff_inset_mm);
+        for (p = pts)
             corner_standoff(p[0], p[1]);
+    }
 }
 
-// Full-height bosses at the same 4 corners, for lid screws. Slightly
-// further inset than the board-support standoffs so both fit without
-// interfering (bosses sit just inside the wall corners).
+// Full-height bosses for the lid screws, on EXTERNAL corner ears. See the
+// boss_ear_offset comment in the parameter block for why these are no
+// longer inside the case: as internal corner pillars they stood ~1.1mm
+// inside the board's own footprint and physically blocked the board from
+// seating.
 module lid_screw_boss(x, y) {
     fuse_eps = 0.05;
     translate([x, y, -fuse_eps])
@@ -474,13 +551,7 @@ module lid_screw_boss(x, y) {
 }
 
 module lid_screw_bosses() {
-    boss_inset = wall_thickness + 3;
-    for (p = [
-        [boss_inset, boss_inset],
-        [outer_length - boss_inset, boss_inset],
-        [boss_inset, outer_width - boss_inset],
-        [outer_length - boss_inset, outer_width - boss_inset],
-    ])
+    for (p = boss_positions)
         lid_screw_boss(p[0], p[1]);
 }
 
@@ -526,14 +597,17 @@ module lid_skirt() {
             }
 }
 
+// Matching ears on the lid, so the screws have something to pass through
+// now that the bosses are outside the walls. Same boss_positions list as
+// the tray, so the two halves cannot drift apart.
+module lid_ears() {
+    for (p = boss_positions)
+        translate([p[0], p[1], 0])
+            cylinder(h = lid_thickness, d = boss_od, $fn = 32);
+}
+
 module lid_screw_clearance_holes() {
-    boss_inset = wall_thickness + 3;
-    for (p = [
-        [boss_inset, boss_inset],
-        [outer_length - boss_inset, boss_inset],
-        [boss_inset, outer_width - boss_inset],
-        [outer_length - boss_inset, outer_width - boss_inset],
-    ])
+    for (p = boss_positions)
         translate([p[0], p[1], -1])
             cylinder(h = lid_thickness + lid_skirt_depth + 2, d = lid_screw_clearance_od, $fn = 24);
 }
@@ -613,6 +687,7 @@ module lid() {
         difference() {
             union() {
                 lid_panel();
+                lid_ears();
                 lid_skirt();
             }
             lid_screw_clearance_holes();
@@ -632,6 +707,36 @@ module lid() {
 echo(str("heatsink clearance margin (mm): ", heatsink_margin_mm,
          " [interior provides ", case_interior_clearance_mm,
          ", heatsink needs ", heatsink_total_clearance_mm, "]"));
+
+// Assertion: no lid-screw boss may reach into the board's footprint.
+// This is the bug that made the printed case unusable -- the bosses stood
+// ~1.1mm inside the board's corners, full height, so the board could not
+// be lowered in and the lid then would not close. An echo alone would have
+// scrolled past unread, so this is a hard assert: the render FAILS rather
+// than quietly producing an unassemblable STL again.
+function _dist_to_board(p) =
+    let (dx = max(board_origin[0] - p[0], 0, p[0] - (board_origin[0] + board_length)),
+         dy = max(board_origin[1] - p[1], 0, p[1] - (board_origin[1] + board_width)))
+    sqrt(dx*dx + dy*dy);
+
+boss_min_gap = min([ for (p = boss_positions) _dist_to_board(p) ]) - boss_od/2;
+echo(str("lid-screw boss clearance to board edge (mm): ", boss_min_gap));
+assert(boss_min_gap > 0,
+       str("lid-screw boss intrudes into the board footprint by ",
+           -boss_min_gap, "mm -- the board cannot be fitted. ",
+           "Increase boss_ear_offset or reduce boss_od."));
+
+// Assertion: the lip must actually reach under the board. lip_ledge is
+// measured from the inner wall face, and the board edge sits fit_gap in
+// from that face, so the real bearing width is the difference. This was
+// silently zero (worse: negative) before, which is how a lip that
+// supported nothing survived four revisions.
+lip_bearing_mm = lip_ledge - fit_gap;
+echo(str("lip bearing width under board edge (mm): ", lip_bearing_mm));
+assert(lip_bearing_mm >= 1.0,
+       str("retaining lip only reaches ", lip_bearing_mm,
+           "mm under the board edge -- not enough to carry it. ",
+           "Increase lip_ledge or reduce fit_gap."));
 
 // ============================================================
 // Output: base tray and lid side by side, print-plate friendly.
