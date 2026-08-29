@@ -511,6 +511,20 @@ tray_height  = floor_thickness + standoff_clearance + board_thickness + wall_hei
 lip_z = floor_thickness + standoff_clearance; // board rests here
 board_origin = [wall_thickness + fit_gap, wall_thickness + fit_gap]; // XY of board's own (0,0)
 
+// Board-local Y -> model Y.
+//
+// Every Y in this file is measured DOWNWARD from the board's top edge, because
+// that is how the vendor drawing is dimensioned and how the connectors were
+// measured. OpenSCAD's +Y runs the opposite way. Mapping Y straight through
+// while leaving X alone is a REFLECTION, not a rotation -- and a reflected
+// tray cannot be fixed by turning the board round, only by flipping it upside
+// down, which would put the components face-down. The printed case was a
+// mirror image of the board.
+//
+// board_y() does the flip in one place. Anything positioned from a board-local
+// Y must go through it.
+function board_y(y_from_top) = board_origin[1] + (board_width - y_from_top);
+
 // Lid-screw boss centres: one per corner, boss_ear_offset OUTSIDE the case
 // so nothing reaches into the board's footprint. Defined once and used by
 // both the tray (solid bosses) and the lid (matching ears + clearance
@@ -587,7 +601,7 @@ function wall_cutout_h(body_h) =
 
 module left_edge_cutouts() {
     for (c = connector_positions_mm) {
-        y_center = board_origin[1] + c[1];
+        y_center = board_y(c[1]);
         h = c[2] + 2*cutout_margin;
         translate([-1, y_center - h/2, wall_cutout_z0()])
             cube([wall_thickness + 2, h, wall_cutout_h(c[3])]);
@@ -602,7 +616,7 @@ module bottom_edge_cutouts() {
     for (c = bottom_connector_positions_mm) {
         x_center = board_origin[0] + c[1];
         w = c[2] + 2*cutout_margin;
-        translate([x_center - w/2, outer_width - wall_thickness - 1, wall_cutout_z0()])
+        translate([x_center - w/2, -1, wall_cutout_z0()])
             cube([w, wall_thickness + 2, wall_cutout_h(c[3])]);
     }
 }
@@ -615,7 +629,7 @@ module top_edge_cutouts() {
     for (c = top_connector_positions_mm) {
         x_center = board_origin[0] + c[1];
         w = c[2] + 2*cutout_margin;
-        translate([x_center - w/2, -1, wall_cutout_z0()])
+        translate([x_center - w/2, outer_width - wall_thickness - 1, wall_cutout_z0()])
             cube([w, wall_thickness + 2, wall_cutout_h(c[3])]);
     }
 }
@@ -630,7 +644,7 @@ module top_edge_cutouts() {
 // RIGHT wall (x = outer_length). Mirror of left_edge_cutouts().
 module right_edge_cutouts() {
     for (c = right_connector_positions_mm) {
-        y_center = board_origin[1] + c[1];
+        y_center = board_y(c[1]);
         h = c[2] + 2*cutout_margin;
         translate([outer_length - wall_thickness - 1, y_center - h/2, wall_cutout_z0()])
             cube([wall_thickness + 2, h, wall_cutout_h(c[3])]);
@@ -642,7 +656,7 @@ module right_edge_cutouts() {
 // to line up with the socket, so being 10mm high is as bad as being sideways.
 module right_edge_dc_jack() {
     translate([outer_length - wall_thickness - 1,
-               board_origin[1] + dc_jack_y_mm,
+               board_y(dc_jack_y_mm),
                lip_z + board_thickness + dc_jack_centre_above_pcb])
         rotate([0, 90, 0])
             cylinder(h = wall_thickness + 2, d = dc_jack_diameter + cutout_margin, $fn = 32);
@@ -668,7 +682,7 @@ function corner_xy(inset) = [
 module standoffs() {
     if (enable_standoffs) {
         pts = len(standoff_xy_mm) > 0
-            ? [ for (h = standoff_xy_mm) [board_origin[0] + h[0], board_origin[1] + h[1]] ]
+            ? [ for (h = standoff_xy_mm) [board_origin[0] + h[0], board_y(h[1])] ]
             : corner_xy(standoff_inset_mm);
         for (p = pts)
             corner_standoff(p[0], p[1]);
@@ -757,7 +771,7 @@ module lid_top_edge_cutouts() {
     // Individual, discrete windows -- replaces v1's fully-open top edge.
     for (c = lid_top_cutouts_mm) {
         x0 = board_origin[0] + c[1] - cutout_margin;
-        y0 = board_origin[1] + c[2] - cutout_margin;
+        y0 = board_y(c[2]) - cutout_margin;
         w  = c[3] + 2*cutout_margin;
         h  = c[4] + 2*cutout_margin;
         translate([x0, y0, -1])
@@ -769,7 +783,7 @@ module lid_top_edge_cutouts() {
 // lid_button_positions_mm above) -- v4 didn't expose these at all.
 module lid_buttons() {
     for (b = lid_button_positions_mm) {
-        translate([board_origin[0] + b[1], board_origin[1] + b[2], -1])
+        translate([board_origin[0] + b[1], board_y(b[2]), -1])
             cylinder(h = lid_thickness + 2, d = lid_button_d + cutout_margin, $fn = 24);
     }
 }
@@ -783,7 +797,7 @@ module lid_buttons() {
 module lid_fpga_vent_holes() {
     if (VARIANT_VENTED) {
         cx = board_origin[0] + heatsink_center_mm[0];
-        cy = board_origin[1] + heatsink_center_mm[1];
+        cy = board_y(heatsink_center_mm[1]);
         nx = max(1, floor(vent_zone_mm[0] / vent_hole_pitch));
         ny = max(1, floor(vent_zone_mm[1] / vent_hole_pitch));
         x0 = cx - (nx-1)*vent_hole_pitch/2;
@@ -797,13 +811,13 @@ module lid_fpga_vent_holes() {
 
 module lid_sensor_passthrough() {
     translate([board_origin[0] + sensor_hole_center_mm[0],
-                board_origin[1] + sensor_hole_center_mm[1], -1])
+                board_y(sensor_hole_center_mm[1]), -1])
         cylinder(h = lid_thickness + 2, d = sensor_hole_d, $fn = 24);
 }
 
 module lid_display_cutout() {
     cx = board_origin[0] + display_center_mm[0];
-    cy = board_origin[1] + display_center_mm[1];
+    cy = board_y(display_center_mm[1]);
     translate([cx - display_active_mm[0]/2, cy - display_active_mm[1]/2, -1])
         cube([display_active_mm[0], display_active_mm[1], lid_thickness + 2]);
 }
@@ -811,7 +825,7 @@ module lid_display_cutout() {
 module lid_display_standoffs() {
     fuse_eps = 0.05; // overlap into lid_panel, same reason as lid_skirt() above
     cx = board_origin[0] + display_center_mm[0];
-    cy = board_origin[1] + display_center_mm[1];
+    cy = board_y(display_center_mm[1]);
     hx = display_hole_spacing_mm[0]/2;
     hy = display_hole_spacing_mm[1]/2;
     for (p = [[-hx,-hy],[hx,-hy],[-hx,hy],[hx,hy]])
@@ -888,6 +902,18 @@ echo(str("standoff top / lip top (mm): ", standoff_top_z, " / ", lip_z));
 assert(abs(standoff_top_z - lip_z) < 0.001,
        str("standoff tops at ", standoff_top_z, " but the lip tops at ", lip_z,
            " -- the board would rock. These must be equal."));
+
+// Orientation report. Board-local Y is measured DOWN from the board top edge;
+// model Y runs the other way, so board_y() flips it. Printing both makes a
+// reflection visible at render time instead of after a print: read down this
+// list and the order must match the board read from its TOP edge downward.
+echo(str("LEFT wall, board-local Y -> model Y:"));
+for (c = connector_positions_mm)
+    echo(str("   ", c[0], "  board ", c[1], "  -> model ", board_y(c[1])));
+echo(str("RIGHT wall:"));
+for (c = right_connector_positions_mm)
+    echo(str("   ", c[0], "  board ", c[1], "  -> model ", board_y(c[1])));
+echo(str("   DC_JACK_JP1  board ", dc_jack_y_mm, "  -> model ", board_y(dc_jack_y_mm)));
 
 lip_bearing_mm = lip_ledge - fit_gap;
 echo(str("lip bearing width under board edge (mm): ", lip_bearing_mm));
