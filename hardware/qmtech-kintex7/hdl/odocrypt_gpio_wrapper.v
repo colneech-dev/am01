@@ -1051,6 +1051,22 @@ module odocrypt_gpio_wrapper #(
         .target           (target)
     );
 
+    // DECLARED HERE, NOT WITH ITS always BLOCK ~110 LINES BELOW.
+    //
+    // It is consumed by the host_break_sm port connection immediately below.
+    // An undeclared identifier in a port connection creates an implicit 1-bit
+    // net at the point of use, and whether that net is unified with a later
+    // `reg` of the same name is tool-dependent -- if it is not, host_break_sm
+    // gets an undriven net and the ticket2moon qualification silently does
+    // nothing. yosys was measured to bind them correctly, so no openXC7 build
+    // was affected, but `default_nettype none` is not set in this tree so the
+    // implicit net would be created SILENTLY, and Vivado has never parsed this
+    // file (those runs read the yosys netlist, not the RTL).
+    //
+    // Assigned by the qualification block further down, next to the reasoning
+    // that explains the 205-cycle warm-up.
+    reg       ticket2moon_i      = 1'b0;
+
     host_break_sm host_break_sm_inst (
         .clk_h         (clk_h),
         .host_break    (host_break_pulse_h),
@@ -1167,7 +1183,7 @@ module odocrypt_gpio_wrapper #(
     // -----------------------------------------------------------------
     reg [7:0] cou_deltanonce_top = 8'h0;
     reg       nonce_out_go_top   = 1'b0;
-    reg       ticket2moon_i      = 1'b0;
+    // ticket2moon_i is declared above, before host_break_sm consumes it.
 
     always @(posedge clk_h)
         if (~start_hash_h) cou_deltanonce_top <= 8'h0;
