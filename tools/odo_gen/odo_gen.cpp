@@ -192,16 +192,36 @@ void OdoVerilog::Generate(int throughput, const char* prefix, FILE* f) const
         fprintf(f, "// Stale after:         %s\n", tbuf);
         fprintf(f, "// Throughput:          %d    Prefix: %s\n", throughput,
                 prefix[0] ? prefix : "(none)");
+        // MACHINE-READABLE, and the reason it exists: nothing recorded which
+        // core this file is. The regenerate command below was stamped WITHOUT
+        // --bram-out-reg no matter which mode produced the file, so following
+        // it after a --bram-out-reg build silently swapped a 3-cycle-per-round
+        // core for a 2-cycle one. Different round-key timing, different
+        // place-and-route, and nothing to notice because the command in the
+        // header still looked correct.
+        //
+        // tools/check-epoch.sh reads this line back and echoes whatever it
+        // finds, so the instruction cannot drift from the artefact again.
+        fprintf(f, "// odo_gen flags:       %s\n",
+                g_bram_out_reg ? "--bram-out-reg" : "(none)");
+        fprintf(f, "// Round cycles:        %d  %s\n", RoundCycles(),
+                g_bram_out_reg ? "(sbox read, output register, state register)"
+                               : "(sbox read, state register)");
         fprintf(f, "//\n");
         fprintf(f, "// OdoCrypt mutates every 10 days (ntime - ntime %% %u). A bitstream\n", interval);
         fprintf(f, "// built from this file produces valid shares only while the chain's job\n");
         fprintf(f, "// epoch equals the seed above; past that it mines rejects. Regenerate:\n");
         fprintf(f, "//   cd tools/odo_gen && make odo_gen\n");
-        fprintf(f, "//   ./odo_gen <seed> %d %s > ../../hdl/odocrypt/encrypt.v\n",
-                throughput, prefix[0] ? prefix : "encrypt_4");
+        fprintf(f, "//   ./odo_gen <seed> %d %s%s > ../../hdl/odocrypt/encrypt.v\n",
+                throughput, prefix[0] ? prefix : "encrypt_4",
+                g_bram_out_reg ? " --bram-out-reg" : "");
         fprintf(f, "// and update ODO_SEED in\n");
         fprintf(f, "// hardware/qmtech-kintex7/hdl/odocrypt_gpio_wrapper.v to match.\n");
         fprintf(f, "// tools/check-epoch.sh verifies the two agree.\n");
+        fprintf(f, "//\n");
+        fprintf(f, "// The flag above is NOT optional -- see \"odo_gen flags\" above.\n");
+        fprintf(f, "// Changing it produces a DIFFERENT core: the round-key tap moves,\n");
+        fprintf(f, "// and timing results from the other mode do not carry over.\n");
         fprintf(f, "\n");
     }
 

@@ -4,6 +4,8 @@
 // Valid from:          2026-08-25 00:00 UTC
 // Stale after:         2026-09-04 00:00 UTC
 // Throughput:          4    Prefix: encrypt_4
+// odo_gen flags:       (none)
+// Round cycles:        2  (sbox read, state register)
 //
 // OdoCrypt mutates every 10 days (ntime - ntime % 864000). A bitstream
 // built from this file produces valid shares only while the chain's job
@@ -13,6 +15,10 @@
 // and update ODO_SEED in
 // hardware/qmtech-kintex7/hdl/odocrypt_gpio_wrapper.v to match.
 // tools/check-epoch.sh verifies the two agree.
+//
+// The flag above is NOT optional -- see "odo_gen flags" above.
+// Changing it produces a DIFFERENT core: the round-key tap moves,
+// and timing results from the other mode do not carry over.
 
 module encrypt_4pre_mix(in, out);
     input [639:0] in;

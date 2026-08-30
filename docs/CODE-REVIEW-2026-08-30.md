@@ -2,7 +2,11 @@
 
 Findings from a review of the uncommitted working-tree diff (`odo_gen.cpp`,
 `encrypt.v`, `odocrypt_gpio_wrapper.v`, `floorplan_stripe.py`,
-`tb_sched_equiv.v`). Recorded so none of them is lost; **none is fixed yet.**
+`tb_sched_equiv.v`). Recorded so none of them is lost.
+
+**Status as of 2026-08-30:** #1 fixed (RTL regenerated), #2 fixed (below),
+#3-#8 fixed in the RTL and built into the `0x0105` bitstream, though its touch
+path has still never been exercised on hardware. #9, #10 and #11 remain open.
 
 `git diff master...HEAD` is the whole 218-commit branch (308k lines, mostly
 generated STLs and PDFs) and is not reviewable as a unit, which is why the
@@ -33,6 +37,27 @@ independently as `T = RoundCycles*(i+1) − 2`, confirmed identity-preserving fo
 the non-outreg case (`2i`), and the maximum tap stays inside `period[]`.
 
 ### 2. Regeneration command omits `--bram-out-reg`
+
+**STATUS: FIXED 2026-08-30.** `odo_gen` now stamps two machine-readable lines
+into every file it emits --
+
+```
+// odo_gen flags:       (none)          [or --bram-out-reg]
+// Round cycles:        2  (sbox read, state register)
+```
+
+-- and reproduces the flag in the regenerate command. `check-epoch.sh` reads
+that line back out of the artefact instead of hardcoding a command, so the
+instruction cannot drift from the file again; if the stamp is missing (a
+pre-fix `encrypt.v`) it says so rather than guessing.
+
+Verified on all three paths: current, stale-with-`--bram-out-reg` (the command
+printed now carries the flag), and stale-without-a-stamp (warns). Regenerating
+the live `encrypt.v` changed the header only -- the 15,526-line RTL body is
+byte-identical, md5 `f642be21a0f2241d8701ce093e65e337` before and after.
+
+The stamp also settled a question that had been inferred rather than read: the
+core in the tree is the **2-cycle** one, generated with no flags.
 
 `tools/odo_gen/odo_gen.cpp:200`, duplicated at `tools/check-epoch.sh:58`
 

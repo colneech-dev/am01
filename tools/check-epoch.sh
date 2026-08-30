@@ -26,6 +26,24 @@ INTERVAL=864000
 enc_seed=$(sed -n 's|^// OdoCrypt epoch seed: *\([0-9][0-9]*\).*|\1|p' "$ENC" | head -1)
 wrap_seed=$(sed -n "s|.*parameter \[31:0\] ODO_SEED *= *32'd\([0-9][0-9]*\).*|\1|p" "$WRAP" | head -1)
 
+# WHICH CORE this encrypt.v is, read from the file rather than assumed.
+#
+# The regenerate command printed below used to be hardcoded without
+# --bram-out-reg. Following it after a --bram-out-reg build silently produced a
+# different core -- 2 clock cycles per round instead of 3, with the round-key
+# tap in a different place -- and the only symptom would have been rejected
+# shares. Echoing back what the file itself records is what makes the
+# instruction correct for whichever core is actually in the tree.
+enc_flags=$(sed -n 's|^// odo_gen flags: *||p' "$ENC" | head -1)
+enc_thr=$(sed -n 's|^// Throughput: *\([0-9][0-9]*\).*|\1|p' "$ENC" | head -1)
+[ -n "$enc_thr" ] || enc_thr=4
+flags_known=1
+case "$enc_flags" in
+"(none)") enc_flags="" ;;
+"")       enc_flags=""; flags_known=0 ;;
+*)        enc_flags=" $enc_flags" ;;
+esac
+
 if [ -z "$enc_seed" ]; then
 	echo "encrypt.v carries no epoch stamp -- regenerate it with tools/odo_gen"
 	echo "(a copy generated before the stamp existed cannot be dated by inspection)"
@@ -55,8 +73,15 @@ if [ "$enc_seed" != "$cur" ]; then
 	echo
 	echo "STALE by $behind epoch(s). Shares will be rejected. Regenerate:"
 	echo "  cd tools/odo_gen && make odo_gen"
-	echo "  ./odo_gen $cur 4 encrypt_4 > ../../hdl/odocrypt/encrypt.v"
+	echo "  ./odo_gen $cur $enc_thr encrypt_4$enc_flags > ../../hdl/odocrypt/encrypt.v"
 	echo "  then set ODO_SEED = 32'd$cur in odocrypt_gpio_wrapper.v"
+	if [ "$flags_known" = 0 ]; then
+		echo
+		echo "  WARNING: this encrypt.v predates the 'odo_gen flags' stamp, so"
+		echo "  which core produced it is NOT recorded. Check whether the build"
+		echo "  you are matching used --bram-out-reg before regenerating -- the"
+		echo "  two are different designs and the wrong one mines rejects."
+	fi
 	echo
 	echo "Note this changes the sbox contents, so place-and-route results from"
 	echo "the previous epoch no longer apply."
@@ -64,5 +89,10 @@ if [ "$enc_seed" != "$cur" ]; then
 fi
 
 echo
+if [ "$flags_known" = 1 ]; then
+	echo "Core: throughput $enc_thr,${enc_flags:- no extra flags}."
+else
+	echo "Core: throughput $enc_thr, flags NOT RECORDED (pre-stamp encrypt.v)."
+fi
 echo "CURRENT. Next rollover $(fmt $(( cur + INTERVAL )))," \
      "in $(( (cur + INTERVAL - now) / 3600 )) hours."
