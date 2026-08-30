@@ -4,3 +4,10 @@ build/
 *.log
 *.jou
 webtalk*
+
+# Bitstreams kept aside by hand before a rebuild that might not close timing.
+# Same reasoning as build/ above: a .bit is a 9.6MB binary that is reproducible
+# from the commit it was built at, so it lives on disk, not in history. The
+# commit hash is the provenance -- see the artifact's filename and the build
+# log, not a blob here.
+artifacts/
