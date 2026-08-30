@@ -112,22 +112,32 @@ def main():
     ap.add_argument("--columns", default="0,1,2,3,4,5,6",
                     help="RAMB18 site columns to use, left to right (default 0,1,2)")
     ap.add_argument("--cols-per-round", type=int, default=3,
-                    help="vivado mode: adjacent columns per round (measured: Vivado uses ~3)")
+                    help="compact mode: adjacent columns per round (measured optimum ~3)")
     ap.add_argument("--y-base", type=int, default=0,
-                    help="vivado mode: first row to use. Vivado's BRAMs occupy Y53..Y137, "
+                    help="compact mode: first row to use. Vivado's BRAMs occupy Y53..Y137, "
                          "i.e. it avoids the top and bottom of the device entirely; "
                          "default 0 starts at the bottom edge")
     ap.add_argument("--cols-stride", type=int, default=1,
-                    help="vivado mode: how many rounds share a column group before it "
+                    help="compact mode: how many rounds share a column group before it "
                          "advances. Vivado holds a group across several consecutive rounds "
                          "(0-5, then 6-12); stride 1 advances every round, so consecutive "
                          "pipeline stages never share columns")
-    ap.add_argument("--mode", choices=["block", "stripe", "vivado"], default="stripe",
-                    help="block = each round packed into one column (MEASURED WORSE, "
-                         "see comment in source). stripe = each round spread across "
-                         "all columns, distributing BRAM egress demand.")
+    ap.add_argument("--mode", choices=["block", "stripe", "compact", "vivado"],
+                    default="stripe",
+                    help="compact = each round confined to a few adjacent columns, "
+                         "spread across rows (the layout that measured fastest; "
+                         "'vivado' is a deprecated alias for it). block = each round "
+                         "packed into one column (MEASURED WORSE, see source). "
+                         "stripe = each round spread across all columns.")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+
+    if args.mode == "vivado":
+        # Deprecated: the mode encodes a principle measured FROM Vivado, not a
+        # replay OF Vivado. No Vivado output is read anywhere in this file.
+        print("NOTE: --mode vivado is now called 'compact'; treating as compact",
+              file=sys.stderr)
+        args.mode = "compact"
 
     cols = [int(c) for c in args.columns.split(",")]
 
@@ -140,7 +150,10 @@ def main():
 
     # Group BRAMs by round, and sort within a round by sbox instance number so
     # the assignment is stable and independent of dict ordering.
-    by_round = defaultdict(list)
+    # Keyed on (miner, round). Keying on round alone merged g_miner[0].round11
+    # with g_miner[1].round11 into one bucket of 40 where the layout expects 20 --
+    # not a crash, just a layout quietly violating its own intent.
+    by_mr = defaultdict(list)
     for name, cell in cells.items():
         if "RAMB" not in cell["type"]:
             continue
@@ -148,21 +161,30 @@ def main():
         if not m:
             print(f"WARNING: BRAM with no round in name, skipping: {name}", file=sys.stderr)
             continue
+        mi = re.search(r"g_miner\[(\d+)\]", name)
         sb = re.search(r"sbox(\d+)inst", name)
-        by_round[int(m.group(1))].append((int(sb.group(1)) if sb else 0, name))
+        key = (int(mi.group(1)) if mi else 0, int(m.group(1)))
+        by_mr[key].append((int(sb.group(1)) if sb else 0, name))
 
-    rounds = sorted(by_round)
-    total = sum(len(v) for v in by_round.values())
-    print(f"{total} BRAMs across {len(rounds)} rounds "
-          f"({', '.join(str(len(by_round[r])) for r in rounds)} per round)")
+    miners = sorted({k[0] for k in by_mr})
+    rounds = sorted({k[1] for k in by_mr})
+    total = sum(len(v) for v in by_mr.values())
+    per_miner = {mi: sum(len(v) for k, v in by_mr.items() if k[0] == mi) for mi in miners}
+    print(f"{total} BRAMs across {len(miners)} miner(s) x {len(rounds)} rounds "
+          f"({', '.join('miner %d: %d' % (mi, per_miner[mi]) for mi in miners)})")
 
-    rounds_per_col = SITES_PER_COL // 20        # 7
+    # Back-compat for the single-miner modes below, which are unchanged.
+    by_round = {r: by_mr[(miners[0], r)] for r in rounds} if len(miners) == 1 else None
+
+    # Derived, not hardcoded: some rounds may differ in size.
+    bram_per_round = max(len(v) for v in by_mr.values())
+    rounds_per_col = SITES_PER_COL // max(1, bram_per_round)
     need_cols = (len(rounds) + rounds_per_col - 1) // rounds_per_col
     if args.mode == "block" and need_cols > len(cols):
         sys.exit("ERROR: block mode needs %d columns, only %d given" % (need_cols, len(cols)))
 
     assigned = 0
-    if args.mode == "vivado":
+    if args.mode == "compact":
         # VIVADO-MEASURED layout: a few ADJACENT columns per round.
         #
         # This is not a guess. Vivado reaches 158.81 MHz on this exact netlist,
@@ -228,31 +250,79 @@ def main():
             if c not in valid:
                 sys.exit("ERROR: column %d has no RAMB18 sites" % c)
         stride = max(1, args.cols_stride)
-        # cursor indexes into the column's sorted list of REAL rows
+
+        # Partition columns among miners BY SITE COUNT. The columns are not
+        # equal (col 5 has ten gaps, col 6 stops at Y59), so an equal split by
+        # column count would hand one miner too few sites and fail late, deep
+        # in the assignment loop, as a confusing "column exhausted".
+        need = {mi: sum(len(v) for k, v in by_mr.items() if k[0] == mi) for mi in miners}
+        avail = {c: len([y for y in valid[c] if y >= max(0, args.y_base)]) for c in cols}
+        region = {}
+        pool = list(cols)
+        for mi in miners:
+            got, take = 0, []
+            while pool and got < need[mi]:
+                c = pool.pop(0)
+                take.append(c)
+                got += avail[c]
+            if got < need[mi]:
+                sys.exit("ERROR: miner %d needs %d sites, only %d left in columns %s "
+                         "(y-base %d). Lower --y-base or add columns."
+                         % (mi, need[mi], got, take, args.y_base))
+            region[mi] = take
+        # Hand any leftover columns to the last miner. Without this a single
+        # miner got only the columns its demand required (0-4 for 420 BRAMs)
+        # where it had always been given every column in --columns, quietly
+        # changing the layout underneath every measurement taken so far.
+        if pool:
+            region[miners[-1]].extend(pool)
+            pool = []
+        for mi in miners:
+            print("  miner %d -> columns %s (%d sites for %d BRAMs)"
+                  % (mi, ",".join(str(c) for c in region[mi]),
+                     sum(avail[c] for c in region[mi]), need[mi]))
+
+        # cursor indexes into each column's sorted list of REAL rows, advanced
+        # past y-base. Shared across miners because regions are disjoint.
         cursor = {c: 0 for c in cols}
         for c in cols:
             while (cursor[c] < len(valid[c])
                    and valid[c][cursor[c]] < max(0, args.y_base)):
                 cursor[c] += 1
-        for idx, rnd in enumerate(rounds):
-            members = sorted(by_round[rnd])
-            grp = (idx // stride) % ncol
-            rc = [cols[(grp + k) % ncol] for k in range(cpr)]
-            lo = {c: cursor[c] for c in rc}
-            for j, (_, name) in enumerate(members):
-                col = rc[j % cpr]
-                if cursor[col] >= len(valid[col]):
-                    sys.exit("ERROR: column %d exhausted (%d real sites, y-base %d)"
-                             % (col, len(valid[col]), args.y_base))
-                site_y = valid[col][cursor[col]]
-                cursor[col] += 1
-                bel = "RAMB18_X%dY%d/RAMB18E1" % (col, site_y)
-                if not args.dry_run:
-                    cells[name].setdefault("attributes", {})["BEL"] = bel
-                assigned += 1
-            print("  round %2d -> cols %s  Y%s" %
-                  (rnd, ",".join(str(c) for c in rc),
-                   ",".join("%d-%d" % (lo[c], cursor[c] - 1) for c in rc)))
+
+        for mi in miners:
+            rcols = region[mi]
+            rncol = len(rcols)
+            rcpr = max(1, min(cpr, rncol))
+            for idx, rnd in enumerate(rounds):
+                members = sorted(by_mr[(mi, rnd)])
+                if not members:
+                    continue
+                grp = (idx // stride) % rncol
+                rc = [rcols[(grp + k) % rncol] for k in range(rcpr)]
+                lo = {c: cursor[c] for c in rc}
+                for j, (_, name) in enumerate(members):
+                    col = rc[j % rcpr]
+                    # A short column (col 6 ends at Y59) can run out before its
+                    # neighbours. Fall back to any other column in this miner's
+                    # region rather than failing, so a lopsided device does not
+                    # make the layout impossible.
+                    if cursor[col] >= len(valid[col]):
+                        alt = [c for c in rcols if cursor[c] < len(valid[c])]
+                        if not alt:
+                            sys.exit("ERROR: miner %d ran out of sites in columns %s"
+                                     % (mi, rcols))
+                        col = alt[0]
+                    site_y = valid[col][cursor[col]]
+                    cursor[col] += 1
+                    bel = "RAMB18_X%dY%d/RAMB18E1" % (col, site_y)
+                    if not args.dry_run:
+                        cells[name].setdefault("attributes", {})["BEL"] = bel
+                    assigned += 1
+                print("  miner %d round %2d -> cols %s  Y%s" %
+                      (mi, rnd, ",".join(str(c) for c in rc),
+                       ",".join("%d-%d" % (lo[c], cursor[c] - 1)
+                                for c in rc if cursor[c] > lo[c])))
         print("assigned %d BEL attributes" % assigned)
         if args.dry_run:
             print("(dry run, nothing written)")
