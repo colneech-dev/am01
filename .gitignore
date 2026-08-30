@@ -34,3 +34,26 @@ hardware/qmtech-kintex7/openxc7/seedrun/
 hardware/qmtech-kintex7/openxc7/*.console
 hardware/qmtech-kintex7/openxc7/.pid_*
 hardware/qmtech-kintex7/openxc7/.done_*
+
+# Vivado diagnostic output from the placement-comparison work. Deliberately NOT
+# committed, for a reason the tooling itself states: vivado_place_export_v68.tcl
+# documents these maps as "DIAGNOSTIC ONLY -- THIS MAP CANNOT BE COMMITTED AND
+# REUSED", because they are keyed on yosys cell names built from volatile
+# counters ($abc$493613$..., autoidx). Measured there: two modules differing by
+# one unrelated gate shared ZERO cell names. Any RTL edit, yosys upgrade or
+# option change invalidates 100% of the map, so a committed copy would be a
+# trap rather than an asset.
+#
+# The durable output of that work is the GEOMETRY, which is encoded in
+# floorplan_brams.py --mode compact, and the calibration .tcl scripts, which
+# are committed.
+hardware/qmtech-kintex7/openxc7/vivado_placement*.txt
+hardware/qmtech-kintex7/openxc7/vivado_cellnames.txt
+hardware/qmtech-kintex7/openxc7/*.dcp
+hardware/qmtech-kintex7/openxc7/vivado_*.console.txt
+hardware/qmtech-kintex7/openxc7/vivado_net_delay_calib*.csv
+
+# Regenerable outputs of scripts committed alongside them.
+hardware/qmtech-kintex7/openxc7/absorb_report.txt
+hardware/qmtech-kintex7/openxc7/tight_setup_hold_pins.txt
+hardware/qmtech-kintex7/openxc7/vivado_worst_path_anatomy.txt

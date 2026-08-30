@@ -1,0 +1,12 @@
+# Vivado place + Vivado route, on the yosys netlist (NUM_MINERS=1)
+  CLOCK sys_clk_50m                        period  20.000  WNS   12.860  -> 7.140 ns = 140.06 MHz
+      logic 0.322 ns  net 6.817 ns
+      startpoint _62809_/C
+      endpoint   _62809_/D
+  clk_gen_hash_inst.clkfb: no intra-clock paths
+  CLOCK clk_gen_hash_inst.clkout1_unbuf    period   7.500  WNS    1.203  -> 6.297 ns = 158.81 MHz
+      logic 0.375 ns  net 5.835 ns
+      startpoint _90165_/C
+      endpoint   _62804_/D
+
+  nets not fully routed: 7042

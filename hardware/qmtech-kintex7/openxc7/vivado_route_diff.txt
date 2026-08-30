@@ -1,0 +1,13 @@
+# Vivado physical routes for nets nextpnr-xilinx could not fully route
+# checkpoint: ../vivado/build/am01_qmtech_kintex7.runs/impl_1/am01_qmtech_top_routed.dcp
+# source BRAM of interest: RAMB18_X1Y18
+
+================================================================
+NET (nextpnr name, '.' -> '/'): odocrypt_gpio_wrapper_inst/g_miner[0]/miner_top_inst/miner/worker/crypt/crypter/round15/mid[1][299]
+  NOT FOUND -- adjust name mapping
+================================================================
+NET (nextpnr name, '.' -> '/'): odocrypt_gpio_wrapper_inst/g_miner[0]/miner_top_inst/miner/worker/crypt/crypter/round15/mid[1][315]
+  NOT FOUND -- adjust name mapping
+================================================================
+NET (nextpnr name, '.' -> '/'): odocrypt_gpio_wrapper_inst/g_miner[0]/miner_top_inst/miner/worker/crypt/crypter/round15/mid[1][303]
+  NOT FOUND -- adjust name mapping

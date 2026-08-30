@@ -1,0 +1,26 @@
+part  : xc7k325tffg676-1
+brams : 840
+
+== clocks ==
+  sys_clk_50m  period 20.000 ns  (50.00 MHz)
+  clkfb        period 20.000 ns  (50.00 MHz)
+  clkout1_unbuf period 7.500 ns  (133.33 MHz)
+
+== worst slack per clock, and achievable Fmax ==
+  sys_clk_50m  WNS  15.789 ns  -> achievable 4.211 ns = 237.47 MHz
+  clkfb : no intra-clock paths
+  clkout1_unbuf WNS   1.327 ns  -> achievable 6.173 ns = 162.00 MHz
+
+== does the critical path start at a BRAM? ==
+  sys_clk_50m
+    startpoint : rst_stretch_reg[2]/C
+    endpoint   : odocrypt_gpio_wrapper_inst/rdata_reg_reg[10]/CE
+    logic      : 0.457 ns
+    net        : 3.432 ns
+    total      : 3.889 ns
+  clkout1_unbuf
+    startpoint : odocrypt_gpio_wrapper_inst/g_miner[0].miner_top_inst/miner/worker/crypt/crypter/round4/sboxes/sbox23inst/a_out_reg/CLKBWRCLK
+    endpoint   : odocrypt_gpio_wrapper_inst/g_miner[0].miner_top_inst/miner/worker/crypt/crypter/state_reg[5][398]/D
+    logic      : 2.186 ns
+    net        : 3.787 ns
+    total      : 5.973 ns
