@@ -502,6 +502,15 @@ module odocrypt_gpio_wrapper #(
     // a single driver for each register -- the bus FSM owns lcd_req_toggle,
     // the SPI engine owns lcd_req_seen. Clearing a shared flag from both would
     // be a multiple-driver conflict, which this design has hit before.
+    // DEPTH ONE. A toggle carries at most one outstanding request: two writes
+    // issued before the engine takes the first flip it twice, which cancels
+    // and loses BOTH silently. The host must not write while the shifter is
+    // busy -- am01_panel.c polls LCD_STAT before every write, which
+    // guarantees it, and LCD_STAT exists for exactly this.
+    //
+    // Do not remove that polling as an optimisation. The toggle fix stops
+    // writes being REPEATED, it does not make the interface queue. Dropping
+    // the poll would trade a duplicate-byte fault for a lost-byte one.
     reg         lcd_req_toggle;
     reg         lcd_req_seen;
     reg  [15:0] lcd_start_data;
