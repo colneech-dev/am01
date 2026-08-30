@@ -142,6 +142,19 @@ SOURCES_BUSBENCH := \
 OBJECTS_BUSBENCH := $(call objects,$(SOURCES_BUSBENCH))
 
 # =====================================================================
+# Binary: am01_probe (drive fan + panel directly, no miner)
+#
+# Both were previously reachable only through odo-miner: the panel is pushed
+# from the mining loop's idle path, so a screen could not be brought up without
+# a working pool, and nothing exposed the fan duty floor at all. Neither is a
+# hardware limitation -- just missing tools.
+# =====================================================================
+
+SOURCES_PROBE := 	$(GPIO_BUS)/am01_probe.c 	$(GPIO_BUS)/am01_gpio_bus.c
+
+OBJECTS_PROBE := $(call objects,$(SOURCES_PROBE))
+
+# =====================================================================
 # Binary: am01_smoke (does the FPGA compute the RIGHT hash?)
 #
 # Dispatches ONE fixed header with a loose target and checks every returned
@@ -182,12 +195,12 @@ LIBS_UI := $(LIBS_BASE) $(shell $(PKG_CONFIG) --libs libpng freetype2 fontconfig
 # =====================================================================
 
 .PHONY: all clean install help
-.PHONY: odo-miner odo-webd odo-ui am01_bus_test am01_diag am01_busbench am01_smoke
+.PHONY: odo-miner odo-webd odo-ui am01_bus_test am01_diag am01_busbench am01_smoke am01_probe
 
 # Default: build all. am01_bus_test is included deliberately -- it is the
 # first thing to run on a new board (see ../cm4-firmware/README.md), so it
 # needs to be in the image rather than something to compile on the target.
-all: odo-miner odo-webd odo-ui am01_bus_test am01_diag am01_busbench am01_smoke
+all: odo-miner odo-webd odo-ui am01_bus_test am01_diag am01_busbench am01_smoke am01_probe
 
 # Mining daemon (core)
 odo-miner: $(OBJECTS_DAEMON)
@@ -227,6 +240,12 @@ am01_smoke: $(OBJECTS_SMOKE)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS_MINER) -lm
 	@echo "✓ Built: $@"
 
+# Direct fan/panel probe. No crypto, no miner -- just the bus.
+am01_probe: $(OBJECTS_PROBE)
+	@echo "[LD] $@"
+	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS_MINER)
+	@echo "✓ Built: $@"
+
 # Touch UI (framebuffer + touch input)
 odo-ui: $(OBJECTS_UI)
 	@echo "[LD] $@"
@@ -237,7 +256,7 @@ odo-ui: $(OBJECTS_UI)
 ALL_SOURCES := $(SOURCES_DAEMON) $(SOURCES_CRYPTO) $(SOURCES_KECCAK) \
 	$(SOURCES_BUSBENCH) \
 	$(SOURCES_STRATUM) $(SOURCES_WEBD) $(SOURCES_UI) $(SOURCES_BUSTEST) \
-	$(SOURCES_DIAG) $(SOURCES_SMOKE)
+	$(SOURCES_DIAG) $(SOURCES_SMOKE) $(SOURCES_PROBE)
 vpath %.c $(sort $(dir $(ALL_SOURCES)))
 
 $(OBJ_DIR):
@@ -248,7 +267,7 @@ $(OBJ_DIR)/%.o: %.c | $(OBJ_DIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f odo-miner odo-webd odo-ui am01_bus_test am01_diag am01_busbench am01_smoke
+	rm -f odo-miner odo-webd odo-ui am01_bus_test am01_diag am01_busbench am01_smoke am01_probe
 	rm -rf $(OBJ_DIR)
 	@echo "Cleaned."
 
@@ -261,6 +280,7 @@ install: all
 	install -D -m 0755 am01_diag $(DESTDIR)$(PREFIX)/bin/am01_diag
 	install -D -m 0755 am01_busbench $(DESTDIR)$(PREFIX)/bin/am01_busbench
 	install -D -m 0755 am01_smoke $(DESTDIR)$(PREFIX)/bin/am01_smoke
+	install -D -m 0755 am01_probe $(DESTDIR)$(PREFIX)/bin/am01_probe
 	@echo "✓ Installed binaries to $(DESTDIR)$(PREFIX)/bin/"
 
 # Help

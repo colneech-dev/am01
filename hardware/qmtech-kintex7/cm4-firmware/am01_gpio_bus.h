@@ -101,6 +101,7 @@ int am01_bus_read_temp(am01_bus_t *bus, double *celsius_out);
  * the one path where throughput matters. */
 int am01_bus_lcd_cmd(am01_bus_t *bus, uint8_t cmd);
 int am01_bus_lcd_data(am01_bus_t *bus, uint16_t data);
+int am01_bus_lcd_data8(am01_bus_t *bus, uint8_t data);
 int am01_bus_lcd_busy(am01_bus_t *bus, int *busy_out);
 int am01_bus_lcd_ctrl(am01_bus_t *bus, int reset_n, int backlight);
 int am01_bus_read_touch(am01_bus_t *bus, uint16_t *x, uint16_t *y, int *pressed);

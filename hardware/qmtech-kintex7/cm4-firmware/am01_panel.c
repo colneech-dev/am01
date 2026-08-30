@@ -66,20 +66,25 @@ static void msleep(int ms)
 /*
  * Send a single 8-bit command parameter.
  *
- * The FPGA has no 8-bit DC=1 path: ADDR_LCD_CMD is 8 bits with DC=0, and
- * ADDR_LCD_DATA is 16 bits with DC=1. So a one-byte parameter goes out as the
- * HIGH byte of a 16-bit write, followed by a 0x00 the panel discards as a
- * surplus argument -- the ILI9341 ignores parameters beyond a command's
- * declared count.
+ * A single byte with DC=1, through ADDR_LCD_DATA8.
  *
- * That is a workaround, not a design. The next bitstream should add an 8-bit
- * DC=1 register (ADDR_LCD_DATA8) and this should become a single clean write;
- * until then, do not use it for a command whose trailing byte would be
- * meaningful.
+ * This used to send `v << 8` through the 16-bit ADDR_LCD_DATA, putting a
+ * surplus 0x00 on the wire after every parameter, justified on the grounds
+ * that "the ILI9341 ignores parameters beyond a command's declared count".
+ * That reasoning was wrong exactly where it mattered. It holds for
+ * single-parameter commands like COLMOD. It does NOT hold for CASET and PASET
+ * (0x2A/0x2B), which take FOUR parameters each -- eight bytes arrived, the
+ * panel kept the first four, and the address window came out as
+ * [x0_hi, 0x00, x0_lo, 0x00]. Every subsequent pixel was written outside any
+ * valid window, so the panel lit and stayed blank.
+ *
+ * The old comment here said "the next bitstream should add an 8-bit DC=1
+ * register". That bitstream shipped as v0x0104. The register has been there
+ * ever since and nothing called it until 2026-08-30.
  */
 static int param8(am01_bus_t *bus, uint8_t v)
 {
-    return am01_bus_lcd_data(bus, (uint16_t)v << 8);
+    return am01_bus_lcd_data8(bus, v);
 }
 
 /* Wait for the FPGA's SPI shifter to drain. The wrapper DROPS a write issued

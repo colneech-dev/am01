@@ -76,6 +76,9 @@ enum {
     ADDR_LCD_DATA  = 17,
     ADDR_LCD_STAT  = 18,
     ADDR_LCD_CTRL  = 19,
+    /* 8-bit, DC=1. RTL 5'h17 = 23. Present since v0x0104, unused until
+     * 2026-08-30 -- see am01_bus_lcd_data8(). */
+    ADDR_LCD_DATA8 = 23,
     ADDR_TOUCH_X   = 20,
     ADDR_TOUCH_Y   = 21,
     ADDR_TOUCH_STAT= 22,
@@ -456,6 +459,24 @@ int am01_bus_lcd_data(am01_bus_t *bus, uint16_t data)
      * first, which checks. Re-reading VERSION per pixel would double the
      * traffic on the one path where throughput actually matters. */
     return reg_write16(bus, ADDR_LCD_DATA, data);
+}
+
+/* ONE byte, DC=1 -- for command parameters.
+ *
+ * Binds ADDR_LCD_DATA8, which the RTL has provided since v0x0104 and which no
+ * software ever called. Until now a one-byte parameter was sent through the
+ * 16-bit ADDR_LCD_DATA as `value << 8`, putting a surplus 0x00 on the wire
+ * after every parameter.
+ *
+ * am01_panel.c justified that by saying the ILI9341 ignores parameters beyond
+ * a command's declared count. True of single-parameter commands, and FALSE of
+ * CASET/PASET (0x2A/0x2B), which take four each: eight bytes arrive, the panel
+ * keeps the first four, and the address window becomes
+ * [x0_hi, 0x00, x0_lo, 0x00]. Every pixel then lands outside any valid window
+ * -- exactly the lit-but-blank panel the board showed on 2026-08-30. */
+int am01_bus_lcd_data8(am01_bus_t *bus, uint8_t data)
+{
+    return reg_write16(bus, ADDR_LCD_DATA8, (uint16_t)data);
 }
 
 int am01_bus_lcd_busy(am01_bus_t *bus, int *busy_out)
