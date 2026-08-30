@@ -1,4 +1,28 @@
 // QMTECH XC7K325T Dev Board -- two-part case (base tray + lid)
+//
+// v4.2 -- FIT-CHECK CORRECTIONS, 2026-08-30. The v4.1 tray was printed and
+// tried with the real board, switch, screen and adapters in hand. Twelve
+// things came back. They are marked "FIT-CHECK item N" at each site; the
+// three that changed the case's shape rather than a dimension are:
+//
+//   item 5  9mm of extra room at each LONG wall. The FT232H holder and the
+//           switch nest both stand off their wall directly over where the
+//           board has to drop in, and with a 1.2mm gap the board fouled them.
+//           This is what made the tray unassemblable, and fixing it also
+//           retires the USB cap (item 11) and unblocks item 9.
+//   item 4  The retaining lip ran as a band floating 4.4mm above the floor,
+//           so its whole underside printed as an unsupported overhang. It is
+//           a plinth from the floor now. Its reach is per-axis, because after
+//           item 5 the long walls stand 10.2mm off the board and a single
+//           lip_ledge left those two edges carrying nothing.
+//   item 1  6mm lid, matching the screen module's own thickness, with the
+//           headroom added back in item 12 so nothing is lost.
+//
+// Nothing here was found by re-reading the model. Every one of them came from
+// putting the printed part on the bench with the hardware -- which is the
+// same lesson as the v4.1 mirror bug, where every check compared the model
+// against itself and none against the board.
+//
 // Parametric OpenSCAD, 3D-print friendly (FDM, no supports needed).
 // v4.1: REAL I/O, sourced from the vendor's own schematic + ECAD
 // dimension drawing, not a photo guess. v4 was still wrong here --
@@ -173,24 +197,78 @@ board_thickness = 2.0;   // MEASURED. Not the usual 1.6 -- this is a thick,
 // shrinkage plus elephant's foot on the first layers eats most of it, and
 // the board fouls the walls before it reaches the lip. 1.2mm per side is
 // still a snug fit and leaves the lip plenty of overlap (lip_ledge 1.5).
-fit_gap        = 1.2;    // extra clearance around the board footprint, all sides
+fit_gap        = 1.2;    // extra clearance around the board footprint
+
+// FIT-CHECK 2026-08-30, item 5: 9mm of extra internal room at each LONG wall
+// (the two 160mm walls, y=0 and y=90). The board stays centred; the case grows
+// 18mm in Y.
+//
+// This is what makes three other things work:
+//   - the FT232H stands 5.8mm off the top wall and the KAN-28 switch nest
+//     6.3mm, both directly over where the board has to drop in. With a 1.2mm
+//     gap the board fouled them on the way down (items 9 and the reason the
+//     tray would not assemble);
+//   - the right-angle USB adapter projects 11mm past J6's connector face, and
+//     now lives inside the case instead of needing a bump over the wall
+//     (item 11 retires the USB cap);
+//   - a 10.2mm gap between the connector faces and the wall means plugs on the
+//     bottom wall reach their sockets THROUGH the wall opening. The openings
+//     are sized to the connector body plus margin, which is wider than a USB-A
+//     or RJ45 overmould, so they pass -- but that is now load-bearing, and a
+//     plug with an unusually fat boot will not seat.
+extra_side_gap_mm = 9.0;
+fit_gap_x      = fit_gap;                      // short walls, unchanged
+fit_gap_y      = fit_gap + extra_side_gap_mm;  // long walls
 // The lip must reach past the board's edge by more than fit_gap, or there
 // is nothing under the board to carry it. At fit_gap 1.2 a 1.5mm ledge
 // would leave only 0.3mm of bearing surface; 3.0 leaves 1.8mm all round.
 lip_ledge      = 3.0;    // how far the lip reaches in from the inner wall face
-lip_thickness  = 2.0;    // Z height of the lip step the board rests on
+// FIT-CHECK item 4: the lip used to be a 2mm-thick band floating at
+// lip_z - lip_thickness with nothing beneath it, so its underside printed as a
+// full-perimeter overhang in mid-air. It now runs from the floor up to lip_z --
+// a plinth, not a ledge -- so every layer is supported by the one below.
+// lip_thickness is what that floating band's Z height used to be; kept only so
+// the change is legible in a diff.
+lip_thickness  = 2.0;    // HISTORICAL -- no longer used, see retaining_lip_ridge()
+
+// The lip has to reach across the gap between the wall and the board edge
+// before it reaches UNDER the board, and after item 5 that gap is 10.2mm on
+// the long walls against 1.2mm on the short ones. One lip_ledge for both axes
+// would leave the two long edges of the board completely unsupported -- the
+// lip would stop 7mm short of the board and only the standoffs would carry it.
+lip_bearing_target = 1.8;               // how far the lip reaches under the board
+lip_ledge_x = lip_ledge;                            // short walls
+lip_ledge_y = fit_gap_y + lip_bearing_target;       // long walls, spans the gap
 
 // ---- Tray shell ----
 wall_thickness  = 2.4;
 floor_thickness = 2.4;
-standoff_clearance = 3.0;   // gap under the board for bottom-side components/solder
+standoff_clearance = 5.0;   // gap under the board for bottom-side components/solder.
+                            // FIT-CHECK item 4 asked for 4.0, revised to 5.0
+                            // on the bench. Was 3.0.
+                            // extra_headroom_mm below adds this back to the
+                            // wall height, so the room above the board does
+                            // not shrink when the board is lifted.
 
 // Case interior height, uniform everywhere (fully enclosed -- see design
 // note 3 above). Set directly by VARIANT_WALL_HEIGHT; also cross-checked
 // below against the real heatsink dimensions so you can see the margin
 // (or shortfall) rather than trust a bare constant.
-wall_height = VARIANT_WALL_HEIGHT;
-lid_thickness = 2.4;
+// FIT-CHECK item 1: the lid's main panel matches the screen module's own
+// 6mm thickness, so the module sits inside the panel rather than hanging below
+// it. That also lets the flange recess go to its full 2mm (see
+// screen_recess_mm) instead of the 1.0mm a 2.4mm lid could afford.
+lid_thickness = 6.0;
+
+// FIT-CHECK item 12: keep the headroom above the board that VARIANT_WALL_HEIGHT
+// names, then add back what the other changes consume, plus clearance for the
+// fan screws. Written as a sum rather than a new constant so each term stays
+// attributable -- and so the sealed/vented variants, whose VARIANT_WALL_HEIGHT
+// render_cases.sh rewrites to 24, get the same compensation automatically.
+extra_headroom_mm = (standoff_clearance - 3.0)   // item 4, taller standoffs
+                  + (lid_thickness - 2.4)        // item 1, thicker lid
+                  + 2.0;                         // item 12, fan screw heads
+wall_height = VARIANT_WALL_HEIGHT + extra_headroom_mm;
 
 // ---- FPGA/heatsink clearance check (informational + drives the vent
 // hole footprint below) ----------------------------------------------
@@ -214,7 +292,11 @@ fpga_chip_and_pad_mm  = 2.0;  // BGA body + thermal pad, above the PCB surface
 heatsink_assembly_margin_mm = 3.0; // safety margin (adhesive squeeze-out, tolerance)
 heatsink_total_clearance_mm = heatsink_lwh_mm[2] + fpga_chip_and_pad_mm
                                + heatsink_assembly_margin_mm; // = 22.5mm, PCB to top of stack
-case_interior_clearance_mm  = wall_height + lid_thickness; // what this variant actually provides
+// What this variant provides, board TOP surface to the lid's underside. The
+// lid used to be ADDED here, which is backwards -- it is solid material above
+// the interior, not part of it. Harmless while the lid was 2.4mm; with a 6mm
+// lid it would have overstated the clearance by the same 6mm.
+case_interior_clearance_mm  = wall_height;
 heatsink_margin_mm = case_interior_clearance_mm - heatsink_total_clearance_mm; // sanity check;
                       // should be comfortably positive -- echoed at the bottom of this file
 
@@ -223,7 +305,16 @@ heatsink_margin_mm = case_interior_clearance_mm - heatsink_total_clearance_mm; /
 // Venting is now the WHOLE lid, not a patch over the FPGA. A sealed box
 // around a part that already ran too hot to touch was the wrong default; the
 // grid is cheap to print and costs nothing but a little rigidity.
-vent_zone_mm = [board_length, board_width];
+// Measured from the CASE, with a border wide enough to clear the lid's skirt.
+// It used to be the BOARD footprint centred on the lid, which put the outermost
+// hole centres 3.6mm from the lid edge -- inside the skirt band (2.7 to 5.1mm),
+// so the vent grid was drilling through the skirt it depends on. Item 5's extra
+// 18mm of width would have left an unvented band there as well.
+vent_border_mm = 8;
+// vent_zone_mm itself is assigned in the Derived geometry section below,
+// because it needs outer_length/outer_width and OpenSCAD resolves file-scope
+// variables IN ORDER -- assigned here it silently evaluated to undef and the
+// whole vent grid disappeared from the lid without an error.
 // HEXAGONS, hex-packed. Circles in a square grid gave about 14% open area:
 // a circle leaves four wasted corners against its neighbours, and square
 // packing wastes more again. A hexagon tiles the plane completely, so the only
@@ -324,7 +415,12 @@ standoff_pilot_od  = 2.6;
 // thickness: enough to hold, little enough to snap over by hand. The bead is
 // chamfered on its underside so the lid leads in and only resists on the way
 // out.
-snap_bead_mm   = 0.6;   // radial interference
+// FIT-CHECK item 2: 0.6mm of interference would not go on -- the printed lid
+// did not clip in at all. 0.35 is still a positive detent at this wall
+// thickness. If it is STILL tight, the next knob is lid_fit_clearance (0.3 per
+// side): the bead and the skirt are in series, and a tight skirt reads exactly
+// the same way from outside.
+snap_bead_mm   = 0.35;  // radial interference
 snap_bead_h    = 1.2;   // bead height
 snap_lead_in   = 0.6;   // chamfer under the bead, for assembly
 
@@ -344,31 +440,19 @@ snap_lead_in   = 0.6;   // chamfer under the bead, for assembly
 //
 // The margin also sets vertical clearance (see wall_cutout_z0/h), where 1mm
 // above and below a measured body height is likewise plenty.
-cutout_margin = 1.0;
+// FIT-CHECK items 7 and 10: the pillars between adjacent windows were 2mm and
+// are wanted at 3mm+. Every adjacent pair on this board is 4mm apart (J6/J7,
+// J7/P1, P4/J9), so the pillar is exactly 4 - 2*cutout_margin: 0.5 gives 3.0mm
+// on all of them at once. It also tightens the vertical clearance to 0.5mm
+// above and below each connector body, which is still a real clearance.
+cutout_margin = 0.5;
 
-// ---- Removable USB cap (a SEPARATE printed part) --------------------
-// The right-angle adapter in J6's lower socket stands 11mm proud of the USB-A
-// connector face, so a flat wall there is impossible: it would foul the
-// adapter. Instead the wall carries a plain rectangular opening over the whole
-// J6 stack, and a cap clips over it to make a bump.
-//
-// The cap being REMOVABLE is the point. The adapter has to be plugged in and
-// unplugged, and with a moulded-in bump the only access would be through the
-// lid, reaching down a 50mm box past the board.
-//
-// It snaps on with two L-hooks that pass through the opening and catch the
-// wall's inner face -- the same idea as the switch arms, so there is one
-// fastening principle in this design rather than three.
-// MEASURED: the protruding USB assembly is 12mm wide and needs 24mm of
-// height cleared. 18 wide gives it 3mm either side and is as wide as this
-// wall allows -- 21 left zero gap to J7 and the separator assert rejected it.
-usb_cap_opening_mm = [18, 24];   // the hole in the wall. 21 wide left ZERO gap to
-                                 // J7 -- the separator assert caught it.
-usb_cap_clearance  = 11;         // adapter projection past the connector face
-usb_cap_wall       = 2.0;
-usb_cap_fit        = 0.35;       // spigot to opening, per side
-usb_cap_hook       = 1.0;        // how far the hooks catch behind the wall
-usb_cap_x_mm       = 21;         // board-local X, over the J6 stack (14-29)
+// ---- Removable USB cap: RETIRED (fit-check item 11) -----------------
+// The cap existed because the right-angle adapter in J6 projects 11mm past the
+// connector face and no flat wall could accommodate it. Item 5 puts 10.2mm of
+// room between the board edge and the wall, so the adapter now sits INSIDE the
+// case and the wall needs no bump at all. J6 goes back to a plain window over
+// its lower socket -- see USB_A_J6 below and item 6.
 
 // LEFT wall (x=0, board_width=90mm long): HDMI0 (P3) and HDMI1 (P4),
 // both Type-A jacks mounted flush to this edge stacked vertically, plus
@@ -402,7 +486,15 @@ connector_positions_mm = [
     ["HDMI0_P3",     15.5, 15, 6],
     ["HDMI1_P4",     41.0, 16, 6],
     ["MICRO_SD_J9",  60.5, 15, 2],
-    ["MINI_USB_J14", 75.5,  7, 4],
+    // FIT-CHECK item 8: 11mm wide x 6mm high, asked for so the plug's
+    // overmould passes rather than just the 7 x 4mm receptacle. With
+    // cutout_margin 0.5 that is a 10 x 5 body entry.
+    //
+    // This is the one pillar on the case narrower than 3mm: J9 ends at 68.5
+    // and this window starts at 70.0, so 1.5mm. It is left centred on the
+    // measured connector rather than nudged along to widen the pillar -- a
+    // window that does not line up with its plug is the worse failure.
+    ["MINI_USB_J14", 75.5, 10, 5],
 ];
 
 // BOTTOM wall (y=board_width, board_length=160mm long): mini-USB (J14,
@@ -424,14 +516,16 @@ bottom_connector_positions_mm = [
     // sitting to the RIGHT of where they belong. Two 15-16mm connectors
     // displaced by most of their own width is why the printed case would not
     // line up here.
-    // J6 is now a plain rectangular opening sized for the removable cap, not
-    // a window shaped to the connector. The lower socket is used internally by
-    // the FT232H's right-angle adapter, which projects 11mm past the connector
-    // face -- further than any wall can accommodate -- so the cap makes a bump
-    // over the whole stack and comes off for access. Dimensions come from
-    // usb_cap_opening_mm so the wall and the cap cannot drift apart.
-    ["USB_A_J6", usb_cap_x_mm, usb_cap_opening_mm[0] - 2*cutout_margin,
-                               usb_cap_opening_mm[1] - 2*cutout_margin],
+    // FIT-CHECK item 6: only J6's LOWER socket gets a window. The TOP socket
+    // carries the internal cable to the FT232H/JTAG adapter, so opening it
+    // would just be a hole. Measured span along the bottom edge is 14-29mm,
+    // centre 21.5, width 15.
+    //
+    // One port of the stack is 8mm of body, which with cutout_margin 0.5 gives
+    // the 9mm opening asked for (it was ~24mm, the full stack plus the cap
+    // allowance). The cutout starts at the board's top surface, so the solid
+    // wall left above it is what blanks the upper socket.
+    ["USB_A_J6",       21.5, 15, 8],
     ["USB_A_J7",      41.0, 16, 17],   // 2 more stacked USB-A ports
 
     // ETHERNET RESTORED. v4.1 deleted this cutout after concluding the board
@@ -497,18 +591,50 @@ dc_jack_centre_above_pcb = 6;    // measured, PCB top surface to barrel centre
 // WiFi antenna pass-through, right wall -- the power end, which is also the
 // end JP5 runs to. Clear of JP1 (board y 17-27) and SW4 (31-44); y=78 puts it
 // down toward the bottom corner with the header.
-antenna_hole_d       = 6;
+// FIT-CHECK item 3a: 6mm would not pass the bulkhead thread. An RP-SMA
+// bulkhead is a 1/4-36 or M6.5 thread, i.e. about 6.35mm over the crest, so a
+// 6mm hole was under-size before the D-flat took anything off it.
+antenna_hole_d       = 6.8;
 // The bulkhead thread has a flat on it for anti-rotation, so the hole is a D
 // rather than a circle -- a round hole lets the connector spin when the
 // antenna is screwed on or off, which eventually twists the pigtail off.
-// 2.5mm from centre gives 5.5mm across the flat against a 6mm thread, the
-// usual RP-SMA figure.
-antenna_flat_from_centre = 2.5;
-antenna_hole_y_mm    = 78;
+// The flat has to clear the thread's own flat, which has not been measured on
+// this connector. 3.1mm from centre gives 6.2mm across the flat -- generous
+// enough that it cannot be what blocks the thread, while still stopping the
+// body turning more than a few degrees.
+antenna_flat_from_centre = 3.1;
+
+// FIT-CHECK item 3b: moved 15mm along the wall, away from the bottom edge.
+// Board-local Y 78 -> 63. Height unchanged (antenna_hole_above_pcb below).
+//
+// Stays BOARD-relative, and the distinction matters. Measured on the printed
+// case the hole sat 15.6mm from the bottom outer edge; the ask was to double
+// that to 30. But item 5's extra 9mm at that wall carries everything
+// board-referenced along with it, so the same hole is already at 24.6mm before
+// any move is applied -- and the 15mm move then lands it at 39.6mm from the
+// edge, not 30.
+//
+// This was first implemented as a fixed 30mm from the case's outer face, which
+// would have SWALLOWED the 9mm instead of adding to it. "Lands in the same
+// place" means the same place relative to the board -- the pigtail runs to a
+// board-mounted connector -- not the same distance from a wall that moves.
+// Board-local is therefore the correct reference, and the case growing again
+// will carry the hole with the board exactly as it did here.
+antenna_hole_y_mm    = 63;
 antenna_hole_above_pcb = 12;
 
-// KAN-28 self-locking push button, on the LEFT (HDMI) wall, directly above
-// HDMI0/P3 -- the port nearest the board edge.
+// KAN-28 self-locking push button, on the TOP wall (board y=0) -- the same
+// wall as the FT232H.
+//
+// FIT-CHECK item 9: it was on the LEFT (HDMI) wall directly above HDMI0/P3,
+// where its clip nest stands 6.3mm proud of a wall only 1.2mm from the board
+// edge. The board fouled it on the way in and the tray would not assemble.
+// The top wall carries no connectors at all, and after item 5 it has 10.2mm of
+// clear space in front of it -- enough for the 6.3mm nest with 3.9mm to spare,
+// entirely outside the board footprint.
+//
+// x=30 is board-local, at the HDMI end of that wall and well clear of the
+// FT232H, which spans x 96.5-139.5.
 //
 // Retained by printed CLIPS, not screws. Screw holes meant finding two M2
 // screws and nuts and reaching inside a 50mm-deep box to hold them; a clip
@@ -523,7 +649,7 @@ kan28_body_depth   = 6.3;
 kan28_clip_wall    = 2.0;   // wall of the nest around the switch body
 kan28_clip_lip     = 0.9;   // how far the retaining lips overhang
 kan28_clip_fit     = 0.4;   // clearance around the body
-kan28_y_mm         = 15.5;  // board-local Y -- same as HDMI0_P3
+kan28_x_mm         = 30;    // board-local X along the TOP wall
 kan28_above_pcb    = 26;    // button centre above the PCB top surface
 
 // FT232H breakout, 43 x 29mm, mounted inside for openFPGALoader and wired to
@@ -531,18 +657,22 @@ kan28_above_pcb    = 26;    // button centre above the PCB top surface
 // so the board itself can sit anywhere -- which is why it goes on the TOP
 // wall (board y=0), the only long wall with no connectors on it.
 //
-// SLOT-mounted, not screwed. Its four corner holes are visible but their
-// spacing has not been measured, and inventing hole positions is what produced
-// the bosses and standoffs that stopped earlier revisions assembling. Two
-// grooved rails take the PCB by its edges instead: it drops in from above,
-// lands on a stop, and a lip at the top holds it down. No fasteners at all.
+// STALE COMMENT REMOVED. This paragraph described slot rails and "no fasteners
+// at all" long after the geometry had been changed back to four screw posts,
+// so the file's own documentation contradicted what it actually built. The
+// posts are what is built, on the hole spacing confirmed below.
 ft232h_pcb_mm      = [43, 29];
 ft232h_pcb_t       = 1.8;   // 1.6mm board plus fit
 
-// ASSUMED, NOT MEASURED: hole spacing. The four corner holes are clearly
-// visible in a photograph but nobody has put callipers on them. 3mm in from
-// each edge is the usual inset for a board this size, giving 37 x 23.
-// Measure yours and correct these two numbers -- everything else follows.
+// CONFIRMED ON THE HARDWARE, 2026-08-30. These were derived as a 3mm inset
+// from each edge and carried an "ASSUMED, NOT MEASURED" warning through
+// several revisions -- they were the last number on the whole case that had
+// not been checked against a real part. The printed tray was offered up to the
+// actual FT232H breakout and the posts line up, so 37 x 23 is right and is
+// deliberately UNCHANGED here.
+//
+// Worth keeping the history: the inset guess happened to be correct, which is
+// luck rather than method. It is measured now either way.
 ft232h_hole_pitch  = [37, 23];
 ft232h_post_od     = 5.0;
 ft232h_post_ht     = 4.0;   // lifts the board off the wall for its solder side
@@ -627,11 +757,11 @@ screen_window_mm  = [50, 70];   // viewable area -> the through-window
 screen_body_mm    = 6;          // deepest point, protrudes into the case
 screen_flange_mm  = 2;          // flange thickness
 
-// The recess is deliberately SHALLOWER than the 2mm flange. A pocket the full
-// flange depth would leave only lid_thickness - 2 = 0.4mm of lid above it,
-// which is fragile and would very likely tear during printing or handling.
-// 1.0mm locates the module laterally and still leaves 1.4mm of lid.
-screen_recess_mm  = 1.0;
+// The recess is the FULL flange thickness now. It was held at 1.0mm because a
+// 2mm pocket in a 2.4mm lid left 0.4mm of skin above it, which would have torn.
+// With item 1's 6mm lid there is 4mm above a full-depth pocket, so the module
+// can sit flush instead of standing 1mm proud of the lid.
+screen_recess_mm  = 2.0;
 screen_fit_gap    = 0.5;        // per side, module to pocket
 
 // At the HDMI end of the lid, as asked. Board-local; 41 is as far right as it
@@ -648,11 +778,15 @@ screen_center_mm  = [30, 45];
 // ============================================================
 // Derived geometry
 // ============================================================
-outer_length = board_length + 2*(fit_gap + wall_thickness);
-outer_width  = board_width  + 2*(fit_gap + wall_thickness);
+outer_length = board_length + 2*(fit_gap_x + wall_thickness);
+outer_width  = board_width  + 2*(fit_gap_y + wall_thickness);
 tray_height  = floor_thickness + standoff_clearance + board_thickness + wall_height;
 lip_z = floor_thickness + standoff_clearance; // board rests here
-board_origin = [wall_thickness + fit_gap, wall_thickness + fit_gap]; // XY of board's own (0,0)
+board_origin = [wall_thickness + fit_gap_x, wall_thickness + fit_gap_y]; // XY of board's own (0,0)
+
+// See vent_border_mm above for why this is assigned here and not there.
+vent_zone_mm = [outer_length - 2*vent_border_mm,
+                outer_width  - 2*vent_border_mm];
 
 // Board-local Y -> model Y.
 //
@@ -704,14 +838,16 @@ module retaining_lip_ridge() {
     // avoid -- it renders as two volumes that merely abut, not one solid.
     // Everything outside the inner wall face is inside wall material
     // anyway, so the overlap costs nothing.
-    translate([0, 0, lip_z - lip_thickness])
+    fuse_eps = 0.05;
+    h = lip_z - floor_thickness + fuse_eps;
+    translate([0, 0, floor_thickness - fuse_eps])
     difference() {
-        linear_extrude(height = lip_thickness)
+        linear_extrude(height = h)
             square([outer_length, outer_width]);
-        translate([wall_thickness + lip_ledge, wall_thickness + lip_ledge, -1])
-            linear_extrude(height = lip_thickness + 2)
-                square([outer_length - 2*(wall_thickness + lip_ledge),
-                        outer_width  - 2*(wall_thickness + lip_ledge)]);
+        translate([wall_thickness + lip_ledge_x, wall_thickness + lip_ledge_y, -1])
+            linear_extrude(height = h + 2)
+                square([outer_length - 2*(wall_thickness + lip_ledge_x),
+                        outer_width  - 2*(wall_thickness + lip_ledge_y)]);
     }
 }
 
@@ -816,37 +952,39 @@ module ft232h_posts() {
                 }
 }
 
-// Button clearance through the LEFT wall.
-module left_edge_switch_hole() {
-    translate([-1, board_y(kan28_y_mm),
+// Button clearance through the TOP wall (y = outer_width).
+module top_edge_switch_hole() {
+    translate([board_origin[0] + kan28_x_mm,
+               outer_width - wall_thickness - 1,
                lip_z + board_thickness + kan28_above_pcb])
-        rotate([0, 90, 0])
+        rotate([-90, 0, 0])
             cylinder(h = wall_thickness + 2, d = kan28_boss_d, $fn = 32);
 }
 
-// Two L-shaped snap arms on the inner face of the left wall -- not a box.
+// Two L-shaped snap arms on the inner face of the top wall -- not a box.
 //
 // A closed surround meant threading the switch into a pocket; two arms let it
 // go straight in and click. Each arm is an L in section: a post standing off
 // the wall by the switch's body depth, with a hook at its end that overhangs
 // the body and holds it against the wall. They sit above and below the body,
 // so the sides stay completely open for the terminals and wiring.
-module left_edge_switch_clips() {
-    yc = board_y(kan28_y_mm);
+module top_edge_switch_clips() {
+    xc = board_origin[0] + kan28_x_mm;
     zc = lip_z + board_thickness + kan28_above_pcb;
-    w  = kan28_body_mm[0] + 2*kan28_clip_fit;   // along Y, the arm's width
+    w  = kan28_body_mm[0] + 2*kan28_clip_fit;   // along X, the arm's width
     h  = kan28_body_mm[1] + 2*kan28_clip_fit;   // along Z, the gap between arms
     d  = kan28_body_depth;
+    yi = outer_width - wall_thickness;          // inner face of the top wall
 
     for (zs = [-1, 1])
-        translate([wall_thickness, yc - w/2, zc + zs*(h/2)]) {
-            // upright of the L: stands off the wall
+        translate([xc - w/2, yi - d, zc + zs*(h/2)]) {
+            // upright of the L: stands off the wall, spanning the body depth
             translate([0, 0, (zs > 0) ? 0 : -kan28_clip_wall])
-                cube([d, w, kan28_clip_wall]);
-            // foot of the L: hooks back over the switch body
-            translate([d - kan28_clip_lip, 0,
-                       (zs > 0) ? -kan28_clip_lip : -kan28_clip_wall])
-                cube([kan28_clip_lip, w, kan28_clip_lip + kan28_clip_wall]);
+                cube([w, d, kan28_clip_wall]);
+            // foot of the L, at the far end from the wall: hooks back over the
+            // switch body and holds it against the wall's inner face
+            translate([0, 0, (zs > 0) ? -kan28_clip_lip : -kan28_clip_wall])
+                cube([w, kan28_clip_lip, kan28_clip_lip + kan28_clip_wall]);
         }
 }
 
@@ -918,6 +1056,29 @@ module snap_groove() {
         }
 }
 
+// How tall the two INTERNAL wall-mounted assemblies stand above the board's top
+// surface, and whether this variant's walls are tall enough to contain them.
+//
+// Found by measuring the rendered STLs, not by reading the model: the sealed
+// and vented trays came out 48.9mm tall against a 39.0mm wall, because the
+// FT232H posts and the switch clips were being built straight through the top
+// of a wall too short to hold them. The tall-xl variant has always had room, so
+// nothing looked wrong there -- exactly the shape of bug that only a number
+// measured off the OUTPUT catches.
+//
+// These are omitted rather than asserted against, so the short variants still
+// render. What must never happen is omitting them SILENTLY, hence the echo.
+board_top_z          = lip_z + board_thickness;
+ft232h_stack_mm      = ft232h_above_pcb + ft232h_hole_pitch[1]/2
+                       + ft232h_pcb_mm[1]/2 + ft232h_post_od/2;
+kan28_stack_mm       = kan28_above_pcb + kan28_body_mm[1]/2 + kan28_clip_fit
+                       + kan28_clip_wall;
+ft232h_fits          = ft232h_stack_mm <= wall_height;
+kan28_fits           = kan28_stack_mm  <= wall_height;
+echo(str("internal mounts vs wall_height ", wall_height, ": FT232H needs ",
+         ft232h_stack_mm, " (", ft232h_fits ? "fits" : "OMITTED",
+         "), switch needs ", kan28_stack_mm, " (", kan28_fits ? "fits" : "OMITTED", ")"));
+
 module base_tray() {
     union() {
         difference() {
@@ -930,13 +1091,13 @@ module base_tray() {
                 right_edge_cutouts();
                 right_edge_dc_jack();
                 right_edge_antenna_hole();
-                left_edge_switch_hole();
+                if (kan28_fits) top_edge_switch_hole();
             }
         }
         retaining_lip_ridge();
         standoffs();
-        left_edge_switch_clips();
-        ft232h_posts();
+        if (kan28_fits) top_edge_switch_clips();
+        if (ft232h_fits) ft232h_posts();
     }
 }
 
@@ -1112,6 +1273,14 @@ echo(str("RIGHT wall:"));
 for (c = right_connector_positions_mm)
     echo(str("   ", c[0], "  board ", c[1], "  -> model ", board_y(c[1])));
 echo(str("   DC_JACK_JP1  board ", dc_jack_y_mm, "  -> model ", board_y(dc_jack_y_mm)));
+echo(str("   ANTENNA      board ", antenna_hole_y_mm,
+         "  -> model ", board_y(antenna_hole_y_mm),
+         " (i.e. that far from the case's bottom outer face)"));
+echo(str("TOP wall: KAN-28 switch at board x ", kan28_x_mm,
+         ", FT232H at board x ", ft232h_x_mm));
+echo(str("gap between the board edge and each LONG wall (mm): ", fit_gap_y,
+         " -- FT232H needs ", ft232h_post_ht + ft232h_pcb_t,
+         ", switch nest needs ", kan28_body_depth));
 
 // Assertion: adjacent cutouts on a wall must leave material between them.
 //
@@ -1159,7 +1328,11 @@ echo(str("   of which above the PCB top surface:   ",
 // check.
 ft232h_x0 = ft232h_x_mm - ft232h_pcb_mm[0]/2;
 ft232h_x1 = ft232h_x_mm + ft232h_pcb_mm[0]/2;
-ft232h_y1 = ft232h_post_ht + ft232h_pcb_t;      // how far it reaches off the wall
+// How far the holder reaches off the wall, converted to a board-local Y so it
+// can be compared with the heatsink zone. Before item 5 the wall was 1.2mm from
+// the board edge and the two were treated as the same number; with a 10.2mm gap
+// they are not, and the check would have been 9mm pessimistic.
+ft232h_y1 = ft232h_post_ht + ft232h_pcb_t - fit_gap_y;
 hs_x0 = heatsink_center_mm[0] - heatsink_lwh_mm[0]/2 - heatsink_xy_margin_mm;
 hs_x1 = heatsink_center_mm[0] + heatsink_lwh_mm[0]/2 + heatsink_xy_margin_mm;
 hs_y0 = heatsink_center_mm[1] - heatsink_lwh_mm[1]/2 - heatsink_xy_margin_mm;
@@ -1179,12 +1352,20 @@ echo(str("vent: ", vent_shape, " ", vent_hole_d, "mm at ", vent_hole_pitch,
          "mm pitch -> web ", vent_hole_pitch - vent_hole_d, "mm, open area ",
          round(1000 * vent_open_area / vent_cell_area)/10, "%"));
 
-lip_bearing_mm = lip_ledge - fit_gap;
-echo(str("lip bearing width under board edge (mm): ", lip_bearing_mm));
-assert(lip_bearing_mm >= 1.0,
-       str("retaining lip only reaches ", lip_bearing_mm,
-           "mm under the board edge -- not enough to carry it. ",
-           "Increase lip_ledge or reduce fit_gap."));
+// Checked per AXIS. The long walls stand 10.2mm off the board after item 5, so
+// a single lip_ledge that is fine on the short walls leaves the board's two
+// long edges hanging in air -- exactly the kind of thing a whole-case scalar
+// hides.
+lip_bearing_x_mm = lip_ledge_x - fit_gap_x;
+lip_bearing_y_mm = lip_ledge_y - fit_gap_y;
+echo(str("lip bearing under board edge (mm) -- short walls: ", lip_bearing_x_mm,
+         ", long walls: ", lip_bearing_y_mm));
+assert(lip_bearing_x_mm >= 1.0,
+       str("retaining lip only reaches ", lip_bearing_x_mm,
+           "mm under the board's short edges. Increase lip_ledge."));
+assert(lip_bearing_y_mm >= 1.0,
+       str("retaining lip only reaches ", lip_bearing_y_mm,
+           "mm under the board's long edges. Increase lip_bearing_target."));
 
 // ============================================================
 // Output: base tray and lid side by side, print-plate friendly.
@@ -1193,45 +1374,6 @@ assert(lip_bearing_mm >= 1.0,
 base_tray();
 translate([0, outer_width + 15, 0])
     lid();
-
-// =====================================================================
-// SEPARATE PART: the USB cap. Printed on its own, clipped on afterwards.
-// Modelled at the origin rather than in place, so it slices flat.
-// =====================================================================
-module usb_cap() {
-    w = usb_cap_opening_mm[0];
-    h = usb_cap_opening_mm[1];
-    d = usb_cap_clearance + usb_cap_wall;
-
-    // outer shell, closed on the outside, open toward the case
-    difference() {
-        translate([-(w/2 + usb_cap_wall), -(h/2 + usb_cap_wall), 0])
-            cube([w + 2*usb_cap_wall, h + 2*usb_cap_wall, d]);
-        translate([-w/2, -h/2, -0.01])
-            cube([w, h, d - usb_cap_wall + 0.01]);
-    }
-
-    // spigot that enters the opening, minus a fit allowance
-    translate([-(w/2 - usb_cap_fit), -(h/2 - usb_cap_fit), -wall_thickness])
-        difference() {
-            cube([w - 2*usb_cap_fit, h - 2*usb_cap_fit, wall_thickness]);
-            translate([usb_cap_wall, usb_cap_wall, -0.01])
-                cube([w - 2*usb_cap_fit - 2*usb_cap_wall,
-                      h - 2*usb_cap_fit - 2*usb_cap_wall,
-                      wall_thickness + 0.02]);
-        }
-
-    // two L-hooks, top and bottom, reaching through and catching the inner
-    // face. The arm is thin so it can flex; the barb is what holds.
-    for (zs = [-1, 1])
-        translate([-(w/2 - usb_cap_fit) + 3,
-                   zs*(h/2 - usb_cap_fit - usb_cap_wall) - (zs > 0 ? 0 : usb_cap_wall),
-                   -(wall_thickness + usb_cap_hook + 0.6)]) {
-            cube([w - 2*usb_cap_fit - 6, usb_cap_wall, wall_thickness + usb_cap_hook + 0.6]);
-            translate([0, zs > 0 ? usb_cap_wall : -usb_cap_hook, 0])
-                cube([w - 2*usb_cap_fit - 6, usb_cap_hook, usb_cap_hook + 0.6]);
-        }
-}
 
 // ---- Reference: board footprint ghost (preview only) ----
 module board_ghost() {

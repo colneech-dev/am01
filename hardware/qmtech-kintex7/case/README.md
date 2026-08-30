@@ -151,11 +151,27 @@ mezzanine), square corners (still no `hull()` rounding).
 All three share one template (`VARIANT_WALL_HEIGHT` / `VARIANT_VENTED`
 knobs at the top of each `.scad`) and differ only in those two numbers.
 
-| Variant | Dir | Wall height | Venting | Heatsink margin | Use when |
-|---|---|---|---|---|---|
-| **Sealed** | `v4-sealed/` | 24mm | none, fully solid | 3.9mm | passive cooling is enough, or you want a dust/splash-resistant box |
-| **Vented** | `v4-vented/` | 24mm | 5x5 grid of 3mm holes over the FPGA | 3.9mm | same size as Sealed, adds passive convection through the perforated lid |
-| **Tall-XL** | `v4-tall-xl/` | 36mm | same 5x5 vent grid | 15.9mm | bigger/aftermarket heatsink, or a fan sits in the extra headroom above the stock one |
+| Variant | Dir | Wall height | Venting | Heatsink margin | Internal mounts | Use when |
+|---|---|---|---|---|---|---|
+| **Sealed** | `v4-sealed/` | 30.6mm | none, fully solid | 8.1mm | **omitted** | passive cooling is enough, or you want a dust/splash-resistant box |
+| **Vented** | `v4-vented/` | 30.6mm | hex honeycomb, whole lid | 8.1mm | **omitted** | same size as Sealed, adds passive convection through the perforated lid |
+| **Tall-XL** | `v4-tall-xl/` | 54.6mm | same honeycomb | 32.1mm | yes | bigger/aftermarket heatsink, a fan above the stock one, and the only variant with room for the internal FT232H and switch |
+
+Wall heights are the headroom above the board's top surface. The `VARIANT_`
+knob names 24 and 48; the rest is the v4.2 compensation for the taller
+standoffs, the 6mm lid and the fan-screw clearance, added in one place so a
+variant cannot be short by an amount nobody accounted for.
+
+**"Internal mounts: omitted"** is not a style choice. The FT232H holder needs
+40.5mm above the board and the KAN-28 switch nest 34.35mm, and neither fits in
+30.6mm. Rather than build them through the top of a wall too short to hold
+them -- which is what the tray STLs actually did until 2026-08-30, coming out
+48.9mm tall against a 39.0mm wall -- the short variants leave them out and say
+so in the render log. If you want the FT232H or the panel switch inside the
+case, print Tall-XL.
+
+Outer dimensions, all variants: **167.2 x 115.2mm**, 39.0mm tall (Sealed,
+Vented) or 63.0mm (Tall-XL), plus a 9mm lid that overlaps 3mm into the tray.
 
 ![Sealed, isometric](v4-sealed/preview_isometric.png)
 ![Vented, isometric](v4-vented/preview_isometric.png)
