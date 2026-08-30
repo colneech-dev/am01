@@ -1,0 +1,235 @@
+/*
+ * am01_smoke.c -- does the FPGA compute the RIGHT hash?
+ *
+ * WHY THIS EXISTS. odo-miner reports every nonce that fails its software
+ * re-check as "stale", which conflates two unrelated faults:
+ *
+ *   1. a genuinely stale nonce -- the job changed between find and drain
+ *   2. the FPGA computing a DIFFERENT hash than the software oracle
+ *
+ * On 2026-08-30 the board ran 95 s against a live pool and reported
+ * "found=10 shares=0 stale=10". Every nonce failed. That number cannot say
+ * which of the two it was, and the two have completely different fixes: one is
+ * a pool-churn race, the other means the bitstream is wrong and every share
+ * this miner ever submits will be rejected.
+ *
+ * This test removes the ambiguity by construction. One fixed header, dispatched
+ * once, never changed. There is no pool and no job switching, so staleness is
+ * impossible -- any nonce that fails the oracle failed because the hardware and
+ * the software disagree.
+ *
+ * Ported from odo-miner-cyclonev/hps/fpga_smoke_pipe.c. The one behavioural
+ * change is deliberate: that version hardcodes SMOKE_EPOCH and refuses to run
+ * unless the bitstream matches. Since the epoch rolls every 10 days, a constant
+ * guarantees the test rots. This reads the epoch OUT of the bitstream and
+ * builds the oracle from it, so the test and the hardware cannot disagree about
+ * which OdoCrypt they are checking.
+ *
+ * Run as root, with odo-miner stopped -- the GPIO chip is opened exclusively.
+ */
+
+#define _POSIX_C_SOURCE 200809L
+
+#include "miner_io_pipe.h"
+#include "odocrypt_state.h"
+#include "KeccakP-800-SnP.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <unistd.h>
+#include <time.h>
+
+/* Target is tgt_msb * 2^248, i.e. the top byte of a 256-bit big-endian value.
+ * 0x10 accepts about 1 hash in 16, which finds instantly and is the right
+ * choice for a correctness check. Tighter values are what make the run long
+ * enough to time, hence the argument. */
+#define DEFAULT_TGT_MSB 0x10u
+#define MAX_SAMPLES     16
+
+static double now_s(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+static void sleep_us(long us)
+{
+    struct timespec ts = { us / 1000000L, (us % 1000000L) * 1000L };
+    nanosleep(&ts, NULL);
+}
+
+/* Deterministic header, same generator as gen_vectors_pipe.c so the vectors
+ * are comparable. Bytes 76..79 are the nonce field and are left zero -- the
+ * FPGA sweeps them. */
+static void build_header(uint32_t key, uint8_t h[80])
+{
+    uint32_t x = key ^ 0xDEADBEEFu;
+    for (int i = 0; i < 80; i++) {
+        x = x * 1664525u + 1013904223u;
+        h[i] = (uint8_t)(x >> 24);
+    }
+    h[76] = h[77] = h[78] = h[79] = 0;
+}
+
+/* uint256 strict less-than over LE byte arrays (byte[31] is the MSB).
+ * Same ordering as the RTL's cmp_256, deliberately. */
+static int hash_lt(const uint8_t *a, const uint8_t *b)
+{
+    for (int i = 31; i >= 0; i--)
+        if (a[i] != b[i]) return a[i] < b[i];
+    return 0;
+}
+
+/* The oracle: odo_encrypt then Keccak-p[800,12], exactly as the RTL was
+ * verified against. */
+static void oracle_hash(const odo_epoch_state_t *st, const uint8_t header[80],
+                        uint32_t nonce, uint8_t out[KeccakP800_stateSizeInBytes])
+{
+    memset(out, 0, KeccakP800_stateSizeInBytes);
+    memcpy(out, header, 80);
+    out[76] = (uint8_t)(nonce);
+    out[77] = (uint8_t)(nonce >> 8);
+    out[78] = (uint8_t)(nonce >> 16);
+    out[79] = (uint8_t)(nonce >> 24);
+    out[80] = 1;
+    odo_encrypt(st, out, out);
+    KeccakP800_Permute_12rounds(out);
+}
+
+int main(int argc, char **argv)
+{
+    unsigned tgt_msb = DEFAULT_TGT_MSB;
+    int want = 4;
+
+    if (argc > 1) tgt_msb = (unsigned)strtoul(argv[1], NULL, 0);
+    if (argc > 2) want    = atoi(argv[2]);
+    if (tgt_msb == 0 || tgt_msb > 0xFF) {
+        fprintf(stderr, "usage: %s [target_msb 1..255] [samples]\n", argv[0]);
+        return 2;
+    }
+    if (want < 1) want = 1;
+    if (want > MAX_SAMPLES) want = MAX_SAMPLES;
+
+    if (miner_io_pipe_init() != 0) {
+        fprintf(stderr, "am01_smoke: miner_io_pipe_init failed "
+                        "(run as root, and stop odo-miner first)\n");
+        return 1;
+    }
+
+    uint32_t seed = miner_io_pipe_seed();
+    uint32_t ver  = miner_io_pipe_version();
+    printf("FPGA version 0x%04x, bitstream epoch %u\n", ver, seed);
+
+    if (seed == 0 || seed == 0xFFFFFFFFu) {
+        printf("FAIL: implausible epoch read back -- the bus is not returning\n"
+               "      real register data, so nothing below would mean anything.\n");
+        miner_io_pipe_shutdown();
+        return 1;
+    }
+
+    /* The oracle is built from the epoch the HARDWARE reports. If the two ever
+     * disagreed, every comparison below would be meaningless -- and that is
+     * precisely the bug this test exists to catch, so it must not be possible
+     * to introduce it here. */
+    odo_epoch_state_t st;
+    odo_epoch_generate(&st, seed);
+
+    uint8_t header[80];
+    build_header(seed, header);
+
+    uint8_t target[32];
+    memset(target, 0, sizeof(target));
+    target[31] = (uint8_t)tgt_msb;
+
+    printf("dispatching one fixed job, target = 0x%02x * 2^248 "
+           "(~1 hash in %.1f)\n", tgt_msb, 256.0 / (double)tgt_msb);
+    printf("no pool, no job switching -- a failure here CANNOT be staleness\n\n");
+
+    double t0 = now_s();
+    if (miner_io_pipe_dispatch(header, target) != 0) {
+        printf("FAIL: dispatch returned an error\n");
+        miner_io_pipe_shutdown();
+        return 1;
+    }
+
+    int pass = 0, fail = 0, got = 0;
+    double t_first = 0.0;
+
+    while (got < want) {
+        uint32_t nonce = 0;
+        int rc = -1;
+
+        /* ~10 s per sample. A tight target legitimately takes a while; a wrong
+         * core does not take longer, it just fails, so a timeout here means
+         * "not finding", not "computing badly". */
+        for (int i = 0; i < 100000; i++) {
+            rc = miner_io_pipe_poll(&nonce);
+            if (rc == 0) break;
+            if (rc < 0) {
+                printf("FAIL: poll I/O error\n");
+                miner_io_pipe_shutdown();
+                return 1;
+            }
+            sleep_us(100);
+        }
+        if (rc != 0) {
+            printf("no further nonce within timeout after %d sample(s)\n", got);
+            break;
+        }
+
+        double t = now_s();
+        if (got == 0) t_first = t - t0;
+        got++;
+
+        uint8_t h[KeccakP800_stateSizeInBytes];
+        oracle_hash(&st, header, nonce, h);
+        int ok = hash_lt(h, target);
+        if (ok) pass++; else fail++;
+
+        printf("  nonce 0x%08x  hash MSB %02x%02x%02x%02x  %s\n",
+               nonce, h[31], h[30], h[29], h[28],
+               ok ? "PASS" : "FAIL <-- hardware and oracle disagree");
+    }
+
+    double elapsed = now_s() - t0;
+    printf("\n%d found, %d pass, %d fail, in %.2f s (first find %.3f s)\n",
+           got, pass, fail, elapsed, t_first);
+
+    if (got > 0) {
+        /* Expected hashes per find is 256/tgt_msb; finds per second times that
+         * is an effective hashrate. Rough -- it ignores the dispatch settle
+         * window and the polling granularity -- but it is measured, and the
+         * only hashrate figure on this project so far came from static timing. */
+        double per_find = 256.0 / (double)tgt_msb;
+        double rate = ((double)got / elapsed) * per_find;
+        printf("effective hashrate ~ %.2f MH/s (measured, not from timing)\n",
+               rate / 1e6);
+    }
+
+    miner_io_pipe_shutdown();
+
+    if (got == 0) {
+        printf("\nVERDICT: the core found nothing. Not a hash-correctness\n"
+               "         result -- look at whether it is running at all.\n");
+        return 1;
+    }
+    if (fail == 0) {
+        printf("\nVERDICT: PASS -- the FPGA and the software oracle agree.\n"
+               "         Hashes are correct, so the pool rejections are a\n"
+               "         job-churn/staleness problem, not a bad bitstream.\n");
+        return 0;
+    }
+    if (pass == 0) {
+        printf("\nVERDICT: FAIL -- every nonce disagrees with the oracle.\n"
+               "         The bitstream computes the wrong hash. Regenerate\n"
+               "         encrypt.v and rebuild; see docs/CODE-REVIEW-2026-08-30.md\n"
+               "         finding #1 and tools/check-epoch.sh.\n");
+        return 1;
+    }
+    printf("\nVERDICT: MIXED -- %d of %d disagree. Not a clean either/or;\n"
+           "         suspect marginal timing rather than a wrong core.\n", fail, got);
+    return 1;
+}
