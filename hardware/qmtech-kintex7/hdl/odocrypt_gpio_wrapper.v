@@ -834,8 +834,11 @@ module odocrypt_gpio_wrapper #(
                     gpio_ready   <= 1'b0;
                     gpio_data_oe <= 1'b0;
                     request_issued <= 1'b0;
-                    // One-shot strobes into the SPI/display block.
-                    lcd_start    <= 1'b0;
+                    // One-shot strobe into the display block. lcd_start used
+                    // to be cleared here too, which is precisely what made it
+                    // useless: S_IDLE is not reached until the CM4 releases
+                    // WR_N, long after the transfer finished. It is a toggle
+                    // now and needs no clearing.
                     lcd_ctrl_wr  <= 1'b0;
                     if (wr_active) begin
                         addr_latched  <= addr_sync1;
