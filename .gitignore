@@ -14,3 +14,9 @@ toolchain.local
 # Ships as a template; fill it in locally or on the running board.
 hardware/qmtech-kintex7/linux/overlay/etc/wpa_supplicant/wpa_supplicant-wlan0.conf
 hardware/qmtech-kintex7/openxc7/gen/
+
+# Stray tool output dropped in the REPO ROOT by scripts invoked from here,
+# rather than from the directory that owns them. Named specifically rather
+# than as a blanket *.log, so a log someone deliberately commits still shows up.
+n_*.log
+build_*.log

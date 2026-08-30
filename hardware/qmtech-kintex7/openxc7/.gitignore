@@ -10,3 +10,28 @@ out/
 *.json
 *.bba
 *.log
+
+# Per-run build output directories. The `out/` rule above only ever caught the
+# default name; every experiment since has used its own -- out_ab_e2,
+# out_nm1_nosr, out_e2nbfix_v15 and a dozen more. out_nm1_nosr alone is 13.6GB.
+out_*/
+seedrun/
+
+# Captured console transcripts from long runs (`... 2>&1 | tee foo.console`).
+*.console
+
+# Vivado design checkpoints and back-annotated timing -- large, regenerable.
+*.dcp
+*.sdf
+
+# Background-run PID files.
+.pid_*
+
+# Python bytecode.
+__pycache__/
+*.pyc
+
+# NOTE, deliberately NOT ignored: *.py, *.sh, *.tcl, *.xdc, *.ys, *.md, *.csv,
+# *.tsv and *.txt in this directory. Several are analysis scripts and recorded
+# results that belong in the repo -- an extension-wide rule here would silently
+# swallow them.
