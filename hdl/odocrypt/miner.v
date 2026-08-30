@@ -122,9 +122,26 @@ module miner(clk, header, target, start_hash, res, nonce);
 			nonce_in <= nonce_in + 1;
 		if (~start_hash)
 			nonce_out <= NONCE_BASE;
-		else if (has_res & start_hash & nonce_out_go)
+		// nonce_out counts EVERY result, gate or no gate.
+		//
+		// It used to increment only under nonce_out_go, so every result
+		// emerging before the 204-cycle warm-up went uncounted and this
+		// counter permanently lost sync with the result stream. The nonce
+		// reported for a solution was then wrong by however many results
+		// had been skipped -- measured on hardware 2026-08-30 as +16 on one
+		// run and -112 on another, i.e. not a fixed offset but a function of
+		// where in the drain the gate happened to open.
+		//
+		// odo-miner-cyclonev's working core (odo_miner_core.v) has no gate on
+		// the counter at all: nonce_in and nonce_out free-run from reset, so
+		// the Nth result pairs with the Nth input by construction. That is the
+		// invariant, and gating the counter is what broke it.
+		//
+		// The warm-up still suppresses REPORTING, which is all it was ever
+		// for: stale old-header results must not be published as solutions.
+		else if (has_res & start_hash)
 		begin
-			if (res) nonce <= nonce_out;
+			if (res & nonce_out_go) nonce <= nonce_out;
 			nonce_out <= nonce_out + 1;
 		end
 	end

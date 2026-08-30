@@ -183,13 +183,16 @@ module odocrypt_gpio_wrapper #(
     // touch_cs_n was tied high and touch_x/touch_y were never written.
     // A v1.2-or-older host driving only 4 address lines still works: the
     // fifth line idles low, so it addresses 0x00-0x0F exactly as before.
+    // 0x0108: miner.v nonce_out now counts EVERY result. Gating the counter on
+    // nonce_out_go desynchronised it from the result stream, which is what
+    // actually produced the wrong nonces. THIS is the fix that matters.
     // 0x0107: settle window widened 205 -> 4096 cycles, matching the value the
     // Cyclone V build uses for this same core. See the SETTLE_CYCLES note.
     // 0x0106: target_word_cnt_h narrowed to 3 bits. The version bump is
     // LOAD-BEARING, not cosmetic -- am01_bus_submit_work() uses it to decide
     // whether it must send the target words twice to work around the
     // every-other-dispatch arming bug in 0x0105 and earlier.
-    localparam [15:0] VERSION = 16'h0107;
+    localparam [15:0] VERSION = 16'h0108;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;

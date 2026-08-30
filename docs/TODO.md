@@ -49,7 +49,33 @@ iverilog run that filtered warnings hid the one diagnostic that mattered.
 
 ---
 
-## 2. Bitstream rebuild for VERSION 0x0107
+## 2. Bitstream rebuild for VERSION 0x0108
+
+THREE RTL fixes now ride one rebuild. None is in any bitstream in service; the
+board runs 0x0105.
+
+**0x0108 -- `miner.v` nonce_out counts every result. THIS IS THE ONE.**
+nonce_out was gated on nonce_out_go, so any result emerging before the
+204-cycle warm-up went uncounted and the counter lost sync with the result
+stream permanently. Every reported nonce was then wrong by however many results
+had been skipped. odo-miner-cyclonev's working core has no gate on the counter
+at all -- nonce_in and nonce_out free-run from reset so the Nth result pairs
+with the Nth input by construction. Verified by full iverilog elaboration
+(miner.v + encrypt.v + atomminer_misc.v + keccak800.v): no errors, no width
+warnings.
+
+**0x0107 -- settle window 205 -> 4096.** Stops stale old-header results being
+published. Necessary but NOT sufficient on its own; it suppresses reporting and
+does nothing for counter alignment.
+
+**0x0106 -- `target_word_cnt_h` 4 bits -> 3.** Armed the core on alternate
+dispatches only.
+
+Software workarounds cover 0x0106 and (partly) 0x0107 until then, both version
+-gated so flashing 0x0108 retires them automatically. There is NO workaround for
+the nonce_out desync: a misreported nonce cannot be recovered host-side.
+
+## 2b. Superseded notes: 0x0107 and 0x0106
 
 Two RTL fixes are now waiting on one rebuild, and NEITHER is in any bitstream in
 service. The board runs 0x0105.

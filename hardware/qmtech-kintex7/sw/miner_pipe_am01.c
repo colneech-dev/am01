@@ -417,6 +417,23 @@ int main(int argc, char **argv)
      * from the new sweep. Drop exactly one per job. */
     int discard_first = 0;
     uint64_t discarded = 0;
+
+    /* Only bitstreams BEFORE 0x0108 need the discard.
+     *
+     * 0x0108 fixes the real cause in miner.v -- nonce_out was gated on
+     * nonce_out_go, so results arriving before the warm-up went uncounted and
+     * the counter lost sync with the result stream permanently. With that
+     * fixed, the first find after an arm is a genuine solution and discarding
+     * it would throw away a real share on every job.
+     *
+     * So this must NOT simply be left in place after the rebuild. Gated on the
+     * version the hardware reports, the same way the double-arm workaround is,
+     * so flashing 0x0108 retires it with no coordination. */
+    const uint32_t fpga_ver = miner_io_pipe_version() & 0xFFFFu;
+    const int warmup_broken = (fpga_ver < 0x0108u);
+    if (warmup_broken)
+        fprintf(stderr, "[pipe] FPGA 0x%04x predates the nonce_out fix; "
+                        "discarding the first find of each job\n", fpga_ver);
     uint64_t found = 0, shares = 0, stale = 0;
     time_t last_status = 0;
 
@@ -493,7 +510,7 @@ int main(int argc, char **argv)
                 uint32_t nonce;
                 int drained = 0;
                 while (drained++ < 64 && miner_io_pipe_poll(&nonce) == 0) {
-                    if (discard_first) {
+                    if (discard_first && warmup_broken) {
                         /* Poisoned by the too-short warm-up. Not counted as a
                          * find: counting it would make the found/stale ratio
                          * look like a hashing fault, which is what sent this
