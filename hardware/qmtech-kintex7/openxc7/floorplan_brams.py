@@ -63,6 +63,58 @@ CAVEATS
 USAGE
 -----
     ./floorplan_brams.py in.json out.json [--columns 0,1,2] [--dry-run]
+
+FUTURE WORK: A GENERAL VERSION -- NOT YET, AND DELIBERATELY SO
+--------------------------------------------------------------
+This script knows what OdoCrypt looks like: it finds rounds by matching a
+`roundN` pattern in cell names and lays them out as a chain. That is fine here
+because odo_gen EMITS that structure, so the topology is known rather than
+inferred -- but it is why the script cannot be pointed at another design.
+
+The general version would derive the floorplan from the NETLIST GRAPH instead
+of from naming conventions:
+
+  1. cluster cells into stages by connectivity, rather than by regex
+  2. build the stage adjacency graph (which stage feeds which)
+  3. embed that graph onto the device's hard-resource grid, minimising the
+     MAXIMUM inter-stage distance subject to egress capacity
+  4. emit BEL constraints
+
+Deliberately not built yet. The reason is economics, not difficulty: each
+validation costs ~2 hours of synthesis plus routing, so building a solver would
+spend the scarcest resource here proving it reproduces a geometry already
+measured. Parameterising (miner count, BRAMs per round, round count and the
+site budget all now come from the netlist and the prjxray map, not from
+constants) covers the realistic failure modes -- more miners, different round
+or sbox counts, a different device -- for a fraction of the risk. A solver
+becomes worth building when a genuinely different TOPOLOGY appears, not before.
+
+WHY IT WOULD BE WORTH CONTRIBUTING UPSTREAM
+-------------------------------------------
+Nothing in the idea is OdoCrypt-specific, and the weakness it addresses is a
+property of analytical placement rather than of this design. Measured here:
+
+  * nextpnr's HeAP placer smears a structured pipeline across the die --
+    per-round column span 5.2 against Vivado's 2.2 -- because a quadratic
+    objective pulls every cell toward its neighbours' centroid, and for a
+    pipeline that centroid is the middle of the chip. The BRAM floorplan alone
+    was worth +29 MHz (89.30 -> 122.40) for that reason.
+  * BRAM nets were 10.7% of nets but 42.5% of total HPWL, median span 124 tiles
+    against 1 for SLICE nets. Constraining the hard resources is what matters;
+    the logic follows them.
+  * HPWL is a BAD proxy for routability here, which is the counterintuitive
+    part worth passing on: packing each round into 10 contiguous tiles improved
+    wirelength 18.6% and routing collapsed anyway (717 unrouted arcs by
+    iteration 3) because ~200 BRAM outputs leaving one small region saturate
+    local egress. The objective has to include egress capacity, not just
+    distance.
+
+Any nextpnr user with a BRAM-heavy structured design hits the same wall, on any
+architecture -- the placer behaviour is arch-independent. A general "derive a
+floorplan from netlist structure" pass would help them, and unlike the two
+placer bugs already found in this work (see patches/), it is an addition rather
+than a fix, so it can be developed and validated separately without blocking
+anything here.
 """
 import argparse
 import collections
