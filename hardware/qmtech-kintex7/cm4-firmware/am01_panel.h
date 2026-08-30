@@ -40,6 +40,23 @@
  * slice budget even on a slow bus: 256 pixel writes. */
 #define AM01_PANEL_TILE 16
 
+/* MEASURED on hardware by am01_busbench, 2026-08-30, against FPGA v0x0105:
+ *
+ *     LCD_DATA write (16-bit)   20.0 us/op    ~50k ops/s
+ *     STATUS read    (16-bit)   20.6 us/op    ~48k ops/s
+ *
+ * A tile is AM01_PANEL_TILE^2 pixels, one 16-bit write each, plus the column
+ * and page address writes that precede it. 256 * 20.0us = 5.1ms.
+ *
+ * This is the quantum am01_panel_slice() works in: it will not stop part way
+ * through a tile, so any budget you pass is rounded up to a multiple of this.
+ * Sizing a budget below it does not make slices shorter, it just means every
+ * slice pushes exactly one tile.
+ *
+ * The same measurement is why the panel is damage-tracked rather than
+ * full-frame: a whole 320x240 screen is 76,800 writes = 1.54s, i.e. 0.65fps. */
+#define AM01_PANEL_TILE_US 5120u
+
 /*
  * Enable and initialise the panel.
  *

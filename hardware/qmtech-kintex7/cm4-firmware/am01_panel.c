@@ -290,7 +290,20 @@ int am01_panel_slice(am01_bus_t *bus, unsigned budget_us)
     int pushed = 0;
 
     /* Round-robin from where the last slice stopped, so no tile can be
-     * starved by a busier neighbour earlier in the scan order. */
+     * starved by a busier neighbour earlier in the scan order.
+     *
+     * WHAT budget_us ACTUALLY GUARANTEES, now that the bus has been measured:
+     * it is checked BETWEEN tiles, and a tile is indivisible. So a slice runs
+     * until the budget is spent and then finishes the tile in flight -- it can
+     * overrun by up to one tile, and a budget smaller than one tile still
+     * pushes exactly one, because pushing none would mean the panel never
+     * renders at all.
+     *
+     * am01_busbench on hardware, 2026-08-30: 20.0us per 16-bit LCD_DATA write,
+     * so a 16x16 tile is 256 writes = 5.1ms. The caller used to pass 2000us,
+     * chosen before any of that was known, which described a slice 2.5x
+     * shorter than the one it actually got. The number was wrong, not the
+     * behaviour -- see AM01_PANEL_TILE_US in am01_panel.h. */
     for (int scanned = 0; scanned < TILES_N; scanned++) {
         if (now_us() - start >= (double)budget_us)
             break;

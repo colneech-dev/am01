@@ -200,16 +200,24 @@ int miner_io_pipe_wait(int timeout_ms)
          * Pushing tiles before the wait, or after a real edge, would delay a
          * nonce that had already arrived.
          *
-         * The budget bounds the worst case. A nonce arriving mid-slice waits
-         * at most one budget plus the tile in flight -- a number chosen here
-         * rather than left to chance. 2ms against a 5ms poll interval keeps
-         * the miner's duty cycle essentially unchanged, and the panel simply
-         * repaints more slowly when hashing is busy, which is the correct
-         * priority.
+         * The budget bounds the worst case: a nonce arriving mid-slice waits
+         * at most the tile in flight, because a tile is indivisible and this
+         * asks for exactly one.
+         *
+         * That is 5.1ms, MEASURED -- am01_busbench on hardware 2026-08-30 puts
+         * a 16-bit bus write at 20.0us, so a 16x16 tile is 256 of them. This
+         * used to pass 2000u with a comment claiming "2ms against a 5ms poll
+         * interval", which was wrong in a way nothing could have caught before
+         * the bus was measured: the budget is checked BETWEEN tiles, so asking
+         * for 2ms never produced a 2ms slice, it produced a 5.1ms one. Naming
+         * the real quantum makes the cost visible instead of aspirational.
+         *
+         * The panel simply repaints more slowly when hashing is busy, which is
+         * the correct priority.
          *
          * am01_panel_slice() is a no-op when the panel is disabled, and never
          * reports errors upward -- see am01_panel.h. */
-        (void)am01_panel_slice(g_bus, 2000u);
+        (void)am01_panel_slice(g_bus, AM01_PANEL_TILE_US);
         return 1;
     }
 
