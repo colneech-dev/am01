@@ -183,7 +183,11 @@ module odocrypt_gpio_wrapper #(
     // touch_cs_n was tied high and touch_x/touch_y were never written.
     // A v1.2-or-older host driving only 4 address lines still works: the
     // fifth line idles low, so it addresses 0x00-0x0F exactly as before.
-    localparam [15:0] VERSION = 16'h0105;
+    // 0x0106: target_word_cnt_h narrowed to 3 bits. The version bump is
+    // LOAD-BEARING, not cosmetic -- am01_bus_submit_work() uses it to decide
+    // whether it must send the target words twice to work around the
+    // every-other-dispatch arming bug in 0x0105 and earlier.
+    localparam [15:0] VERSION = 16'h0106;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;
@@ -999,7 +1003,30 @@ module odocrypt_gpio_wrapper #(
     reg        host_break_pulse_h;
 
     reg [4:0]  header_word_cnt_h; // 0..18, 19 words total
-    reg [3:0]  target_word_cnt_h; // 0..7,  8 words total
+    // THREE bits, not four. MEASURED ON HARDWARE 2026-08-30.
+    //
+    // This was reg [3:0] while being compared against 7, so it wrapped at 16
+    // and nothing resets it between jobs. Dispatch 1 walks counts 0..7 and arms
+    // start_hash on the 8th word; dispatch 2 walks 8..15, never equals 7, and
+    // NEVER ARMS THE CORE; dispatch 3 arms again. The miner was hashing on
+    // every OTHER job and idle in between.
+    //
+    // The comment on the old line said "0..7, 8 words total", which is what the
+    // code intended and not what a 4-bit register does. Width and comment
+    // disagreed and the width won.
+    //
+    // Symptoms this explains exactly:
+    //   * odo-miner reporting "found=10 shares=0 stale=10" over 95 s -- jobs
+    //     arrived every 5-10 s, half of them armed, so ~10 finds
+    //   * every one of those counted stale: on a dispatch that did not arm, the
+    //     found-latch still held the PREVIOUS job's nonce, the host read it and
+    //     checked it against the NEW header, and it failed
+    //   * am01_smoke alternating between one find and none on consecutive runs
+    //
+    // Proven by working around it before fixing it: dispatching twice covers
+    // both parities, and with that am01_smoke returned 6 nonces out of 6 valid
+    // against a 1-in-256 target. Six chance passes would be 1 in 2.8e14.
+    reg [2:0]  target_word_cnt_h; // 0..7, wraps at 8 -- see above
     reg        start_hash_h;
 
     // DECLARED HERE, NOT WITH THE OTHER wires BELOW, because the always block
@@ -1027,7 +1054,7 @@ module odocrypt_gpio_wrapper #(
                 OP_TARGET_WORD: begin
                     get_target_pulse_h <= 1'b1;
                     target_word_cnt_h  <= target_word_cnt_h + 1'b1;
-                    if (target_word_cnt_h == 4'd7)
+                    if (target_word_cnt_h == 3'd7)
                         start_hash_h <= 1'b1; // 8th (last) target word arms the core
                 end
                 OP_HOST_BREAK: begin
@@ -1035,7 +1062,7 @@ module odocrypt_gpio_wrapper #(
                 end
                 OP_SOFT_RESET: begin
                     header_word_cnt_h <= 5'h0;
-                    target_word_cnt_h <= 4'h0;
+                    target_word_cnt_h <= 3'h0;
                     start_hash_h      <= 1'b0;
                 end
             endcase

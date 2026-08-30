@@ -40,6 +40,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <time.h>
+#include <limits.h>
 
 /* Target is tgt_msb * 2^248, i.e. the top byte of a 256-bit big-endian value.
  * 0x10 accepts about 1 hash in 16, which finds instantly and is the right
@@ -99,6 +100,27 @@ static void oracle_hash(const odo_epoch_state_t *st, const uint8_t header[80],
     KeccakP800_Permute_12rounds(out);
 }
 
+/* Is the reported nonce merely OFFSET from the one that was hashed?
+ *
+ * Returns the offset K such that nonce+K satisfies the target, or INT_MIN if
+ * none within +/-range. A consistent non-zero K across samples means the core
+ * hashes correctly and miner.v's nonce_out counter is misaligned with the
+ * pipeline -- a very different fault from a wrong cipher, and a much easier
+ * one to fix. */
+#define OFFSET_RANGE 4096
+static long offset_search(const odo_epoch_state_t *st, const uint8_t header[80],
+                          uint32_t nonce, const uint8_t target[32])
+{
+    uint8_t h[KeccakP800_stateSizeInBytes];
+    for (long k = 1; k <= OFFSET_RANGE; k++) {
+        oracle_hash(st, header, (uint32_t)(nonce + k), h);
+        if (hash_lt(h, target)) return k;
+        oracle_hash(st, header, (uint32_t)(nonce - k), h);
+        if (hash_lt(h, target)) return -k;
+    }
+    return LONG_MIN;
+}
+
 int main(int argc, char **argv)
 {
     unsigned tgt_msb = DEFAULT_TGT_MSB;
@@ -106,6 +128,17 @@ int main(int argc, char **argv)
 
     if (argc > 1) tgt_msb = (unsigned)strtoul(argv[1], NULL, 0);
     if (argc > 2) want    = atoi(argv[2]);
+    /* 4th arg: re-arm after each find (default ON). Without it the core halts
+     * on the first solution and the run measures nothing. */
+    int redispatch = (argc > 3) ? atoi(argv[3]) : 1;
+    /* 5th arg: how many times to dispatch per arm attempt.
+     *
+     * target_word_cnt_h in the wrapper is reg [3:0] but is compared to 7,
+     * so it wraps at 16 rather than 8 and nothing resets it between jobs.
+     * That means start_hash is armed on every OTHER dispatch. Dispatching
+     * twice covers both parities. If finds become reliable at 2 and are
+     * erratic at 1, that counter width is the bug. */
+    int arm_reps = (argc > 4) ? atoi(argv[4]) : 1;
     if (tgt_msb == 0 || tgt_msb > 0xFF) {
         fprintf(stderr, "usage: %s [target_msb 1..255] [samples]\n", argv[0]);
         return 2;
@@ -149,6 +182,8 @@ int main(int argc, char **argv)
     printf("no pool, no job switching -- a failure here CANNOT be staleness\n\n");
 
     double t0 = now_s();
+    for (int r = 1; r < arm_reps; r++)
+        miner_io_pipe_dispatch(header, target);
     if (miner_io_pipe_dispatch(header, target) != 0) {
         printf("FAIL: dispatch returned an error\n");
         miner_io_pipe_shutdown();
@@ -156,6 +191,8 @@ int main(int argc, char **argv)
     }
 
     int pass = 0, fail = 0, got = 0;
+    long off_first = LONG_MIN;
+    int  off_found = 0, off_consistent = 1;
     double t_first = 0.0;
 
     while (got < want) {
@@ -184,6 +221,22 @@ int main(int argc, char **argv)
         if (got == 0) t_first = t - t0;
         got++;
 
+        /* RE-ARM. host_break_sm raises sha_host_break on ticket2moon and the
+         * wrapper clears start_hash_h on that, so the core HALTS on every
+         * solution and waits for the host to re-arm it. Re-writing the 8
+         * target words is what re-arms it -- the 8th sets start_hash.
+         *
+         * odo-miner does not do this: it dispatches only when a NEW job
+         * arrives, so the FPGA idles between jobs. If re-dispatching turns one
+         * find into a stream, that is the whole explanation for the observed
+         * "found=10 in 95 s". */
+        for (int r = 1; redispatch && r < arm_reps; r++)
+            miner_io_pipe_dispatch(header, target);
+        if (redispatch && miner_io_pipe_dispatch(header, target) != 0) {
+            printf("FAIL: re-dispatch failed\n");
+            break;
+        }
+
         uint8_t h[KeccakP800_stateSizeInBytes];
         oracle_hash(&st, header, nonce, h);
         int ok = hash_lt(h, target);
@@ -192,6 +245,24 @@ int main(int argc, char **argv)
         printf("  nonce 0x%08x  hash MSB %02x%02x%02x%02x  %s\n",
                nonce, h[31], h[30], h[29], h[28],
                ok ? "PASS" : "FAIL <-- hardware and oracle disagree");
+
+        if (!ok) {
+            /* Distinguish a wrong CIPHER from a wrong REPORTED NONCE. */
+            long k = offset_search(&st, header, nonce, target);
+            if (k != LONG_MIN) {
+                printf("        -> but nonce%+ld DOES satisfy the target.\n", k);
+                printf("           The core hashed correctly and reported the\n");
+                printf("           WRONG NONCE -- miner.v's nonce_out counter is\n");
+                printf("           misaligned with the pipeline by %ld.\n", k);
+                if (off_first == LONG_MIN) off_first = k;
+                else if (off_first != k)   off_consistent = 0;
+                off_found++;
+            } else {
+                printf("        -> no nonce within +/-%d satisfies it either.\n",
+                       OFFSET_RANGE);
+                printf("           Not a simple offset; the hash itself differs.\n");
+            }
+        }
     }
 
     double elapsed = now_s() - t0;
@@ -221,6 +292,17 @@ int main(int argc, char **argv)
                "         Hashes are correct, so the pool rejections are a\n"
                "         job-churn/staleness problem, not a bad bitstream.\n");
         return 0;
+    }
+    if (off_found > 0 && off_consistent && off_first != LONG_MIN) {
+        printf("\nVERDICT: NONCE OFFSET -- every failing nonce is out by exactly\n"
+               "         %+ld. The cipher is correct (tb_encrypt_oracle proves\n"
+               "         encrypt.v bit-exact); what is wrong is which nonce the\n"
+               "         hardware REPORTS for a given result. Look at nonce_out\n"
+               "         and the cou_deltanonce == 6'h33 warm-up in miner.v --\n"
+               "         204 cycles must equal the real pipeline latency.\n",
+               off_first);
+        miner_io_pipe_shutdown();
+        return 1;
     }
     if (pass == 0) {
         printf("\nVERDICT: FAIL -- every nonce disagrees with the oracle.\n"

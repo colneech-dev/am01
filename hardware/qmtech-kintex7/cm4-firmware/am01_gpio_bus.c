@@ -541,15 +541,43 @@ int am01_bus_read_rails(am01_bus_t *bus, double *vccint, double *vccaux,
     return 0;
 }
 
+/* FPGA versions at or below this arm start_hash only on every OTHER dispatch.
+ *
+ * target_word_cnt_h in the wrapper was reg [3:0] while being compared against
+ * 7, so it wrapped at 16 instead of 8 and nothing reset it between jobs.
+ * Dispatch 1 walks counts 0..7 and arms on the 8th word; dispatch 2 walks
+ * 8..15, never equals 7, and never arms. The core hashed on alternate jobs and
+ * sat idle in between -- and on a dispatch that did not arm, the found-latch
+ * still held the PREVIOUS job's nonce, so the host read a stale value and
+ * scored it against the new header. That is the whole of "found=10 shares=0
+ * stale=10".
+ *
+ * Fixed in the RTL at 0x0106 (3-bit counter). This sends the target block
+ * TWICE on older bitstreams, which covers both parities and arms reliably --
+ * measured: 6 valid nonces out of 6 against a 1-in-256 target, where the same
+ * test single-dispatching alternated between one find and none.
+ *
+ * The extra 8 writes cost ~160us on a job change and nothing in steady state.
+ * Remove this once no 0x0105-or-earlier bitstream is in service. */
+#define AM01_LAST_ALT_ARM_VERSION 0x0105u
+
 int am01_bus_submit_work(am01_bus_t *bus, const uint32_t header[19], const uint32_t target[8])
 {
     for (int i = 0; i < 19; i++)
         if (am01_bus_write_header_word(bus, header[i]) < 0)
             return -1;
-    for (int i = 0; i < 8; i++)
-        if (am01_bus_write_target_word(bus, target[i]) < 0)
-            return -1;
-    return 0; /* the 8th target word write arms start_hash on the FPGA side */
+
+    uint16_t ver = 0;
+    int reps = 1;
+    if (am01_bus_read_version(bus, &ver) == 0 && ver <= AM01_LAST_ALT_ARM_VERSION)
+        reps = 2;
+
+    for (int r = 0; r < reps; r++)
+        for (int i = 0; i < 8; i++)
+            if (am01_bus_write_target_word(bus, target[i]) < 0)
+                return -1;
+
+    return 0; /* the arming target-word write sets start_hash on the FPGA side */
 }
 
 int am01_bus_wait_irq(am01_bus_t *bus, int timeout_ms)
