@@ -88,8 +88,12 @@ SOURCES_STRATUM := \
 # Binary: odo-miner (core mining daemon)
 # =====================================================================
 
+# miner_pipe_am01.c is a LOCAL COPY of odo-miner-cyclonev/hps/miner_pipe.c,
+# deliberately not built from the sibling repo: that is a separate project
+# with different hardware under it, so a fix that is right here is not
+# automatically right there. The divergence list is in the file banner.
 SOURCES_DAEMON := \
-	$(ODO_HPS)/miner_pipe.c \
+	miner_pipe_am01.c \
 	$(ODO_HPS)/thermal.c \
 	miner_io_gpio.c \
 	$(GPIO_BUS)/am01_gpio_bus.c \
