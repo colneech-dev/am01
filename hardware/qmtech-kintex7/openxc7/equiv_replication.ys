@@ -1,0 +1,57 @@
+# Formal equivalence: original netlist vs fanout-replicated netlist.
+#
+# WHY THIS AND NOT tb_encrypt_equiv.v
+# -----------------------------------
+# The existing testbenches compare `encrypt_4encrypt` against
+# `mx_encrypt_4encrypt`, which has extra ports (clk2x, phase_d) for the mux2
+# pipeline transform. Fanout replication has no such interface change: the two
+# netlists are the same design, same top, same ports, differing only by 22
+# added cells and ~2054 rewired load connections.
+#
+# That makes formal equivalence both applicable and stronger than simulation --
+# it proves the transform is functionally neutral rather than sampling it.
+#
+# WHAT IS BEING PROVED
+# --------------------
+# replicate_fanout_placed.py clones a driver and moves a subset of its loads
+# onto the clone. Sound in principle: a clone with identical inputs computes
+# the same value every cycle. verify_replication.py already checked that
+# invariant STRUCTURALLY (identical input connections, fresh singly-driven
+# output net, loads only ever moved from the original). This checks it
+# SEMANTICALLY, which also catches anything the structural test's assumptions
+# missed.
+#
+# NOTE ON EXPECTED DIFFICULTY
+# ---------------------------
+# equiv_make pairs up cells by name and looks for equivalence points. The
+# replicas are new names with no counterpart in the gold design, so their
+# outputs are the interesting points -- each replica's Q must be provably equal
+# to the original driver's Q. equiv_simple should discharge these quickly since
+# the cones are identical; equiv_induct is there for anything sequential that
+# needs induction over state.
+#
+# Run:  yosys -s equiv_replication.ys
+
+# Post-synthesis JSON references LUT2/FDRE/RAMB18E1 etc. Without the Xilinx
+# simulation library those are undefined blackboxes and prep aborts with
+#   ERROR: Module `LUT2. referenced in module `am01_qmtech_top.
+read_verilog -lib +/xilinx/cells_sim.v
+read_json out_nm1_nosr/am01_qmtech_top_vy40.json
+prep -top am01_qmtech_top
+design -stash gold
+
+read_verilog -lib +/xilinx/cells_sim.v
+read_json out_nm1_nosr/am01_qmtech_top_vy40rep2.json
+prep -top am01_qmtech_top
+design -stash gate
+
+design -copy-from gold -as gold am01_qmtech_top
+design -copy-from gate -as gate am01_qmtech_top
+
+equiv_make gold gate equiv
+prep -top equiv
+opt_clean
+
+equiv_simple -seq 5
+equiv_induct -seq 5
+equiv_status -assert

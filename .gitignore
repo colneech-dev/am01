@@ -20,3 +20,17 @@ hardware/qmtech-kintex7/openxc7/gen/
 # than as a blanket *.log, so a log someone deliberately commits still shows up.
 n_*.log
 build_*.log
+
+# openXC7 build artefacts. All regenerable from the committed scripts, and all
+# large: out_*/ holds netlists (60-90 MB each), FASMs (63 MB) and bitstreams
+# (11 MB); seedrun/ holds a route log per seed.
+#
+# Ignored primarily to keep `git status` legible. With ~70 untracked artefacts
+# in the way, a genuinely modified tracked file does not stand out -- a broken
+# hdl/odocrypt/encrypt.v sat in the working tree for a day precisely because it
+# was one line among that noise.
+hardware/qmtech-kintex7/openxc7/out_*/
+hardware/qmtech-kintex7/openxc7/seedrun/
+hardware/qmtech-kintex7/openxc7/*.console
+hardware/qmtech-kintex7/openxc7/.pid_*
+hardware/qmtech-kintex7/openxc7/.done_*
