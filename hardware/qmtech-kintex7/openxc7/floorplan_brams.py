@@ -352,7 +352,10 @@ def main():
                     continue
                 grp = (idx // stride) % rncol
                 rc = [rcols[(grp + k) % rncol] for k in range(rcpr)]
-                lo = {c: cursor[c] for c in rc}
+                # Record the REAL (column, Y) of each placement. Reporting
+                # cursor indices as if they were Y is wrong for any column that
+                # is not contiguous, which is exactly where it matters.
+                placed = {}
                 for j, (_, name) in enumerate(members):
                     col = rc[j % rcpr]
                     # A short column (col 6 ends at Y59) can run out before its
@@ -367,14 +370,21 @@ def main():
                         col = alt[0]
                     site_y = valid[col][cursor[col]]
                     cursor[col] += 1
+                    placed.setdefault(col, []).append(site_y)
                     bel = "RAMB18_X%dY%d/RAMB18E1" % (col, site_y)
                     if not args.dry_run:
                         cells[name].setdefault("attributes", {})["BEL"] = bel
                     assigned += 1
-                print("  miner %d round %2d -> cols %s  Y%s" %
-                      (mi, rnd, ",".join(str(c) for c in rc),
-                       ",".join("%d-%d" % (lo[c], cursor[c] - 1)
-                                for c in rc if cursor[c] > lo[c])))
+                # Report the columns actually USED, not the ones assigned: a
+                # fallback off a short column (col 6 ends at Y59) would
+                # otherwise be invisible in the log.
+                spill = [c for c in placed if c not in rc]
+                print("  miner %d round %2d -> %s%s" %
+                      (mi, rnd,
+                       "  ".join("X%d Y%d-%d" % (c, min(placed[c]), max(placed[c]))
+                                 for c in sorted(placed)),
+                       "   (spilled into %s)" % ",".join("X%d" % c for c in spill)
+                       if spill else ""))
         print("assigned %d BEL attributes" % assigned)
         if args.dry_run:
             print("(dry run, nothing written)")
