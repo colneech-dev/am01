@@ -152,3 +152,23 @@ one clock. ~6.4 ns, so it caps this design near 156 MHz on a typical seed.
 Pipelining it is straightforward (register `total`, delay `in` one cycle) and
 costs no throughput, but was deliberately not done — the target is met with
 margin and `encrypt.v` regenerates every 10 days.
+
+## Re-baselined onto current RTL — 2026-08-30
+
+The `cb224b6` pin was lifted once the display work and the six touch/LCD
+defects from the code review had landed (`afa4b22`) and the tree was clean.
+Same configuration, re-measured on the new sources:
+
+| RTL baseline | n | median | pass ≥133.33 | all |
+|---|---|---|---|---|
+| `cb224b6` (pre-display) | 5 | 166.81 | **5/5** | 149.28 154.56 166.81 177.94 180.47 |
+| **`afa4b22`** (with display) | 5 | **155.79** | **5/5** | 145.14 152.44 155.79 174.98 197.43 |
+
+**Still 5/5 passing**, worst case 145.14 — 9% margin. The display path costs
+~11 MHz of median, which is the expected price of added logic, and the spread
+widens (145–197 against 149–180).
+
+Note the two runs were initially recorded under one tag, producing a
+meaningless n=10 median belonging to neither baseline. `run_e2nb_fixed.sh` now
+tags by `RTL_PINNED_COMMIT` so datasets from different sources cannot merge
+silently.

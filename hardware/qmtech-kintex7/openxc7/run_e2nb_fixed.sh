@@ -46,6 +46,13 @@ trap 'rm -f .pid_e2nbfix' EXIT
 # change nearly did. Prints how far behind HEAD the pin is.
 . ./rtl_sources.sh || exit 1
 
+# Tag by RTL baseline. One tag reused across baselines merged two datasets
+# into an n=10 table whose median belonged to neither -- pre- and
+# post-display differ by ~11 MHz -- and nothing in the output revealed that
+# the rows had different provenance.
+TAG="${TAG:-e2nbfix_$RTL_PINNED_COMMIT}"
+echo "    results tagged: $TAG"
+
 EPOCH=$(cat "$REPO/hdl/odocrypt/EPOCH")
 
 # Rebuild the generator. It is gitignored, so a stale binary from before the
@@ -125,13 +132,13 @@ for s in $SEEDS; do
     f=$(grep -a "Max frequency for clock   'clk_h'" "$d/route.log" 2>/dev/null | tail -1 | sed -E "s/.*clk_h.: ([0-9.]+) MHz.*/\1/")
     i=$(grep -a "iter=" "$d/route.log" 2>/dev/null | tail -1 | sed -E "s/.*iter=([0-9]+).*/\1/")
     o=$(grep -a "iter=" "$d/route.log" 2>/dev/null | tail -1 | sed -E "s/.*overuse=([0-9]+).*/\1/")
-    printf "%s\te2nbfix\t%s\t%s\t%s\n" "$s" "${f:-FAIL}" "${i:--}" "${o:--}" >> "$RESULTS"
+    printf "%s\t$TAG\t%s\t%s\t%s\n" "$s" "${f:-FAIL}" "${i:--}" "${o:--}" >> "$RESULTS"
     tail -1 "$RESULTS"
 done
 
 echo
 echo "=== e2nbfix vs the (invalid) e2nb numbers -- $(date -Is) ==="
-for v in e2nb e2nbfix; do
+for v in e2nb "$TAG"; do
     vals=$(awk -v v="$v" -F'\t' '$2==v && $3!="FAIL" {print $3}' "$RESULTS" | sort -n)
     n=$(echo "$vals" | grep -c .)
     [ "$n" -eq 0 ] && continue
