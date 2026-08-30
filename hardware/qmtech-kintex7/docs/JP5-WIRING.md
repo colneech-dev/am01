@@ -64,6 +64,7 @@ order, which looks deliberate.
 
 | JP5 pin | FPGA ball | RTL port | Panel pin |
 |--------:|-----------|----------|-----------|
+| 1 or 2 | — | — | **VCC — see the 5 V warning below** |
 | 3 | AD21 | `lcd_sclk` | SCK / CLK |
 | 4 | AE21 | `lcd_mosi` | SDI / MOSI |
 | 5 | AE22 | `lcd_miso` | SDO / MISO |
@@ -86,6 +87,38 @@ signals.
 
 `touch_irq` is open-drain on the panel and has `PULLUP true` in the XDC, so no
 external pull-up is required.
+
+### PANEL SUPPLY: 5 V, NOT 3.3 V — measured 2026-08-30
+
+This table used to say VCC goes to JP5 pin 1 (VCCO_12, 3.3 V). On the module
+actually fitted that is WRONG and the panel stays dead: it powers only from
+JP5 pin 49/50 (5 V).
+
+The reason is an onboard linear regulator (U2 on this module) making 3.3 V for
+the ILI9341. A 3.3 V input never reaches its dropout, so nothing comes up. That
+regulator runs warm in normal use — dropping 5 V to 3.3 V while feeding a
+backlight is a few tenths of a watt in a small package.
+
+**A 5 V module has two consequences that a 3.3 V one does not:**
+
+1. **Its logic OUTPUTS may be 5 V.** Bank 12 is a 3.3 V bank and its pins are
+   NOT 5 V tolerant. If the module has a level shifter referenced to its 5 V
+   rail, then `SDO` and `T_DO` swing to 5 V and connecting either of them to
+   JP5 pin 5 can damage the FPGA. MEASURE `T_DO` against ground with the panel
+   powered and idle before connecting it. Under ~3.6 V is safe; near 5 V is not,
+   and needs a divider or a level shifter.
+
+   This is also a second reason to leave the display's `SDO` unconnected — the
+   design never reads it (see `spi_rx_en` in the wrapper), so it is pure risk.
+
+2. **Its logic INPUTS may not see 3.3 V as a high.** A 5 V-referenced HC-family
+   buffer wants Vih around 3.5 V, and the FPGA drives 3.3 V. HCT-family parts
+   are fine at 3.3 V; HC parts are marginal. If the backlight lights but no
+   image appears while the bus reports every write succeeding, this is the
+   first thing to suspect — the FPGA cannot tell that nothing registered.
+
+Powering the panel from 3.3 V instead would avoid both problems, but needs a
+module without the regulator, or a bypass of it.
 
 ## Fan — 4-wire PWM
 
