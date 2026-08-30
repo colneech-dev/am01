@@ -155,6 +155,14 @@ already documented in the wrapper.
 
 Revisit once shares are flowing and the epoch pressure is off.
 
+A full staged plan now exists: `docs/PLAN-adopt-cyclonev-core.md`. Headline
+finding from writing it -- the swap does NOT improve hashrate. Same
+THROUGHPUT=4, same BRAM-bound 2 instances, same critical path in encrypt.v.
+It buys a simpler design with fewer traps. The +19% is the MMCM change
+(CLKFBOUT_MULT 16 -> 19, 66.7 -> 79.2 MH/s), which applies to either core
+and should be done separately so a clock change and a core change are never
+in the same bitstream.
+
 ---
 
 ## 3. Epoch rollover — 2026-09-04 00:00 UTC
