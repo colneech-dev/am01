@@ -49,7 +49,27 @@ iverilog run that filtered warnings hid the one diagnostic that mattered.
 
 ---
 
-## 2. Bitstream rebuild for VERSION 0x0106
+## 2. Bitstream rebuild for VERSION 0x0107
+
+Two RTL fixes are now waiting on one rebuild, and NEITHER is in any bitstream in
+service. The board runs 0x0105.
+
+**0x0106 -- `target_word_cnt_h` 4 bits -> 3.** Armed the core on every other
+dispatch. Covered meanwhile by the version-gated double-arm in
+`am01_bus_submit_work()`.
+
+**0x0107 -- settle window 205 -> 4096 cycles.** This is the one that stops
+shares. The 205 came from mirroring the AtomMiner reference; the Cyclone V
+build, running the SAME miner.v, uses 4096 and documents exactly why -- stale
+old-header results drain through the pipeline and spuriously qualify against
+the new target. At 205 the window closed while they were still draining, so the
+first find after every arm was a previous-header result wearing a new nonce.
+
+**There is no software workaround for 0x0107.** A misreported nonce cannot be
+recovered host-side; this one needs the silicon. Measured with the workarounds
+for everything else in place: `found=35440 shares=0 stale=35440` over ~100 s.
+
+## 2b. Old note, kept for context: rebuild for VERSION 0x0106
 
 The every-other-dispatch arming bug is FIXED IN RTL but **not in any bitstream
 in service**. The board is running `0x0105`, which still has it.

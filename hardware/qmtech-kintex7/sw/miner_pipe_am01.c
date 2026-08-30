@@ -410,6 +410,13 @@ int main(int argc, char **argv)
      * so these are real, submittable shares. */
     job_t disp; job_init(&disp);
     int have_disp = 0;
+
+    /* The first find after a NEW job is not a solution -- see the file banner.
+     * miner.v's 204-cycle warm-up does not cover this build's pipeline, so
+     * results computed with the previous header emerge first, wearing nonces
+     * from the new sweep. Drop exactly one per job. */
+    int discard_first = 0;
+    uint64_t discarded = 0;
     uint64_t found = 0, shares = 0, stale = 0;
     time_t last_status = 0;
 
@@ -486,6 +493,18 @@ int main(int argc, char **argv)
                 uint32_t nonce;
                 int drained = 0;
                 while (drained++ < 64 && miner_io_pipe_poll(&nonce) == 0) {
+                    if (discard_first) {
+                        /* Poisoned by the too-short warm-up. Not counted as a
+                         * find: counting it would make the found/stale ratio
+                         * look like a hashing fault, which is what sent this
+                         * investigation the wrong way for hours. */
+                        discard_first = 0;
+                        discarded++;
+                        /* Re-arm: the core halted on this find, and without a
+                         * fresh dispatch it will sit idle until the next job. */
+                        miner_io_pipe_dispatch(disp.header, disp.share_target);
+                        continue;
+                    }
                     found++;
                     g_st.found = found;
                     uint8_t h[32];
@@ -520,13 +539,16 @@ int main(int argc, char **argv)
                             fprintf(stderr, "[pipe] stratum_submit_share failed\n");
                         }
                     } else {
-                        /* Now a REAL stale: the nonce did not satisfy the job it
-                         * was actually dispatched for. Before this change most
-                         * of these were bookkeeping errors rather than stale
-                         * work -- the nonce was fine, it was being checked
-                         * against the wrong header. */
+                        /* A REAL stale: the nonce did not satisfy the job it was
+                         * actually dispatched for. */
                         stale++;
                     }
+
+                    /* RE-ARM after every find, solution or not. The core halted
+                     * when it raised ticket2moon; without this it idles until
+                     * the next job arrives, which is why the measured find rate
+                     * was ~1 per job rather than a continuous stream. */
+                    miner_io_pipe_dispatch(disp.header, disp.share_target);
                 }
             }
 
@@ -549,6 +571,7 @@ int main(int argc, char **argv)
                      * header, byte for byte what was pushed to the core. */
                     disp = cur;
                     have_disp = 1;
+                    discard_first = 1;   /* drop the warm-up artefact */
                     snprintf(g_st.job_id, sizeof(g_st.job_id), "%s", cur.job_id);
                     g_st.epoch = cur.epoch;
                     printf("[pipe] new job id=%s epoch=%" PRIu32 " dispatched\n",

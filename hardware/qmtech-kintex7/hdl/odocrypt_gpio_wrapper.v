@@ -183,11 +183,13 @@ module odocrypt_gpio_wrapper #(
     // touch_cs_n was tied high and touch_x/touch_y were never written.
     // A v1.2-or-older host driving only 4 address lines still works: the
     // fifth line idles low, so it addresses 0x00-0x0F exactly as before.
+    // 0x0107: settle window widened 205 -> 4096 cycles, matching the value the
+    // Cyclone V build uses for this same core. See the SETTLE_CYCLES note.
     // 0x0106: target_word_cnt_h narrowed to 3 bits. The version bump is
     // LOAD-BEARING, not cosmetic -- am01_bus_submit_work() uses it to decide
     // whether it must send the target words twice to work around the
     // every-other-dispatch arming bug in 0x0105 and earlier.
-    localparam [15:0] VERSION = 16'h0106;
+    localparam [15:0] VERSION = 16'h0107;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;
@@ -1219,17 +1221,58 @@ module odocrypt_gpio_wrapper #(
     // 204-cycle qualifier is met, so a nonce suppressed by opening this
     // gate one cycle later was never a nonce miner.v would have reported.
     // -----------------------------------------------------------------
-    reg [7:0] cou_deltanonce_top = 8'h0;
-    reg       nonce_out_go_top   = 1'b0;
+    // SETTLE WINDOW -- 4096 cycles, not 205. MEASURED CONSEQUENCE, 2026-08-30.
+    //
+    // The 205 (8'hcd) that used to be here came from mirroring the AtomMiner
+    // reference byte for byte. That fidelity is what carried the wrong constant
+    // across: 205 was sized for the reference's shallower pipeline, not this
+    // one, and nothing in this file ever re-derived it.
+    //
+    // odo-miner-cyclonev, running the SAME miner.v core, uses 4096 and says why
+    // (hdl/src/pipelined/pipelined_miner_top.v):
+    //
+    //     After a commit the pipeline still holds in-flight nonces hashed with
+    //     the PREVIOUS header; those drain over the pipeline latency and can
+    //     spuriously qualify against the new target. Suppress found-reporting
+    //     for SETTLE cycles after each commit so only nonces fully processed
+    //     with the new header are reported.
+    //
+    // That is a description of what this board was doing. With 205 cycles the
+    // window closed while stale old-header results were still draining, so the
+    // first find after every arm was a result computed with the PREVIOUS
+    // header, reported wearing a nonce from the new sweep. On hardware:
+    //
+    //   odo-miner  found=35440 shares=0 stale=35440  in ~100 s
+    //   am01_smoke first find out by +16 on one run and -112 on another --
+    //              not a fixed misalignment, but however far through the stale
+    //              drain the pipeline happened to be when that find escaped
+    //
+    // The old counter was 8 bits and could not have expressed 4096 even if the
+    // right value had been known, so the width is part of the fix, not
+    // incidental to it.
+    //
+    // COST: 4096 clk_h cycles is ~30.8us at 133.33MHz, once per arm. The core
+    // halts on every find (host_break_sm), so that is once per solution --
+    // which bounds the find rate at ~32k/s, far above anything this design
+    // reaches. It buys correctness for throughput that was never available.
+    localparam [12:0] SETTLE_CYCLES = 13'd4096;
+
+    reg [12:0] cou_deltanonce_top = 13'd0;
+    reg        nonce_out_go_top   = 1'b0;
     // ticket2moon_i is declared above, before host_break_sm consumes it.
 
+    // Saturating, not wrapping. The old counter free-ran and wrapped every 256
+    // cycles, which re-satisfied its own == comparison forever; that did no
+    // harm while the flag was sticky, but a wrapping counter next to an
+    // equality test is a trap and there is no reason to keep one.
     always @(posedge clk_h)
-        if (~start_hash_h) cou_deltanonce_top <= 8'h0;
-        else               cou_deltanonce_top <= cou_deltanonce_top + 1'b1;
+        if (~start_hash_h)                        cou_deltanonce_top <= 13'd0;
+        else if (cou_deltanonce_top != SETTLE_CYCLES)
+                                                  cou_deltanonce_top <= cou_deltanonce_top + 1'b1;
 
     always @(posedge clk_h)
-        if (~start_hash_h)                    nonce_out_go_top <= 1'b0;
-        else if (cou_deltanonce_top == 8'hcd) nonce_out_go_top <= 1'b1;
+        if (~start_hash_h)                            nonce_out_go_top <= 1'b0;
+        else if (cou_deltanonce_top == SETTLE_CYCLES) nonce_out_go_top <= 1'b1;
 
     always @(posedge clk_h)
         ticket2moon_i <= ticket2moon & nonce_out_go_top;
