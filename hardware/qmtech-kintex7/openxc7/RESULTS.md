@@ -62,3 +62,93 @@ Every figure above was measured on OdoCrypt epoch **1786752000**. The epoch
 rotates every 10 days and changes S-box contents, though not the structure
 (30 sbox_large, 22 full_round, 420 RAMB18E1 are unchanged), so the floorplan
 carries over. Re-baseline before comparing across an epoch boundary.
+
+---
+
+# Target met — 2026-08-30
+
+**`e2nbfix`: median 166.81 MHz, 5 of 5 seeds pass 133.33 MHz, worst case
+149.28 (12% margin).** Every seed converged with `overuse=0 unrouted=0`.
+Bitstream at `out_e2nb_fixed/am01_qmtech_top.bit`.
+
+This is the first configuration for which all three hold at once: functionally
+verified, timing-clean across seeds, and a bitstream exists.
+
+## Configuration
+
+| setting | value | why |
+|---|---|---|
+| `odo_gen --bram-out-reg` | on | second sbox register, 3 cycles/round |
+| `extra_delay` | 2 (automatic, min 1) | relay in the recirculation path |
+| `BRAM_OUTREG` | **0** | register stays in FABRIC — placeable, 0.1 ns |
+| `BRAM_FP` / `BRAM_YBASE` | 1 / 40 | Vivado-measured BRAM rows |
+| `CRIT_DIST` | 1.0 | |
+| `SRL` / `DEFINES` | 0 / `NO_XADC` | prjxray has no XADC tile for this part |
+
+| seed | clk_h | iters |
+|---|---|---|
+| 1 | 180.47 | 14 |
+| 2 | 177.94 | 42 |
+| 3 | 166.81 | 25 |
+| 4 | 149.28 | 22 |
+| 5 | 154.56 | 109 |
+| (default) | 141.90 | — |
+
+## Functional verification
+
+`sim/tb_sched_equiv.v` under Verilator, comparing emitted result SEQUENCES
+(latencies differ by design, 172 vs 259, so a cycle-wise diff is meaningless):
+
+```
+positive            PASS -- 440 results identical
+negative brk=3      FAIL -- 23 of 25 differ
+negative brk=10     FAIL -- 16 of 25 differ
+negative brk=50     FAIL -- 391 of 440 differ
+```
+
+The controls are monotonic in the injection point, which is what makes the
+positive trustworthy rather than merely clean.
+
+## VOID — measured on a core that computed wrong digests
+
+Every `--bram-out-reg` figure taken before commit `fbd6433` is invalid. The
+round-key tap was `RoundCycles*i` when a two-register sbox needs
+`RoundCycles*i + 1`, so every round key arrived one cycle early. The core ran
+at full speed and produced wrong results — silent pool rejects, not a failure.
+
+| variant | median | status |
+|---|---|---|
+| `outreg` | 82.90 | **VOID** |
+| `noabs` | 127.71 | **VOID** |
+| `e2` | 134.19 | **VOID** |
+| `e2nb` | 158.23 | **VOID** — superseded by `e2nbfix` 166.81 |
+| `base` | 114.81 | **valid** — reference core, byte-identical before and after the fix |
+
+Notably the corrected core is *faster* than the broken one it replaced
+(166.81 vs 158.23 median), so the fix cost nothing.
+
+## What survives from the voided work
+
+The placement conclusions, because they rest on critical-path structure —
+source delays, logic-versus-routing splits, where paths terminate — rather
+than on Fmax:
+
+* **This design is wire-limited, not logic-limited.** Routing is ~70% of
+  `base`'s critical path and ~91% of `noabs`'s. Adding registers does not
+  shorten wires: `noabs` traded 1.8 ns of logic for 2.2 ns of routing and lost.
+* **Something must break the recirculation path** from the last round back to
+  `state[0]`, and there are two ways to get one, which compose: a fabric flop
+  (placeable, so it is its own relay) or `extra_delay` pass-through stages.
+  With neither, the path terminates at `state[0]` on every seed.
+* Measured clock-to-Q: fabric flop **0.1 ns**, BRAM output register
+  (`DOA_REG=1`) **0.9 ns**, unregistered BRAM **2.1 ns**. A fabric register
+  beats the BRAM's own output register, which is why `BRAM_OUTREG=0` wins.
+
+## Known remaining ceiling
+
+The critical path now runs `crypt.state[0]` -> **pre-mix** -> `crypt.state[1]`:
+a 10-way 64-bit XOR reduction feeding all 640 output bits, combinational, in
+one clock. ~6.4 ns, so it caps this design near 156 MHz on a typical seed.
+Pipelining it is straightforward (register `total`, delay `in` one cycle) and
+costs no throughput, but was deliberately not done — the target is met with
+margin and `encrypt.v` regenerates every 10 days.

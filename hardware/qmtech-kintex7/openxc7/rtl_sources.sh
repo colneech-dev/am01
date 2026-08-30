@@ -32,10 +32,13 @@
 #   bash build.sh am01_qmtech_top "$OUT" "${RTL_SRCS[@]}" gen/encrypt_base.v
 
 #
+# RE-BASELINED 2026-08-30 from cb224b6 to afa4b22, once the display work and
+# the six touch/LCD defects from the code review had landed and the tree was
+# clean. The earlier note read:
 # Verified correct: the working-tree wrapper was modified at 29/15:16, after
 # base finished synthesising (28/21:15) and after noabs (29/09:46), so both
 # were built from cb224b6 content.
-RTL_PINNED_COMMIT=cb224b6
+RTL_PINNED_COMMIT=afa4b22
 
 # Paths as they appear in the commit, keyed by the basename used locally.
 RTL_PINNED_PATHS=(

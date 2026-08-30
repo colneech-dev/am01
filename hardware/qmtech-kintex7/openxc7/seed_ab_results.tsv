@@ -32,3 +32,8 @@ seed	variant	clk_h_MHz	iters	overuse
 3	e2nb	182.98	15	0
 4	e2nb	162.07	18	0
 5	e2nb	153.85	13	0
+1	e2nbfix	180.47	14	0
+2	e2nbfix	177.94	42	0
+3	e2nbfix	166.81	25	0
+4	e2nbfix	149.28	22	0
+5	e2nbfix	154.56	109	0

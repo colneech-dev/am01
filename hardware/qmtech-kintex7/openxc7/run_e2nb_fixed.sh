@@ -37,7 +37,7 @@ CHIPDB=./chipdb/xc7k325tffg676-1.bin
 XDC=$REPO/hardware/qmtech-kintex7/xdc/qmtech_xc7k325t_pinout.xdc
 SEEDS="${SEEDS:-1 2 3 4 5}"
 RESULTS=seed_ab_results.tsv
-OUT=out_e2nb_fixed
+OUT="${OUT:-out_e2nb_fixed}"
 
 echo $$ > .pid_e2nbfix
 trap 'rm -f .pid_e2nbfix' EXIT
@@ -47,13 +47,58 @@ trap 'rm -f .pid_e2nbfix' EXIT
 . ./rtl_sources.sh || exit 1
 
 EPOCH=$(cat "$REPO/hdl/odocrypt/EPOCH")
-echo "=== regenerating the core from the FIXED generator, epoch $EPOCH ==="
-"$REPO/tools/odo_gen/odo_gen" "$EPOCH" 4 encrypt_4 --bram-out-reg > gen/encrypt_outreg_fixed.v
-printf "    key taps now: "
-grep -oE "get_key[0-9]+\(clk, period\[[0-9]+\]" gen/encrypt_outreg_fixed.v | head -3 | tr '\n' ' '
-echo "(expect period[1] period[4] period[7])"
 
-if [ ! -f "$OUT/am01_qmtech_top.fp.json" ]; then
+# Rebuild the generator. It is gitignored, so a stale binary from before the
+# round-key fix is entirely possible, and it would feed a ~2 h synthesis plus
+# five routing runs with a core that computes wrong digests.
+echo "=== rebuilding odo_gen ==="
+make -s -C "$REPO/tools/odo_gen" odo_gen || { echo "odo_gen build FAILED"; exit 1; }
+
+echo "=== regenerating the core, epoch $EPOCH ==="
+if ! "$REPO/tools/odo_gen/odo_gen" "$EPOCH" 4 encrypt_4 --bram-out-reg \
+        > gen/encrypt_outreg_fixed.v; then
+    echo "odo_gen FAILED"; exit 1
+fi
+[ -s gen/encrypt_outreg_fixed.v ] || { echo "odo_gen produced nothing"; exit 1; }
+
+# ASSERT the key taps rather than printing them for a human to eyeball.
+# --bram-out-reg makes the sbox two registers deep, so the tap must be
+# RoundCycles*i + 1 = 3*i+1: period[1], period[4], period[7], ...  The
+# pre-fix generator emitted 3*i (period[0], [3], [6]) and produced a core
+# that ran at full speed and computed the wrong answer. Printing that for
+# review is exactly how it survived.
+_taps=$(grep -oE "get_key[0-9]+\(clk, period\[[0-9]+\]" gen/encrypt_outreg_fixed.v \
+        | grep -oE "[0-9]+\]$" | tr -d ']' | head -3 | tr '\n' ' ')
+if [ "$_taps" != "1 4 7 " ]; then
+    echo "KEY TAPS WRONG: got '$_taps', expected '1 4 7 '"
+    echo "  The generator is not the fixed one -- refusing to spend hours on a"
+    echo "  core that would compute wrong digests."
+    exit 1
+fi
+echo "    key taps asserted: $_taps(3*i+1, correct for a 2-register sbox)"
+
+# Re-synthesise if the netlist is missing, or older than ANY input.
+#
+# Watching only encrypt.v was not enough: re-baselining onto newer RTL changes
+# the WRAPPER, not encrypt.v, so a stale netlist would have been routed against
+# new sources -- precisely the failure this guard exists to catch. Testing mere
+# existence (the original) was weaker still.
+_need_synth=0
+_netlist="$OUT/am01_qmtech_top.fp.json"
+if [ ! -f "$_netlist" ]; then
+    _need_synth=1
+    echo "    no netlist -- will synthesise"
+else
+    for _src in gen/encrypt_outreg_fixed.v "${RTL_SRCS[@]}"; do
+        if [ "$_src" -nt "$_netlist" ]; then
+            _need_synth=1
+            echo "    $(basename "$_src") is newer than the netlist -- will resynthesise"
+            break
+        fi
+    done
+fi
+
+if [ "$_need_synth" = "1" ]; then
     echo
     echo "=== synthesis -- $(date -Is) ==="
     mkdir -p "$OUT"
