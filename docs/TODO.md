@@ -113,6 +113,50 @@ rebuild is compulsory anyway, so doing both at once costs nothing extra.
 
 ---
 
+## 2c. DECIDED: keep the AtomMiner core for now, revisit after the epoch
+
+Considered 2026-08-30: replace hdl/odocrypt/miner.v with the Cyclone V's
+odo_miner_core.v, which is the core that demonstrably works.
+
+IT IS THE BETTER DESIGN. No start_hash, no host_break, no gate on the nonce
+counter, a purpose-built one-cycle `found` strobe with a written rationale about
+not losing finds, and a FIFO behind it. Three of the faults fixed today CANNOT
+EXIST in it -- the nonce_out desync, the too-narrow warm-up counter, and the
+alternate-dispatch arming are all artefacts of the AtomMiner lineage this
+wrapper mirrors.
+
+NOT DOING IT NOW, for three reasons:
+
+  * It is a wrapper rewrite, not a file swap. This wrapper is built around the
+    AtomMiner interface -- start_hash, ticket2moon, host_break_sm,
+    odo_block_data shifting words in, one nonce latch plus IRQ. The Cyclone V
+    core needs registered header/target, a settle window and a FIFO. All new,
+    all unvalidated.
+  * It discards the timing work. Placement and timing have been tuned against
+    this netlist (155-166 MHz, 5/5 seeds). A different core is a different
+    netlist.
+  * The epoch deadline is under three days away. A big-bang core swap plus a
+    wrapper rewrite plus re-validation is the wrong shape of change against a
+    hard date.
+
+The three fixes made today converge the AtomMiner core onto the same invariant
+the Cyclone V core has by construction, which is the cheap way to the same
+correctness.
+
+ONE ARGUMENT THAT DOES NOT HOLD, recorded so it is not re-litigated: halt-on-
+find is not a throughput problem. At difficulty 0.001 and ~66 MH/s that is ~15
+finds/sec, each costing one 4096-cycle settle (30.8us) -- 0.05% overhead. It
+would only bite near 32k finds/sec. An earlier commit message of mine called it
+a "throughput ceiling"; that was wrong.
+
+The real residue is the SINGLE NONCE LATCH with no FIFO: if both miner
+instances hit on the same cycle, one find is lost. Rare at 15 finds/sec, and
+already documented in the wrapper.
+
+Revisit once shares are flowing and the epoch pressure is off.
+
+---
+
 ## 3. Epoch rollover — 2026-09-04 00:00 UTC
 
 After that the core mines rejects regardless of everything else.
