@@ -1002,6 +1002,16 @@ module odocrypt_gpio_wrapper #(
     reg [3:0]  target_word_cnt_h; // 0..7,  8 words total
     reg        start_hash_h;
 
+    // DECLARED HERE, NOT WITH THE OTHER wires BELOW, because the always block
+    // immediately following reads it. Using an identifier before its
+    // declaration creates an implicit 1-bit net at the point of use; whether
+    // that is unified with the later declaration is tool-dependent, and if it
+    // ever were not, this would test a floating net -- start_hash_h would never
+    // clear on a host break and host-break handling would silently stop.
+    //
+    // Driven by host_break_sm's sha_host_break output, instantiated below.
+    wire         host_break_debounced;
+
     always @(posedge clk_h) begin
         get_block_pulse_h  <= 1'b0;
         get_target_pulse_h <= 1'b0;
@@ -1037,7 +1047,8 @@ module odocrypt_gpio_wrapper #(
 
     wire [607:0] header;
     wire [255:0] target;
-    wire         host_break_debounced; // = host_break_sm's sha_host_break output
+    // host_break_debounced is declared above, before the always block
+    // that reads it.
     wire         ticket2moon;
     wire [31:0]  golden_nonce_h;
 
