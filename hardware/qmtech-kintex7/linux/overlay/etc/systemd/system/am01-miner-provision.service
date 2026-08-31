@@ -30,6 +30,10 @@ RemainAfterExit=yes
 # points at test-pool.example.com, which does not resolve, so a half-edited
 # file produces connect-retry spam rather than an obvious error.
 ExecStart=/bin/sh -c '\
+  am01-provision changed /boot/am01-miner.conf || { \
+    echo "/boot/am01-miner.conf unchanged since it was applied -- leaving the live config alone"; \
+    exit 0; \
+  }; \
   if ! grep -q "^DAEMON_OPTS=" /boot/am01-miner.conf; then \
     echo "/boot/am01-miner.conf has no DAEMON_OPTS= line -- ignoring it" >&2; \
     exit 0; \
@@ -40,6 +44,7 @@ ExecStart=/bin/sh -c '\
   fi; \
   install -D -m 600 -o root -g root \
       /boot/am01-miner.conf /etc/default/odo-miner; \
+  am01-provision stamp /boot/am01-miner.conf; \
   echo "installed pool configuration from /boot/am01-miner.conf"'
 
 [Install]

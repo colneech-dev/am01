@@ -1,0 +1,64 @@
+#!/bin/sh
+#
+# am01-provision -- decide whether a boot-partition config still needs applying.
+#
+# THE PROBLEM THIS SOLVES. The provisioning services install config from the
+# FAT boot partition so it survives a reflash. But re-installing it on EVERY
+# boot makes /boot the permanent master: change something on the running board
+# and the next reboot silently reverts it. Logging that is no use on a headless
+# miner -- nobody reads the journal of a box that is apparently working.
+#
+# So instead the board remembers what it already applied, and only acts when
+# something has actually changed:
+#
+#   stamp absent   -> a reflash wiped the rootfs. Apply. (This is the whole
+#                     point: a fresh image must pick the config back up.)
+#   hash differs   -> the file on /boot was edited. Apply: editing it is an
+#                     unambiguous request for that config.
+#   hash matches   -> already applied and untouched. Do nothing, and leave
+#                     whatever is on the running board alone.
+#
+# The stamps live in /var/lib, which is on the ext4 rootfs (verified: / is
+# /dev/mmcblk0p2), so they persist across reboots and are destroyed by a
+# reflash -- exactly the lifetime required. Putting them on /boot instead
+# would defeat the whole mechanism, since /boot is what survives.
+#
+# Net effect: the files can stay on the boot partition indefinitely. No
+# renaming after first boot, no manual step to remember, and edits made on the
+# board are not silently undone.
+
+set -e
+
+STAMP_DIR=/var/lib/am01-provision
+
+usage() {
+    echo "usage: am01-provision changed|stamp <file-on-boot>" >&2
+    exit 2
+}
+
+[ $# -eq 2 ] || usage
+cmd=$1
+src=$2
+
+[ -r "$src" ] || { echo "am01-provision: cannot read $src" >&2; exit 2; }
+
+stamp="$STAMP_DIR/$(basename "$src").sha256"
+
+case "$cmd" in
+changed)
+    # Exit 0 = needs applying, 1 = already applied and unchanged. Callers use
+    # `am01-provision changed X || exit 0`, so "nothing to do" is a clean exit
+    # for the unit rather than a failure.
+    new=$(sha256sum "$src" | cut -d' ' -f1)
+    old=$(cat "$stamp" 2>/dev/null || true)
+    [ "$new" = "$old" ] && exit 1
+    exit 0
+    ;;
+stamp)
+    mkdir -p "$STAMP_DIR"
+    sha256sum "$src" | cut -d' ' -f1 > "$stamp"
+    ;;
+*)
+    usage
+    ;;
+esac

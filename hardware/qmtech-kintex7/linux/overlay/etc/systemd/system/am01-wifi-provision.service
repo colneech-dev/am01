@@ -28,6 +28,10 @@ RemainAfterExit=yes
 # connect to non-global ctrl_ifname" and is genuinely hard to diagnose from
 # that message alone. Refuse it and keep the working file instead.
 ExecStart=/bin/sh -c '\
+  am01-provision changed /boot/wpa_supplicant.conf || { \
+    echo "/boot/wpa_supplicant.conf unchanged since it was applied -- leaving the live config alone"; \
+    exit 0; \
+  }; \
   if ! grep -q "network={" /boot/wpa_supplicant.conf; then \
     echo "/boot/wpa_supplicant.conf has no network={ block -- ignoring it" >&2; \
     exit 0; \
@@ -37,6 +41,7 @@ ExecStart=/bin/sh -c '\
     exit 0; \
   fi; \
   install -D -m 600 /boot/wpa_supplicant.conf /etc/wpa_supplicant/wpa_supplicant-wlan0.conf; \
+  am01-provision stamp /boot/wpa_supplicant.conf; \
   echo "installed WiFi credentials from /boot/wpa_supplicant.conf"'
 
 [Install]

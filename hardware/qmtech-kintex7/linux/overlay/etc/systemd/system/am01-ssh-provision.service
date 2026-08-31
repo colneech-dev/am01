@@ -34,6 +34,10 @@ RemainAfterExit=yes
 # file that is group- or world-writable, and does so quietly unless you are
 # reading the server log.
 ExecStart=/bin/sh -c '\
+  am01-provision changed /boot/authorized_keys || { \
+    echo "/boot/authorized_keys unchanged since it was applied -- leaving the board keys alone"; \
+    exit 0; \
+  }; \
   if ! grep -qE "^(ssh-(rsa|ed25519|dss)|ecdsa-sha2-)" /boot/authorized_keys; then \
     echo "/boot/authorized_keys holds no recognisable public key -- ignoring it" >&2; \
     exit 0; \
@@ -46,6 +50,7 @@ ExecStart=/bin/sh -c '\
   mv /root/.ssh/authorized_keys.new /root/.ssh/authorized_keys; \
   chmod 600 /root/.ssh/authorized_keys; \
   chown -R root:root /root/.ssh; \
+  am01-provision stamp /boot/authorized_keys; \
   echo "installed SSH key(s) from /boot/authorized_keys"'
 
 [Install]
