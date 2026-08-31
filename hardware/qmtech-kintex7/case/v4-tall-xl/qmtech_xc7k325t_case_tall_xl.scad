@@ -494,7 +494,9 @@ connector_positions_mm = [
     // and this window starts at 70.0, so 1.5mm. It is left centred on the
     // measured connector rather than nudged along to widen the pillar -- a
     // window that does not line up with its plug is the worse failure.
-    ["MINI_USB_J14", 75.5, 10, 5],
+    // FIT-CHECK 2026-08-31: 11mm wide x 8mm high at the opening (was 11 x 6).
+    // With cutout_margin 0.5 that is a 10 x 7 body entry.
+    ["MINI_USB_J14", 75.5, 10, 7],
 ];
 
 // BOTTOM wall (y=board_width, board_length=160mm long): mini-USB (J14,
@@ -869,7 +871,21 @@ wall_roof_min_mm = 3.0;
 // board-thickness too low: a 6mm HDMI occupies 7.4 to 13.4 while its opening
 // ran 4.4 to 12.4, missing the top of the connector and wasting the same
 // amount of wall below it. Referencing the top surface fixes both ends.
-function wall_cutout_z0() = lip_z + board_thickness - cutout_margin;
+// FIT-CHECK 2026-08-31: every wall opening sits 2mm too low on the printed
+// part, so the bottom of each window overlaps the board's own edge instead of
+// starting above it.
+//
+// The z0 below was lip_z + board_thickness - cutout_margin, i.e. it began
+// cutout_margin BELOW the board's top surface. That allowance made sense as
+// vertical clearance for a connector body, but the board is 2mm thick and its
+// edge occupies exactly that space -- so the margin ate into the wall that
+// should be solid alongside the PCB, and every window ended up low.
+//
+// Lifted by a full board thickness and the margin removed from the bottom
+// edge, which leaves at least board_thickness of unbroken wall below every
+// opening -- the "2mm bit around the bottom" this was missing.
+cutout_lift_mm = 2.0;
+function wall_cutout_z0() = lip_z + board_thickness + cutout_lift_mm;
 function wall_cutout_h(body_h) =
     min(body_h + 2*cutout_margin,
         (tray_height - wall_roof_min_mm) - wall_cutout_z0());
