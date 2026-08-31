@@ -113,7 +113,7 @@ order, which looks deliberate.
 | 13 | Y22 | `touch_irq` | T_IRQ / PENIRQ |
 
 The touch controller **shares the SPI bus** with the panel — `T_CLK`, `T_DIN`
-and `T_DO` go to the same pins 3, 4 and 5. Only chip select is separate. That
+and `T_DO` go to the same pins 5, 6 and 7. Only chip select is separate. That
 is why a combined module (e.g. the KMRTM28028-SPI) needs just these nine
 signals.
 
@@ -136,7 +136,7 @@ backlight is a few tenths of a watt in a small package.
 1. **Its logic OUTPUTS may be 5 V.** Bank 12 is a 3.3 V bank and its pins are
    NOT 5 V tolerant. If the module has a level shifter referenced to its 5 V
    rail, then `SDO` and `T_DO` swing to 5 V and connecting either of them to
-   JP5 pin 5 can damage the FPGA. MEASURE `T_DO` against ground with the panel
+   JP5 pin 7 can damage the FPGA. MEASURE `T_DO` against ground with the panel
    powered and idle before connecting it. Under ~3.6 V is safe; near 5 V is not,
    and needs a divider or a level shifter.
 
@@ -191,9 +191,9 @@ hanging a fan off 5V0 makes it worse. Size the supply for the fan as well.
 
 ## Signals alternate sides
 
-Consecutive signals are on **opposite rows**: `lcd_sclk` is pin 3 and
-`lcd_mosi` is pin 4, so they face each other rather than sitting next to each
-other. Count along the odd row (3, 5, 7, 9, 11) and the even row (4, 6, 8, 10)
+Consecutive signals are on **opposite rows**: `lcd_sclk` is pin 5 and
+`lcd_mosi` is pin 6, so they face each other rather than sitting next to each
+other. Count along the odd row (5, 7, 9, 11, 13) and the even row (6, 8, 10, 12)
 separately when making a loom.
 
 ## Case implication
