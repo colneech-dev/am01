@@ -159,6 +159,17 @@ SOURCES_PROBE := 	$(GPIO_BUS)/am01_probe.c 	$(GPIO_BUS)/am01_gpio_bus.c
 OBJECTS_PROBE := $(call objects,$(SOURCES_PROBE))
 
 # =====================================================================
+# Binary: am01_reg (read/write any bus register)
+#
+# am01_diag prints a curated set. When the register misbehaving is one it
+# does not print, the choice was extend-and-redeploy or guess -- and guessing
+# is what this project has repeatedly paid for.
+# =====================================================================
+SOURCES_REG := 	$(GPIO_BUS)/am01_reg.c 	$(GPIO_BUS)/am01_gpio_bus.c
+
+OBJECTS_REG := $(call objects,$(SOURCES_REG))
+
+# =====================================================================
 # Binary: am01_smoke (does the FPGA compute the RIGHT hash?)
 #
 # Dispatches ONE fixed header with a loose target and checks every returned
@@ -199,12 +210,12 @@ LIBS_UI := $(LIBS_BASE) $(shell $(PKG_CONFIG) --libs libpng freetype2 fontconfig
 # =====================================================================
 
 .PHONY: all clean install help
-.PHONY: odo-miner odo-webd odo-ui am01_bus_test am01_diag am01_busbench am01_smoke am01_probe
+.PHONY: odo-miner odo-webd odo-ui am01_bus_test am01_diag am01_busbench am01_smoke am01_probe am01_reg
 
 # Default: build all. am01_bus_test is included deliberately -- it is the
 # first thing to run on a new board (see ../cm4-firmware/README.md), so it
 # needs to be in the image rather than something to compile on the target.
-all: odo-miner odo-webd odo-ui am01_bus_test am01_diag am01_busbench am01_smoke am01_probe
+all: odo-miner odo-webd odo-ui am01_bus_test am01_diag am01_busbench am01_smoke am01_probe am01_reg
 
 # Mining daemon (core)
 odo-miner: $(OBJECTS_DAEMON)
@@ -250,6 +261,12 @@ am01_probe: $(OBJECTS_PROBE)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS_MINER)
 	@echo "✓ Built: $@"
 
+# Raw register access, for when a typed accessor is the wrong tool.
+am01_reg: $(OBJECTS_REG)
+	@echo "[LD] $@"
+	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS_MINER)
+	@echo "✓ Built: $@"
+
 # Touch UI (framebuffer + touch input)
 odo-ui: $(OBJECTS_UI)
 	@echo "[LD] $@"
@@ -285,6 +302,7 @@ install: all
 	install -D -m 0755 am01_busbench $(DESTDIR)$(PREFIX)/bin/am01_busbench
 	install -D -m 0755 am01_smoke $(DESTDIR)$(PREFIX)/bin/am01_smoke
 	install -D -m 0755 am01_probe $(DESTDIR)$(PREFIX)/bin/am01_probe
+	install -D -m 0755 am01_reg $(DESTDIR)$(PREFIX)/bin/am01_reg
 	@echo "✓ Installed binaries to $(DESTDIR)$(PREFIX)/bin/"
 
 # Help

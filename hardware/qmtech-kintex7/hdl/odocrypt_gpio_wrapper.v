@@ -1000,10 +1000,10 @@ module odocrypt_gpio_wrapper #(
                         ADDR_VERSION:  rdata_reg <= VERSION;
                         ADDR_STATUS:   rdata_reg <= {14'h0, nonce_valid_bus, hash_active_bus};
                         ADDR_NONCE_LO: rdata_reg <= golden_nonce_bus[15:0];
-                        ADDR_NONCE_HI: begin
-                            rdata_reg <= golden_nonce_bus[31:16];
-                            nonce_valid_clear_pulse <= 1'b1; // clears NONCE_VALID / irq
-                        end
+                        // NOTE: the consume/ack for this read fires when the
+                        // transaction ENDS, below -- not here. See the comment
+                        // at that assignment.
+                        ADDR_NONCE_HI: rdata_reg <= golden_nonce_bus[31:16];
                         ADDR_SEED_LO:  rdata_reg <= ODO_SEED[15:0];
                         ADDR_SEED_HI:  rdata_reg <= ODO_SEED[31:16];
                         ADDR_TEMP:     rdata_reg <= xadc_temp_bus;
@@ -1030,6 +1030,42 @@ module odocrypt_gpio_wrapper #(
                         gpio_ready   <= 1'b0;
                         gpio_data_oe <= 1'b0;
                         bus_state    <= S_IDLE;
+
+                        // CONSUME THE NONCE HERE, AT THE END OF THE READ.
+                        //
+                        // This used to fire inside the ADDR_NONCE_HI case
+                        // above, i.e. on the FIRST cycle of S_READ. Harmless
+                        // when all it did was clear a level. Not harmless in
+                        // v2.0, where it also ACKs the found-FIFO handoff:
+                        //
+                        //   host reads NONCE_LO            (gets nonce A low)
+                        //   host asserts RD_N for NONCE_HI
+                        //     -> ack fires immediately
+                        //     -> clk_h pops nonce B into the latch
+                        //     -> golden_nonce_reg becomes B, and rdata_reg
+                        //        follows it, DURING the same read
+                        //   host samples                   (gets nonce B high)
+                        //
+                        // and the host walks away with A's low half and B's
+                        // high half. S_READ lasts as long as the CM4 holds
+                        // RD_N, which over a bit-banged GPIO bus is
+                        // microseconds -- ample time.
+                        //
+                        // MEASURED 2026-08-31: this reproduced exactly. Runs
+                        // with a FIFO backlog failed their first N nonces
+                        // (N ~ the backlog depth, because each ack instantly
+                        // supplied a replacement mid-read) and then passed
+                        // every subsequent one once finds became rarer than
+                        // the drain. Every passing hash was genuinely tiny;
+                        // every failing one was two halves of different
+                        // nonces, so it hashed to nothing in particular.
+                        //
+                        // Deferring to end-of-transaction means the clk_h side
+                        // cannot touch the latch until the host has both
+                        // halves, which is what makes the 32-bit value atomic
+                        // across a 16-bit bus.
+                        if (addr_latched == ADDR_NONCE_HI)
+                            nonce_valid_clear_pulse <= 1'b1;
                     end
                 end
 

@@ -207,9 +207,23 @@ int main(int argc, char **argv)
     memcpy(disp_header, header, 80);
     uint32_t next_key = seed;
 
+    /* 7th arg: push the target byte DOWN by this many bytes, making the target
+     * 256x tighter per step.
+     *
+     * Needed because the top byte alone cannot express a tight enough target
+     * to measure anything on v2.0. At tgt_msb=1 (the tightest the old form
+     * allowed, 1 in 256) two cores at ~33 MH/s each produce ~258k finds/sec
+     * into an 8-deep FIFO. It is permanently saturated, so the nonces the host
+     * drains are arbitrary survivors of a queue that overflowed thousands of
+     * times between reads -- and any conclusion drawn from them is about
+     * queueing, not about hashing. shift=3 gives ~1 find/sec, which is slower
+     * than the host drains, so every nonce read is fresh and unambiguous. */
+    unsigned tgt_shift = (argc > 6) ? (unsigned)strtoul(argv[6], NULL, 0) : 0;
+    if (tgt_shift > 30) tgt_shift = 30;
+
     uint8_t target[32];
     memset(target, 0, sizeof(target));
-    target[31] = (uint8_t)tgt_msb;
+    target[31 - tgt_shift] = (uint8_t)tgt_msb;
 
     printf("dispatching one fixed job, target = 0x%02x * 2^248 "
            "(~1 hash in %.1f)\n", tgt_msb, 256.0 / (double)tgt_msb);

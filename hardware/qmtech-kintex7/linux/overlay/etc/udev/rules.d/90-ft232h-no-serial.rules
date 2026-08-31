@@ -1,0 +1,22 @@
+# Keep the kernel's generic ftdi_sio driver off an FT232H so openFPGALoader
+# (which talks to it as a libusb MPSSE/JTAG device) can claim it.
+#
+# Without this the kernel binds it as a USB serial converter and hands it a
+# ttyUSB node, then fights libusb for the device. Measured on 2026-08-31:
+# ftdi_sio attached and detached six times over a few minutes, once per
+# openFPGALoader invocation, and an SPI-flash write failed part-way through
+# with a misread JEDEC ID and write-enable timeouts.
+#
+# This is the same class of problem as needing Zadig/WinUSB on Windows -- a
+# general-purpose serial driver claiming a device that is not being used as a
+# serial port.
+#
+# NOTE it is not a complete fix on its own: openFPGALoader resets the device
+# when it opens MPSSE mode, and the kernel can win the re-probe race that
+# follows. Scripts doing anything long-running (a flash write) should still
+# unbind explicitly immediately beforehand:
+#
+#   echo -n '1-1.1:1.0' > /sys/bus/usb/drivers/ftdi_sio/unbind
+#
+# with the interface path from `ls /sys/bus/usb/drivers/ftdi_sio/`.
+ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6014", DRIVER=="ftdi_sio", RUN+="/bin/sh -c 'echo $kernel > /sys/bus/usb/drivers/ftdi_sio/unbind'"

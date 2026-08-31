@@ -162,14 +162,33 @@ module found_path #(
     end
 
     always @(posedge clk) begin
-        if (push_en) begin
-            fifo_mem[wr_ptr[FIFO_AW-1:0]] <= push_dat;
-            wr_ptr <= wr_ptr + 1'b1;
+        if (commit) begin
+            // FLUSH ON COMMIT. Anything queued was found against the PREVIOUS
+            // header and cannot be a solution for the new one, so handing it
+            // to the host would only produce a nonce it must reject. Dropping
+            // it here keeps the invariant the host relies on: every nonce it
+            // drains belongs to the job it most recently dispatched.
+            //
+            // Costs at most FIFO_DEPTH finds per job change, against a job
+            // arriving every 5-10s -- nothing. Not counted as lost, because
+            // these were not lost to congestion; they were deliberately
+            // discarded as unusable, and conflating the two would make the
+            // lost counter useless for spotting real congestion.
+            // rd_ptr is reset in the handoff block below, which is its only
+            // driver -- both see this same commit edge, so the two pointers
+            // land back at 0 together and the FIFO reads empty.
+            wr_ptr     <= 0;
+            pend_valid <= 1'b0;
+        end else begin
+            if (push_en) begin
+                fifo_mem[wr_ptr[FIFO_AW-1:0]] <= push_dat;
+                wr_ptr <= wr_ptr + 1'b1;
+            end
+            pend_valid <= stash_nxt_valid;
+            pend_nonce <= stash_nxt_dat;
         end
-        pend_valid <= stash_nxt_valid;
-        pend_nonce <= stash_nxt_dat;
 
-        if (lost_inc != 3'd0) begin
+        if (lost_inc != 3'd0 && !commit) begin
             // Saturating. A loss counter that wraps reads as "no losses" once
             // every 256 of them, which is worse than not having one.
             if ({1'b0, lost} + {6'd0, lost_inc} >= 9'd255) lost <= 8'hFF;
@@ -198,7 +217,15 @@ module found_path #(
         if (ack_pulse)
             busy <= 1'b0;
 
-        if (!busy && !empty) begin
+        // Flush side owned by this block -- see the commit handling above.
+        // busy is deliberately NOT cleared: if a nonce is already in the latch
+        // the host may be mid-read of it, and yanking it would reintroduce the
+        // torn-read this design just fixed. That one nonce belongs to the old
+        // job and the host will reject it; one stale nonce per job change is
+        // the price of not racing the bus.
+        if (commit)
+            rd_ptr <= 0;
+        else if (!busy && !empty) begin
             nonce_latch  <= fifo_mem[rd_ptr[FIFO_AW-1:0]];
             rd_ptr       <= rd_ptr + 1'b1;
             nonce_toggle <= ~nonce_toggle;

@@ -4,21 +4,72 @@
 # adapter plugged into the CM4. Nothing happens unless that file exists, so
 # programming the board externally over JTAG remains an option.
 #
-# FPGA_OPTS must name your adapter -- there is no safe default. List what is
-# connected with:
+# YOU PROBABLY DO NOT NEED THIS SERVICE. The bitstream now lives in the
+# board's own SPI flash and the FPGA loads it at power-on by itself -- see
+# "Writing to flash" below. This service exists for the SRAM-load case, where
+# the FPGA comes up unconfigured every boot. Verified 2026-08-31: a flashed
+# bitstream survives a full power cycle and reports its VERSION correctly with
+# no host involvement at all.
+#
+# ---------------------------------------------------------------------------
+# CABLE
+#
+# MEASURED ON THIS BOARD, 2026-08-31, with a generic FT232H breakout wired to
+# J1 (TCK-AD0, TDI-AD1, TDO-AD2, TMS-AD3, GND-GND; leave J1's 3V3 alone, it is
+# a sense pin and the board has its own supply):
+#
+#   FPGA_OPTS="-c ft232 --freq 1000000"
+#
+# Two things there are not optional:
+#
+#   -c ft232      NOT ft232h, and not the device's USB description string.
+#                 openFPGALoader's cable list spells it ft232, mapped to
+#                 0x0403:6014. `openFPGALoader --list-cables | grep ft232`.
+#
+#   --freq 1000000
+#                 The 6 MHz default is unreliable over jumper wires. Plain
+#                 JTAG shifting tolerates it -- --detect works, an SRAM load
+#                 completes -- but the bidirectional SPI-over-JTAG traffic a
+#                 FLASH write needs does not: the JEDEC ID came back as 0xc0
+#                 or 0x40 instead of 0x016018 and the erase failed with
+#                 write-enable timeouts, repeatably. At 1 MHz it reads
+#                 0x016018 (Spansion S25FL128L) and writes cleanly, every
+#                 time. Shorten the leads before raising this.
+#
+# List what is actually connected with:
 #
 #   openFPGALoader --scan-usb
 #
-# Then set the cable, for example:
-#
-#   FPGA_OPTS="-c ft2232"        # generic FT2232-based adapter
-#   FPGA_OPTS="-c digilent"      # Digilent HS2/HS3
-#   FPGA_OPTS="-c xvc-client"    # Xilinx Virtual Cable
-#
-# Add -f to write the bitstream to flash instead of loading it into SRAM;
-# without -f the FPGA loses its configuration on power-down and this unit
-# reloads it on each boot.
-FPGA_OPTS=""
+FPGA_OPTS="-c ft232 --freq 1000000"
 
+# ---------------------------------------------------------------------------
+# WRITING TO FLASH (persistent -- what you almost certainly want)
+#
+# Not done by this service, because it should be a deliberate act rather than
+# something that happens on every boot. Run it by hand:
+#
+#   systemctl stop odo-miner
+#   echo -n '1-1.1:1.0' > /sys/bus/usb/drivers/ftdi_sio/unbind
+#   openFPGALoader -c ft232 --freq 1000000 \
+#       --fpga-part xc7k325tffg676 --unprotect-flash -f /boot/am01.bit
+#
+# --fpga-part is REQUIRED for a flash write: openFPGALoader loads a
+# spiOverJtag helper bitstream to reach the flash chip and needs the exact
+# device+package to pick the right one. Without it: "Can't program SPI flash:
+# missing device-package information".
+#
+# --unprotect-flash is needed once the block protection bits have been set by
+# a previous write ("Error: block protection is set").
+#
+# The unbind is because the kernel's ftdi_sio driver claims the FT232H as a
+# serial port and fights libusb for it -- see
+# /etc/udev/rules.d/90-ft232h-no-serial.rules. The rule handles the common
+# case; do it explicitly before anything long-running, because openFPGALoader
+# resets the device on open and the kernel can win the re-probe race.
+#
+# Then POWER CYCLE (not reboot -- a CM4 reboot leaves the FPGA configured, so
+# it will still be running the old bitstream and look like the write failed).
+#
+# ---------------------------------------------------------------------------
 # Check it by hand before enabling the service:
 #   openFPGALoader $FPGA_OPTS /boot/am01.bit

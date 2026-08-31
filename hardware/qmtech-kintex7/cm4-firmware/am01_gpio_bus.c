@@ -386,6 +386,16 @@ int am01_bus_read_version(am01_bus_t *bus, uint16_t *version_out)
     return reg_read16(bus, ADDR_VERSION, version_out);
 }
 
+int am01_bus_read_reg(am01_bus_t *bus, uint8_t addr, uint16_t *value_out)
+{
+    return reg_read16(bus, addr, value_out);
+}
+
+int am01_bus_write_reg(am01_bus_t *bus, uint8_t addr, uint16_t value)
+{
+    return reg_write16(bus, addr, value);
+}
+
 int am01_bus_read_seed(am01_bus_t *bus, uint32_t *seed_out)
 {
     uint16_t ver, lo, hi;
@@ -607,12 +617,46 @@ int am01_bus_submit_work(am01_bus_t *bus, const uint32_t header[19], const uint3
     if (am01_bus_read_version(bus, &ver) == 0 && ver <= AM01_LAST_ALT_ARM_VERSION)
         reps = 2;
 
+    /* TARGET WORDS GO OUT MOST-SIGNIFICANT FIRST -- the reverse of the header.
+     *
+     * odo_block_data shifts the two blocks in OPPOSITE directions, which is
+     * the whole trap:
+     *
+     *   header:  header18 <= data;  header17 <= header18;  ... down to header0
+     *            -> the FIRST word written ends up in header0, the LSB.
+     *   target:  target0  <= data;  target1  <= target0;   ... up to target7
+     *            -> the FIRST word written ends up in target7, the MSB.
+     *
+     * and both are then assembled MSB-first ({header18..header0},
+     * {target7..target0}). So sending target[0] (the least significant word)
+     * first put it at bits [255:224] and reversed the whole 256-bit value.
+     *
+     * MEASURED ON HARDWARE 2026-08-31, by writing the two candidate orders
+     * straight into TARGET_LO/HI with am01_reg and watching the found-FIFO:
+     *   MSB-first (0x01000000 then 7 zeros) -> FIFO refills to 8 instantly
+     *   LSW-first (7 zeros then 0x01000000) -> FIFO stays empty indefinitely
+     *
+     * WHAT THIS COST. A reversed target is not a near miss, it is nonsense:
+     * a share target of ~2^248 became ~2^31, which no hash ever satisfies.
+     * The FPGA's comparator was therefore useless and the finds it reported
+     * were garbage, which the host then re-checked in software against the
+     * CORRECT target -- so the miner was effectively guessing nonces at
+     * random. The numbers say exactly that: at pool difficulty ~0.0002 you
+     * expect one genuine share per ~860k random nonces, and the last v1.9 run
+     * measured found=861913 shares=1. That ratio was never bad luck or
+     * staleness; it was the hardware contributing nothing but a nonce
+     * generator.
+     *
+     * This is pre-existing and orthogonal to the v2.0 core swap -- v1.x sent
+     * the same reversed target. Fixed here rather than in odo_block_data
+     * because the RTL is inherited AtomMiner code that the Cyclone V port
+     * also uses, and because a host fix needs no bitstream. */
     for (int r = 0; r < reps; r++)
-        for (int i = 0; i < 8; i++)
+        for (int i = 7; i >= 0; i--)
             if (am01_bus_write_target_word(bus, target[i]) < 0)
                 return -1;
 
-    return 0; /* the arming target-word write sets start_hash on the FPGA side */
+    return 0; /* the 8th target word commits the job on the FPGA side */
 }
 
 int am01_bus_wait_irq(am01_bus_t *bus, int timeout_ms)

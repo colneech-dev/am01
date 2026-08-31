@@ -180,7 +180,44 @@ module tb_found_path;
         check(dut.fifo_count === 4'd0,
               "finds during the re-opened window are suppressed too");
 
-        // ---- T9: NEGATIVE CONTROL ------------------------------------------
+        // ---- T9: a commit FLUSHES anything already queued -------------------
+        // Finds queued before a job change were made against the OLD header
+        // and cannot solve the new one. Handing them over would only give the
+        // host nonces it must reject.
+        draining = 1'b0;
+        repeat (SETTLE + 4) @(negedge clk);   // reopen the window from T8
+        for (i = 0; i < 5; i = i + 1) begin
+            fire(2'b01, 32'h66660000 + i[31:0], 32'h0);
+            @(negedge clk);
+        end
+        repeat (4) @(negedge clk);
+        check(fifo_count !== 4'd0, "finds queue up while the host is not reading");
+
+        pulse_commit;
+        repeat (4) @(negedge clk);
+        check(fifo_count === 4'd0, "a commit flushes the queued finds");
+
+        // ---- T10: and the FIFO still works afterwards -----------------------
+        // A flush that left the pointers inconsistent would look fine right
+        // here and then hand out garbage forever, so prove it still carries a
+        // nonce end to end.
+        // The host has to take the one nonce that was already in the latch
+        // when the commit landed: the flush deliberately does not clear `busy`
+        // (yanking a nonce the host may be mid-read of is what the
+        // end-of-read ack fix exists to prevent), so the handoff stays held
+        // until that one is acked. Real hosts always do read it -- it is
+        // offered with nonce_valid set -- and then attribute it to the new job
+        // and reject it. One stale nonce per job change, by design.
+        draining = 1'b1;
+        repeat (20) @(negedge clk);        // let that stale one be consumed
+        repeat (SETTLE + 4) @(negedge clk);
+        drained = 0;
+        fire(2'b01, 32'h77770001, 32'h0);
+        repeat (20) @(negedge clk);
+        check(drained == 1 && got[0] === 32'h77770001,
+              "the FIFO still delivers correctly after a flush");
+
+        // ---- T11: NEGATIVE CONTROL ------------------------------------------
         // Everything above would also pass if the settle window were wired
         // shut and suppressed finds forever, or if `fire` simply never
         // reached the DUT. ng_dut is an identical instance with

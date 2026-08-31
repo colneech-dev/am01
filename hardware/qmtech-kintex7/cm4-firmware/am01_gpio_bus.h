@@ -124,6 +124,19 @@ int am01_bus_read_rails(am01_bus_t *bus, double *vccint, double *vccaux,
  * (errno == ETIMEDOUT on timeout). Follow with am01_bus_read_nonce(). */
 int am01_bus_wait_irq(am01_bus_t *bus, int timeout_ms);
 
+/* Raw access to any register in the 5-bit address space, for am01_reg and for
+ * bringing up a register the typed accessors above do not cover yet.
+ *
+ * Deliberately unvalidated: no version check, no interpretation. That is the
+ * point -- when a register is not behaving, a typed accessor that refuses to
+ * read it because the VERSION looks wrong is exactly the wrong tool. Use the
+ * typed accessors everywhere else.
+ *
+ * CAUTION: reading ADDR_NONCE_HI (0x04) has the side effect of clearing
+ * NONCE_VALID, and on v2.0+ of acknowledging the found-FIFO handoff. */
+int am01_bus_read_reg(am01_bus_t *bus, uint8_t addr, uint16_t *value_out);
+int am01_bus_write_reg(am01_bus_t *bus, uint8_t addr, uint16_t value);
+
 #ifdef __cplusplus
 }
 #endif
