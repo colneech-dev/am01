@@ -656,12 +656,15 @@ kan28_body_depth   = 7.0;
 kan28_clip_wall    = 2.0;   // wall of the nest around the switch body
 kan28_clip_lip     = 0.9;   // how far the retaining lips overhang
 kan28_clip_fit     = 0.4;   // clearance around the body
-// Length of each side arm along Z. Deliberately shorter than the body: the
-// arms only need enough contact to hold the body against the wall, and a
-// short arm is a springier one. Full-height arms would be stiff enough to
-// need real force to snap the switch in, which is how printed clips get
-// snapped off instead.
-kan28_clip_len     = 8.0;
+// Width of each of the two TOP arms, at the ends of the body's span.
+//
+// The top arm is the one that has to spring out of the way as the switch is
+// pushed in; the bottom is just a ledge it lands on. As one 17.9mm-wide plate
+// the top arm was stiff enough that seating the switch meant levering a
+// printed part -- which is how printed clips get broken off rather than bent.
+// Two short arms at the ends flex far more readily for the same wall
+// thickness, and leave the middle of the top edge open.
+kan28_clip_end_w   = 5.0;
 kan28_x_mm         = 30;    // board-local X along the TOP wall
 kan28_above_pcb    = 26;    // button centre above the PCB top surface
 
@@ -995,41 +998,47 @@ module top_edge_switch_hole() {
 // the wall by the switch's body depth, with a hook at its end that overhangs
 // the body and holds it against the wall.
 //
-// ONE ARM EACH SIDE, 2026-08-31, replacing arms above and below.
+// THE TOP ARM IS SPLIT IN TWO, 2026-08-31.
 //
-// The old pair spanned the full 17.9mm body width, which made each one a wide
-// stiff plate rather than a spring -- and the top one in particular had to
-// deflect over the whole width to let the body past. Two short arms on the
-// left and right flex far more readily for the same wall thickness, because
-// each is only kan28_clip_len long, and they clamp across the body's WIDTH,
-// which is its stiffest direction and the one least likely to be marked by
-// the lips.
+// Still one arm below and one above, as before -- but the top is now two
+// short arms at the ends of the span rather than a single plate across the
+// full 17.9mm body width. The top arm is the only one that has to deflect
+// (the bottom is a ledge the body lands on and never moves), and at full
+// width it was stiff enough that seating the switch meant levering a printed
+// part rather than springing it.
 //
-// It also frees the space directly above and below the body. Below matters:
-// that is where the wall cutout and the button boss are.
-//
-// The terminals are on the back face (against the wall), so nothing here
-// blocks wiring in either arrangement.
+// The sides stay completely open for the terminals and wiring, and the middle
+// of the top edge is now open too.
+module kan28_clip_arm(x0, arm_w, zs, d, yi, z0) {
+    translate([x0, yi - d, z0]) {
+        // upright of the L: stands off the wall, spanning the body depth
+        translate([0, 0, (zs > 0) ? 0 : -kan28_clip_wall])
+            cube([arm_w, d, kan28_clip_wall]);
+        // foot of the L, at the far end from the wall: hooks back over the
+        // switch body and holds it against the wall's inner face
+        translate([0, 0, (zs > 0) ? -kan28_clip_lip : -kan28_clip_wall])
+            cube([arm_w, kan28_clip_lip, kan28_clip_lip + kan28_clip_wall]);
+    }
+}
+
 module top_edge_switch_clips() {
     xc = board_origin[0] + kan28_x_mm;
     zc = lip_z + board_thickness + kan28_above_pcb;
-    w  = kan28_body_mm[0] + 2*kan28_clip_fit;   // along X, the gap between arms
-    h  = min(kan28_clip_len,
-             kan28_body_mm[1] + 2*kan28_clip_fit);  // along Z, the arm's length
+    w  = kan28_body_mm[0] + 2*kan28_clip_fit;   // along X, the body's span
+    h  = kan28_body_mm[1] + 2*kan28_clip_fit;   // along Z, the gap between arms
     d  = kan28_body_depth;
     yi = outer_width - wall_thickness;          // inner face of the top wall
+    ew = min(kan28_clip_end_w, w/2);            // each top arm, clamped so the
+                                                // two can never meet in the middle
 
-    for (xs = [-1, 1])
-        translate([xc + xs*(w/2), yi - d, zc - h/2]) {
-            // upright of the L: stands off the wall alongside the body,
-            // spanning its depth
-            translate([(xs > 0) ? 0 : -kan28_clip_wall, 0, 0])
-                cube([kan28_clip_wall, d, h]);
-            // foot of the L, at the far end from the wall: hooks back over the
-            // switch body and holds it against the wall's inner face
-            translate([(xs > 0) ? -kan28_clip_lip : -kan28_clip_wall, 0, 0])
-                cube([kan28_clip_lip + kan28_clip_wall, kan28_clip_lip, h]);
-        }
+    // BOTTOM: one arm across the full width. It only ever bears the body's
+    // weight, so there is nothing to gain by splitting it and a continuous
+    // ledge locates the switch better.
+    kan28_clip_arm(xc - w/2, w, -1, d, yi, zc - h/2);
+
+    // TOP: two short arms, one at each end of the span.
+    kan28_clip_arm(xc - w/2,      ew, +1, d, yi, zc + h/2);
+    kan28_clip_arm(xc + w/2 - ew, ew, +1, d, yi, zc + h/2);
 }
 
 module right_edge_antenna_hole() {
@@ -1115,12 +1124,11 @@ module snap_groove() {
 board_top_z          = lip_z + board_thickness;
 ft232h_stack_mm      = ft232h_above_pcb + ft232h_hole_pitch[1]/2
                        + ft232h_pcb_mm[1]/2 + ft232h_post_od/2;
-// The + kan28_clip_wall term is gone as of 2026-08-31: with the arms moved to
-// the sides, nothing is built above the body any more, so the tallest thing
-// here is the top of the body itself plus its fit clearance. The arms span
-// kan28_clip_len centred on the body, which is shorter than the body, so they
-// cannot be what sets this.
-kan28_stack_mm       = kan28_above_pcb + kan28_body_mm[1]/2 + kan28_clip_fit;
+// The + kan28_clip_wall term is the TOP arm, which still sits above the body:
+// splitting it into two end arms changed its width, not its height. The body
+// grew to 12.5mm on 2026-08-31, so this went 34.35 -> 34.65mm.
+kan28_stack_mm       = kan28_above_pcb + kan28_body_mm[1]/2 + kan28_clip_fit
+                       + kan28_clip_wall;
 ft232h_fits          = ft232h_stack_mm <= wall_height;
 kan28_fits           = kan28_stack_mm  <= wall_height;
 echo(str("internal mounts vs wall_height ", wall_height, ": FT232H needs ",
