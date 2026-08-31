@@ -6,8 +6,24 @@
 #
 # Reach it at http://BOARD_IP:8080/
 
-# Command-line options:
-#   -p PORT   HTTP port (default 8080)
-#   -f PATH   Frontend assets directory (optional)
-#   -S PATH   Status file written by odo-miner
-WEBD_OPTS="-p 8080 -S /run/odod/status.json"
+# THE PORT IS POSITIONAL. It is argv[1], not an option:
+#
+#     int port = argc > 1 ? atoi(argv[1]) : 80;
+#
+# so WEBD_OPTS must be the bare number and nothing else.
+#
+# This file previously read:
+#
+#     WEBD_OPTS="-p 8080 -S /run/odod/status.json"
+#
+# describing -p/-f/-S options that odo-webd never implemented. The failure was
+# silent and quite good at hiding: atoi("-p") is 0, binding to port 0 means
+# "give me any free port", so bind() SUCCEEDED, listen() succeeded, and the
+# daemon logged "listening on port 0" and sat on a random ephemeral port. The
+# service showed active, nothing errored, and the dashboard was simply not
+# where anyone looked for it. Found 2026-08-31 by reading /proc/PID/cmdline
+# after netstat showed nothing on 8080.
+#
+# The status file path is NOT configurable either -- it is compiled in as
+# STATUS_PATH "/run/odod/status.json", matching what odo-miner writes.
+WEBD_OPTS="8080"
