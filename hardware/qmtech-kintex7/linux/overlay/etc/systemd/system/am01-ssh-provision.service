@@ -1,0 +1,52 @@
+# Installs an SSH public key from the FAT boot partition.
+#
+# Same arrangement as am01-wifi-provision.service. Without it, headless access
+# has to be re-established over the serial console after every reflash, which
+# needs a physical cable to a board whose only console is a USB gadget.
+#
+# WHY A KEY AND NOT A PASSWORD: password auth to this image does not work.
+# Measured 2026-08-31 -- sshd reports "Failed password" for root even with
+# PermitRootLogin yes and PasswordAuthentication yes both confirmed in
+# `sshd -T`, no PAM stack present, and the password reset three times with
+# three different hash algorithms (sha256, md5, des). Key auth works first
+# time. The cause was never found; this sidesteps it, and key auth is the
+# better answer anyway.
+#
+# Absent /boot/authorized_keys this does nothing.
+
+[Unit]
+Description=AM01 SSH authorized key from the boot partition
+Documentation=https://github.com/colneech-dev/am01
+Requires=boot.mount
+After=boot.mount
+Before=sshd.service
+ConditionPathExists=/boot/authorized_keys
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Validated: a file that is not a public key would silently disable the
+# access it was meant to grant, and the symptom (permission denied) looks
+# identical to not having installed it at all.
+#
+# APPENDED, not overwritten, and deduplicated -- so adding a second machine's
+# key does not lock out the first. Modes matter to sshd: it refuses a key
+# file that is group- or world-writable, and does so quietly unless you are
+# reading the server log.
+ExecStart=/bin/sh -c '\
+  if ! grep -qE "^(ssh-(rsa|ed25519|dss)|ecdsa-sha2-)" /boot/authorized_keys; then \
+    echo "/boot/authorized_keys holds no recognisable public key -- ignoring it" >&2; \
+    exit 0; \
+  fi; \
+  mkdir -p /root/.ssh; \
+  chmod 700 /root/.ssh; \
+  touch /root/.ssh/authorized_keys; \
+  cat /boot/authorized_keys /root/.ssh/authorized_keys \
+      | grep -vE "^\\s*(#|$)" | sort -u > /root/.ssh/authorized_keys.new; \
+  mv /root/.ssh/authorized_keys.new /root/.ssh/authorized_keys; \
+  chmod 600 /root/.ssh/authorized_keys; \
+  chown -R root:root /root/.ssh; \
+  echo "installed SSH key(s) from /boot/authorized_keys"'
+
+[Install]
+WantedBy=multi-user.target

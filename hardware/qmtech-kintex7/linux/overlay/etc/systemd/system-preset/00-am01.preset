@@ -20,6 +20,11 @@ enable serial-getty@ttyGS0.service
 
 enable boot.mount
 enable am01-fpga.service
+# Boot-partition provisioning, same pattern as am01-wifi-provision: these
+# put the pool config and an SSH key somewhere a reflash does not erase and
+# Windows can edit. Both are no-ops if their file is absent.
+enable am01-miner-provision.service
+enable am01-ssh-provision.service
 enable odo-miner.service
 enable odo-webd.service
 enable odo-ui.service

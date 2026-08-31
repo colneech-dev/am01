@@ -52,6 +52,52 @@ network={
 }
 WIFIEOF
 
+# Pool configuration template, same idea as the WiFi one above: without it a
+# reflash silently reverts the board to the placeholder pool, which does not
+# resolve, and the miner comes up retrying a connection forever.
+# am01-miner-provision.service installs it once it is renamed and edited.
+cat > "${BINARIES_DIR}/am01-miner.conf.example" <<'MINEREOF'
+# AM01 pool configuration.
+#
+# TO USE: rename this file to  am01-miner.conf  (drop the .example), put your
+# own pool and wallet below, then boot the board.
+#
+# DAEMON_OPTS is passed to odo-miner verbatim, positionally:
+#
+#     DAEMON_OPTS="<host> <port> <worker> <password>"
+#
+# The worker is normally WALLET.WORKERNAME. Most pools ignore the password;
+# "x" is the conventional placeholder.
+DAEMON_OPTS="POOL-HOST 3333 YOUR_WALLET.am01 x"
+
+# Set to 1 to drive the ILI9341 panel on JP5. Leave unset if no panel is
+# fitted -- the miner runs either way and reports the panel as unavailable.
+#AM01_PANEL=1
+
+LOG_LEVEL=INFO
+MINEREOF
+
+# SSH public key template. Without this, headless access has to be rebuilt
+# over the serial console after every reflash -- and this image's password
+# auth does not work (see am01-ssh-provision.service), so a key is the only
+# practical route in.
+cat > "${BINARIES_DIR}/authorized_keys.example" <<'SSHEOF'
+# AM01 SSH access.
+#
+# TO USE: rename this file to  authorized_keys  (drop the .example) and put
+# your PUBLIC key below, one per line. Generate a pair on your machine with:
+#
+#     ssh-keygen -t ed25519 -f am01_key
+#
+# and paste the contents of am01_key.pub (the one ending .pub -- never the
+# private half) here. Then:
+#
+#     ssh -i am01_key root@<board-ip>
+#
+# Keys are APPENDED to any already on the board, so adding a second machine
+# does not lock out the first.
+SSHEOF
+
 exec "${HOST_DIR}/bin/genimage" \
 	--rootpath "${TARGET_DIR}" \
 	--tmppath "${BUILD_DIR}/genimage.tmp" \

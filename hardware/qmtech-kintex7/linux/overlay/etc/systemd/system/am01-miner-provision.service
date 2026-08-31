@@ -1,0 +1,46 @@
+# Installs the pool configuration from the FAT boot partition, before the
+# miner starts.
+#
+# Same arrangement, and same reason, as am01-wifi-provision.service: the
+# config lives in the rootfs, so every reflash overwrites it with the image's
+# placeholder pool and the board comes up mining into nothing. The boot
+# partition mounts as a normal drive in Windows, so the pool can be set
+# without a Linux box and survives reflashing.
+#
+# Absent /boot/am01-miner.conf this does nothing and the image's built-in
+# /etc/default/odo-miner is used unchanged.
+
+[Unit]
+Description=AM01 pool configuration from the boot partition
+Documentation=https://github.com/colneech-dev/am01
+Requires=boot.mount
+After=boot.mount
+Before=odo-miner.service
+ConditionPathExists=/boot/am01-miner.conf
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Validated before installing, for the same reason the WiFi one is: a config
+# without DAEMON_OPTS leaves odo-miner started with no arguments, which it
+# reports as a usage error and systemd then restarts in a loop. Refusing it
+# and keeping the previous file is the better failure.
+#
+# The placeholder check matters more here than it looks: the shipped default
+# points at test-pool.example.com, which does not resolve, so a half-edited
+# file produces connect-retry spam rather than an obvious error.
+ExecStart=/bin/sh -c '\
+  if ! grep -q "^DAEMON_OPTS=" /boot/am01-miner.conf; then \
+    echo "/boot/am01-miner.conf has no DAEMON_OPTS= line -- ignoring it" >&2; \
+    exit 0; \
+  fi; \
+  if grep -q "YOUR_WALLET\\|test-pool.example.com" /boot/am01-miner.conf; then \
+    echo "/boot/am01-miner.conf still has placeholder values -- ignoring it" >&2; \
+    exit 0; \
+  fi; \
+  install -D -m 600 -o root -g root \
+      /boot/am01-miner.conf /etc/default/odo-miner; \
+  echo "installed pool configuration from /boot/am01-miner.conf"'
+
+[Install]
+WantedBy=multi-user.target
