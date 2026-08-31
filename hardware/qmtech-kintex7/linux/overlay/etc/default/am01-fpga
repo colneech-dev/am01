@@ -67,8 +67,22 @@ FPGA_OPTS="-c ft232 --freq 1000000"
 # case; do it explicitly before anything long-running, because openFPGALoader
 # resets the device on open and the kernel can win the re-probe race.
 #
-# Then POWER CYCLE (not reboot -- a CM4 reboot leaves the FPGA configured, so
-# it will still be running the old bitstream and look like the write failed).
+# NO POWER CYCLE IS NEEDED. openFPGALoader resets the FPGA after a flash write
+# by default (that is what --skip-reset suppresses), and the reset makes it
+# reconfigure from flash -- so the new bitstream is live when the command
+# returns.
+#
+# To reload from flash at any other time, without writing anything:
+#
+#   openFPGALoader -c ft232 --freq 1000000 --fpga-part xc7k325tffg676 -r
+#
+# PROVEN 2026-09-01, not assumed: SRAM-loaded an old 0x0105 over a flash
+# holding 0x0201, confirmed VERSION read 0x0105, then ran -r and VERSION came
+# back 0x0201 -- a value that existed only in flash.
+#
+# What is still true is that a CM4 REBOOT does not reconfigure the FPGA: the
+# fabric keeps whatever it was holding, so a reboot alone will look like the
+# write failed. Use -r, not a reboot, and neither needs physical access.
 #
 # ---------------------------------------------------------------------------
 # Check it by hand before enabling the service:

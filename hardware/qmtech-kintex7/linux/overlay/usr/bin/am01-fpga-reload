@@ -1,0 +1,70 @@
+#!/bin/sh
+#
+# am01-fpga-reload -- make the FPGA reconfigure from its own SPI flash.
+#
+# Replaces "unplug it and plug it back in". A CM4 reboot does NOT reconfigure
+# the FPGA -- the fabric keeps whatever it was already holding -- so after
+# writing a new bitstream to flash a reboot looks exactly like a failed write.
+# A JTAG reset does reconfigure it, and needs no physical access.
+#
+# PROVEN 2026-09-01 rather than assumed: with 0x0201 in flash, an old 0x0105
+# was SRAM-loaded over the top and VERSION confirmed as 0x0105; this command
+# then brought VERSION back to 0x0201 -- a value that existed only in flash.
+#
+# Note openFPGALoader already does this at the end of a flash write (that is
+# what --skip-reset suppresses), so this is for reloading at any OTHER time:
+# after an SRAM experiment, or to recover a board whose fabric is in an
+# unknown state, without touching the hardware.
+#
+#   am01-fpga-reload            reload, leaving the miner stopped
+#   am01-fpga-reload --restart  reload and start odo-miner again
+#
+set -eu
+
+CABLE="${AM01_JTAG_CABLE:-ft232}"
+# 1 MHz, NOT the 6 MHz default. Measured: plain JTAG shifting tolerates 6 MHz
+# over jumper wires but SPI-over-JTAG does not -- the flash JEDEC ID came back
+# as 0xc0/0x40 instead of 0x016018 and erases failed with write-enable
+# timeouts, repeatably. Shorten the leads before raising this.
+FREQ="${AM01_JTAG_FREQ:-1000000}"
+PART="${AM01_FPGA_PART:-xc7k325tffg676}"
+
+restart=0
+[ "${1:-}" = "--restart" ] && restart=1
+
+command -v openFPGALoader >/dev/null 2>&1 || {
+    echo "am01-fpga-reload: openFPGALoader not installed" >&2; exit 1; }
+
+# The miner holds the GPIO chip exclusively, and reconfiguring the fabric
+# underneath it leaves it talking to registers that no longer mean anything.
+was_running=0
+if systemctl is-active --quiet odo-miner 2>/dev/null; then
+    was_running=1
+    echo "stopping odo-miner"
+    systemctl stop odo-miner
+fi
+
+# The kernel's ftdi_sio driver claims the FT232H as a serial port and contends
+# with libusb. 90-ft232h-no-serial.rules covers the usual case, but
+# openFPGALoader resets the device when it opens MPSSE mode and the kernel can
+# win the re-probe race that follows -- so unbind explicitly, immediately
+# before use. Failure is ignored: not being bound is the outcome we want.
+for i in /sys/bus/usb/drivers/ftdi_sio/*:*; do
+    [ -e "$i" ] || continue
+    echo -n "$(basename "$i")" > /sys/bus/usb/drivers/ftdi_sio/unbind 2>/dev/null || true
+done
+
+echo "reloading the FPGA from flash (cable $CABLE, ${FREQ}Hz)"
+openFPGALoader -c "$CABLE" --freq "$FREQ" --fpga-part "$PART" -r
+
+# Configuration takes a moment to settle before the register bus answers.
+sleep 3
+
+if command -v am01_diag >/dev/null 2>&1; then
+    am01_diag 2>/dev/null | sed -n '1,3p' || true
+fi
+
+if [ "$restart" = "1" ] || [ "$was_running" = "1" ]; then
+    echo "starting odo-miner"
+    systemctl start odo-miner
+fi
