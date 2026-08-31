@@ -182,8 +182,8 @@
 // VARIANT KNOBS -- these two lines are all that differ between the
 // three generated files in ../v4-sealed/, ../v4-vented/, ../v4-tall-xl/.
 // ============================================================
-VARIANT_WALL_HEIGHT = 48.0;   // TALL-XL variant: extra headroom for a bigger heatsink+fan
-VARIANT_VENTED       = true;  // TALL-XL: vented, extra headroom
+VARIANT_WALL_HEIGHT = 48;   // CYD variant: lid for the ESP32 Cheap Yellow Display
+VARIANT_VENTED       = true;  // CYD variant: lid for the ESP32 Cheap Yellow Display
 
 // Which display the LID is cut for. The tray is identical either way -- only
 // the lid's window, pocket and vent-exclusion change.
@@ -191,7 +191,7 @@ VARIANT_VENTED       = true;  // TALL-XL: vented, extra headroom
 //   "cyd"      an ESP32 "Cheap Yellow Display": 91x50, carries its own ESP32,
 //              and talks to the miner over the network or USB rather than JP5,
 //              so it needs no JP5 wiring at all
-VARIANT_SCREEN       = "ili9341";
+VARIANT_SCREEN       = "cyd";  // CYD variant: lid for the ESP32 Cheap Yellow Display
 
 // ---- Board ----
 board_length    = 160;   // X, the manual's Figure 2-1 dimension

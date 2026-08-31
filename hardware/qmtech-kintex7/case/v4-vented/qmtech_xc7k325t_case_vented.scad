@@ -185,6 +185,14 @@
 VARIANT_WALL_HEIGHT = 24;   // VENTED variant: perforated lid panel over the FPGA
 VARIANT_VENTED       = true;  // VENTED variant: perforated lid panel over the FPGA
 
+// Which display the LID is cut for. The tray is identical either way -- only
+// the lid's window, pocket and vent-exclusion change.
+//   "ili9341"  the 82x50 module wired to JP5
+//   "cyd"      an ESP32 "Cheap Yellow Display": 91x50, carries its own ESP32,
+//              and talks to the miner over the network or USB rather than JP5,
+//              so it needs no JP5 wiring at all
+VARIANT_SCREEN       = "ili9341";  // VENTED variant: perforated lid panel over the FPGA
+
 // ---- Board ----
 board_length    = 160;   // X, the manual's Figure 2-1 dimension
 board_width     = 90;    // Y
@@ -768,8 +776,54 @@ sensor_hole_d = 5;
 // PORTRAIT: the module stands on its short edge, so the 82mm dimension runs
 // across the board's width. Everything downstream (the window, the recess and
 // the vent exclusion) follows from these two.
-screen_module_mm  = [50, 82];   // overall outline
-screen_window_mm  = [50, 70];   // viewable area -> the through-window
+// ---- ILI9341, the JP5-wired module -----------------------------------
+ili_module_mm     = [50, 82];   // overall outline
+ili_window_mm     = [50, 70];   // viewable area -> the through-window
+ili_recess_mm     = 2.0;        // = flange thickness; module sits flush
+ili_center_mm     = [30, 45];   // board-local centre
+ili_window_off_mm = [0, 0];     // display IS centred on this module
+
+// ---- CYD (ESP32 Cheap Yellow Display), measured 2026-08-31 -----------
+// 91 x 50 overall, 6mm thick: a 2mm PCB with the display standing 4mm proud
+// of it. Same orientation as the ILI9341 -- the 91mm runs across the board's
+// width (Y). It fits: the lid is 115.2mm in Y, so 91 leaves 12mm either side,
+// and at 50mm in X it stays clear of the J11/J12/J13 lid cutouts at x>=90.
+//
+// The display is NOT centred on its PCB. There is 7mm of board beyond the
+// glass at one end and 9mm at the other, so the window is offset 1mm from the
+// module centre -- get this wrong and the bezel is visibly lopsided.
+//   91 - 7 - 9 = 75mm of glass, spanning the full 50mm width.
+cyd_module_mm     = [50, 91];
+cyd_window_mm     = [50, 75];
+cyd_margin_lo_mm  = 7;          // low-Y end
+cyd_margin_hi_mm  = 9;          // high-Y end -- carries the light sensor
+// (9 - 7)/2, pushing the window toward the 7mm end.
+cyd_window_off_mm = [0, -(cyd_margin_hi_mm - cyd_margin_lo_mm)/2];
+// The PCB is what the ledges bear on, so the pocket is the PCB thickness and
+// the display fills the remaining 4mm of the 6mm lid -- landing flush.
+cyd_pcb_mm        = 2.0;
+cyd_recess_mm     = cyd_pcb_mm;
+cyd_center_mm     = [30, 45];
+
+// LIGHT SENSOR. On the 9mm side, 4mm out from the glass, and standing 3mm
+// above the PCB. Two problems, one hole:
+//   - it needs light, and a solid ledge would blind it
+//   - at 3mm it fouls the 4mm-thick ledge it sits under
+// A through-slot in the ledge solves both.
+//
+// A SLOT, not a hole, because its position ACROSS the width was not measured.
+// A slot spanning most of the width catches it wherever it sits; narrow this
+// to a neat hole once the position is known.
+cyd_ldr_from_glass_mm = 4;
+cyd_ldr_slot_mm       = [26, 5];   // X extent, Y extent
+
+// ---- selected by VARIANT_SCREEN --------------------------------------
+is_cyd            = (VARIANT_SCREEN == "cyd");
+screen_module_mm  = is_cyd ? cyd_module_mm     : ili_module_mm;
+screen_window_mm  = is_cyd ? cyd_window_mm     : ili_window_mm;
+screen_window_off_mm = is_cyd ? cyd_window_off_mm : ili_window_off_mm;
+screen_ldr_slot_mm   = is_cyd ? cyd_ldr_slot_mm  : [0, 0];
+screen_ldr_from_glass_mm = is_cyd ? cyd_ldr_from_glass_mm : 0;
 screen_body_mm    = 6;          // deepest point, protrudes into the case
 screen_flange_mm  = 2;          // flange thickness
 
@@ -777,14 +831,21 @@ screen_flange_mm  = 2;          // flange thickness
 // 2mm pocket in a 2.4mm lid left 0.4mm of skin above it, which would have torn.
 // With item 1's 6mm lid there is 4mm above a full-depth pocket, so the module
 // can sit flush instead of standing 1mm proud of the lid.
-screen_recess_mm  = 2.0;
-screen_fit_gap    = 0.5;        // per side, module to pocket
+screen_recess_mm  = is_cyd ? cyd_recess_mm : ili_recess_mm;
+
+// PER SIDE, module to pocket. A VECTOR because the two axes needed different
+// answers: the printed lid would not take the module in Y at 0.5, which is the
+// axis the module is measured "tall" in (82mm on the ILI9341) and so the one
+// where tolerance stacks up. X was fine. Raised to 1.0 in Y; the window uses
+// half of it, since a window gap only has to clear the glass, not swallow the
+// whole module.
+screen_fit_gap_mm = [0.5, 1.0];
 
 // At the HDMI end of the lid, as asked. Board-local; 41 is as far right as it
 // can sit while clearing J11's lid cutout, which starts at x=82.
 // Still the HDMI end. 82mm tall on a 90mm board leaves 4mm top and bottom,
 // so it has to sit centred in Y; x=30 keeps it clear of the case wall.
-screen_center_mm  = [30, 45];
+screen_center_mm  = is_cyd ? cyd_center_mm : ili_center_mm;
 
 // No screw posts. The module's mounting-hole positions have not been measured,
 // and inventing them is exactly what produced the standoffs and bosses that
@@ -1131,6 +1192,11 @@ kan28_stack_mm       = kan28_above_pcb + kan28_body_mm[1]/2 + kan28_clip_fit
                        + kan28_clip_wall;
 ft232h_fits          = ft232h_stack_mm <= wall_height;
 kan28_fits           = kan28_stack_mm  <= wall_height;
+echo(str("SCREEN [", VARIANT_SCREEN, "] module ", screen_module_mm,
+         " window ", screen_window_mm,
+         " -> board-local Y ", screen_center_mm[1] - screen_module_mm[1]/2,
+         "..", screen_center_mm[1] + screen_module_mm[1]/2,
+         " (lid spans ", -board_origin[1], "..", outer_width - board_origin[1], ")"));
 echo(str("internal mounts vs wall_height ", wall_height, ": FT232H needs ",
          ft232h_stack_mm, " (", ft232h_fits ? "fits" : "OMITTED",
          "), switch needs ", kan28_stack_mm, " (", kan28_fits ? "fits" : "OMITTED", ")"));
@@ -1220,18 +1286,38 @@ module lid_snap_bead() {
 module lid_screen_cutout() {
     cx = board_origin[0] + screen_center_mm[0];
     cy = board_y(screen_center_mm[1]);
+    // Window centre. Offset from the module centre for a display that is not
+    // centred on its own PCB -- the CYD is not, 7mm of board one end and 9mm
+    // the other.
+    wx = cx + screen_window_off_mm[0];
+    wy = cy + screen_window_off_mm[1];
 
-    translate([cx - (screen_window_mm[0] + screen_fit_gap)/2,
-               cy - (screen_window_mm[1] + screen_fit_gap)/2, -1])
-        cube([screen_window_mm[0] + screen_fit_gap,
-              screen_window_mm[1] + screen_fit_gap,
+    // Through-window for the glass. Half the pocket clearance: this only has
+    // to clear the display, not admit the whole module.
+    translate([wx - (screen_window_mm[0] + screen_fit_gap_mm[0])/2,
+               wy - (screen_window_mm[1] + screen_fit_gap_mm[1])/2, -1])
+        cube([screen_window_mm[0] + screen_fit_gap_mm[0],
+              screen_window_mm[1] + screen_fit_gap_mm[1],
               lid_thickness + 2]);
 
-    translate([cx - (screen_module_mm[0] + 2*screen_fit_gap)/2,
-               cy - (screen_module_mm[1] + 2*screen_fit_gap)/2, -0.001])
-        cube([screen_module_mm[0] + 2*screen_fit_gap,
-              screen_module_mm[1] + 2*screen_fit_gap,
+    // Pocket the module body drops into from inside, leaving the ledges it
+    // bears on.
+    translate([cx - (screen_module_mm[0] + 2*screen_fit_gap_mm[0])/2,
+               cy - (screen_module_mm[1] + 2*screen_fit_gap_mm[1])/2, -0.001])
+        cube([screen_module_mm[0] + 2*screen_fit_gap_mm[0],
+              screen_module_mm[1] + 2*screen_fit_gap_mm[1],
               screen_recess_mm]);
+
+    // Light-sensor slot, CYD only. Goes all the way through the ledge, which
+    // is doing two jobs: the sensor needs light, and at 3mm tall it would
+    // otherwise foul the 4mm ledge above it.
+    if (screen_ldr_slot_mm[0] > 0) {
+        ldr_cy = wy + screen_window_mm[1]/2 + screen_ldr_from_glass_mm;
+        translate([wx - screen_ldr_slot_mm[0]/2,
+                   ldr_cy - screen_ldr_slot_mm[1]/2, -1])
+            cube([screen_ldr_slot_mm[0], screen_ldr_slot_mm[1],
+                  lid_thickness + 2]);
+    }
 }
 
 // True when a vent hole would land on the screen module's footprint. Holes
