@@ -232,7 +232,14 @@ module odocrypt_gpio_wrapper #(
     // Header/target word order, NONCE_LO/HI, and the read-HI-clears-valid
     // convention are all unchanged, so a v1.x host still dispatches and
     // drains correctly -- it just cannot see the new FIFO telemetry.
-    localparam [15:0] VERSION = 16'h0200;
+    //
+    // 0x0201: the nonce consume/ack moved to the END of the read transaction.
+    // At 0x0200 it fired on the first cycle of S_READ, which -- now that it
+    // also acks the found-FIFO -- let clk_h swap the latch mid-read and hand
+    // the host one nonce's low half with another's high half. See the
+    // ADDR_NONCE_HI note in S_READ. found_path also flushes the FIFO on
+    // commit. No interface change; 0x0200 bitstreams are simply wrong.
+    localparam [15:0] VERSION = 16'h0201;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;
