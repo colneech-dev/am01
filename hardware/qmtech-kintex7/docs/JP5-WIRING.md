@@ -4,6 +4,38 @@ Everything the AM01 adds to the QMTECH board — the ILI9341 panel, its XPT2046
 touch controller, and the fan — connects through **JP5**, the board's 50-pin
 expansion header. Nothing else is needed: no breakout, no rework.
 
+> ## CORRECTED 2026-08-31 -- THE PIN NUMBERS WERE OFF BY TWO
+>
+> Every signal in this file used to be listed two pins low. The header is:
+>
+> | pins | |
+> |---|---|
+> | 1, 2 | **GND** |
+> | 3, 4 | **VCCO_12 (3.3 V)** |
+> | 5..46 | the 21 BANK12 signal pairs |
+> | 47, 48 | **GND** |
+> | 49, 50 | **5V0** |
+>
+> That sums to 50. The old table did not: it started the signals at pin 3, ran
+> out at 44, and left 45-48 as four grounds with no VCCO_12 pair anywhere.
+> The arithmetic never closed and nobody checked it.
+>
+> **What this broke.** The fan's PWM and tach were wired to 43/44 -- which are
+> `V23`/`V24`, unconnected in this design -- instead of 45/46. The display was
+> wired to 3..11 instead of 5..13. Hours were spent looking for faults in the
+> RTL, the fan, and two different wiring conventions, when the header mapping
+> was wrong the whole time.
+>
+> **It also invalidated a conclusion recorded here earlier.** The panel would
+> not power from "pin 1", and this document concluded it must therefore be a
+> 5 V module. Pin 1 is GROUND. The 3.3 V pair is 3/4 and was never tried, so
+> the panel may well run at 3.3 V after all -- and the 5 V warning below is
+> unproven. Test 3.3 V from pin 3 before accepting it.
+>
+> Confirmed empirically before this edit: forcing PWM duty made **pin 45**
+> swing 1.32 V -> 3.30 V under software control, and **pin 46** sat at its
+> internal pull-up. Both match the corrected table, neither matches the old one.
+
 ## What JP5 is
 
 `HDR_25X2`, a 50-pin (25×2) header carrying **42 bank-12 FPGA signals** plus
@@ -34,29 +66,29 @@ order, which looks deliberate.
 
 | Pin | Net | | Pin | Net |
 |----:|-----|-|----:|-----|
-| 1 | **VCCO_12 (3.3 V)** | | 2 | **VCCO_12 (3.3 V)** |
-| 3 | BANK12_AD21 | | 4 | BANK12_AE21 |
-| 5 | BANK12_AE22 | | 6 | BANK12_AF22 |
-| 7 | BANK12_AE23 | | 8 | BANK12_AF23 |
-| 9 | BANK12_V21 | | 10 | BANK12_W21 |
-| 11 | BANK12_Y22 | | 12 | BANK12_AA22 |
-| 13 | BANK12_AF24 | | 14 | BANK12_AF25 |
-| 15 | BANK12_AB21 | | 16 | BANK12_AC21 |
-| 17 | BANK12_AB22 | | 18 | BANK12_AC22 |
-| 19 | BANK12_AD23 | | 20 | BANK12_AD24 |
-| 21 | BANK12_AC23 | | 22 | BANK12_AC24 |
-| 23 | BANK12_AD25 | | 24 | BANK12_AE25 |
-| 25 | BANK12_AA23 | | 26 | BANK12_AB24 |
-| 27 | BANK12_AA25 | | 28 | BANK12_AB25 |
-| 29 | BANK12_Y23 | | 30 | BANK12_AA24 |
-| 31 | BANK12_AD26 | | 32 | BANK12_AE26 |
-| 33 | BANK12_AB26 | | 34 | BANK12_AC26 |
-| 35 | BANK12_W23 | | 36 | BANK12_W24 |
-| 37 | BANK12_Y25 | | 38 | BANK12_Y26 |
-| 39 | BANK12_W25 | | 40 | BANK12_W26 |
-| 41 | BANK12_V23 | | 42 | BANK12_V24 |
-| 43 | BANK12_U24 | | 44 | BANK12_U25 |
-| 45 | **GND** | | 46 | **GND** |
+| 1 | **GND** | | 2 | **GND** |
+| 3 | **VCCO_12 (3.3 V)** | | 4 | **VCCO_12 (3.3 V)** |
+| 5 | BANK12_AD21 | | 6 | BANK12_AE21 |
+| 7 | BANK12_AE22 | | 8 | BANK12_AF22 |
+| 9 | BANK12_AE23 | | 10 | BANK12_AF23 |
+| 11 | BANK12_V21 | | 12 | BANK12_W21 |
+| 13 | BANK12_Y22 | | 14 | BANK12_AA22 |
+| 15 | BANK12_AF24 | | 16 | BANK12_AF25 |
+| 17 | BANK12_AB21 | | 18 | BANK12_AC21 |
+| 19 | BANK12_AB22 | | 20 | BANK12_AC22 |
+| 21 | BANK12_AD23 | | 22 | BANK12_AD24 |
+| 23 | BANK12_AC23 | | 24 | BANK12_AC24 |
+| 25 | BANK12_AD25 | | 26 | BANK12_AE25 |
+| 27 | BANK12_AA23 | | 28 | BANK12_AB24 |
+| 29 | BANK12_AA25 | | 30 | BANK12_AB25 |
+| 31 | BANK12_Y23 | | 32 | BANK12_AA24 |
+| 33 | BANK12_AD26 | | 34 | BANK12_AE26 |
+| 35 | BANK12_AB26 | | 36 | BANK12_AC26 |
+| 37 | BANK12_W23 | | 38 | BANK12_W24 |
+| 39 | BANK12_Y25 | | 40 | BANK12_Y26 |
+| 41 | BANK12_W25 | | 42 | BANK12_W26 |
+| 43 | BANK12_V23 | | 44 | BANK12_V24 |
+| 45 | BANK12_U24 | | 46 | BANK12_U25 |
 | 47 | **GND** | | 48 | **GND** |
 | 49 | **5V0** | | 50 | **5V0** |
 
@@ -65,20 +97,20 @@ order, which looks deliberate.
 | JP5 pin | FPGA ball | RTL port | Panel pin |
 |--------:|-----------|----------|-----------|
 | 1 or 2 | — | — | **VCC — see the 5 V warning below** |
-| 3 | AD21 | `lcd_sclk` | SCK / CLK |
-| 4 | AE21 | `lcd_mosi` | SDI / MOSI |
-| 5 | AE22 | `lcd_miso` | SDO / MISO |
-| 6 | AF22 | `lcd_cs_n` | CS |
-| 7 | AE23 | `lcd_dc` | DC / RS |
-| 8 | AF23 | `lcd_rst_n` | RESET |
-| 9 | V21 | `lcd_bl` | LED / BL |
+| 5 | AD21 | `lcd_sclk` | SCK / CLK |
+| 6 | AE21 | `lcd_mosi` | SDI / MOSI |
+| 7 | AE22 | `lcd_miso` | SDO / MISO |
+| 8 | AF22 | `lcd_cs_n` | CS |
+| 9 | AE23 | `lcd_dc` | DC / RS |
+| 10 | AF23 | `lcd_rst_n` | RESET |
+| 11 | V21 | `lcd_bl` | LED / BL |
 
 ## Touch — XPT2046
 
 | JP5 pin | FPGA ball | RTL port | Panel pin |
 |--------:|-----------|----------|-----------|
-| 10 | W21 | `touch_cs_n` | T_CS |
-| 11 | Y22 | `touch_irq` | T_IRQ / PENIRQ |
+| 12 | W21 | `touch_cs_n` | T_CS |
+| 13 | Y22 | `touch_irq` | T_IRQ / PENIRQ |
 
 The touch controller **shares the SPI bus** with the panel — `T_CLK`, `T_DIN`
 and `T_DO` go to the same pins 3, 4 and 5. Only chip select is separate. That
@@ -124,8 +156,8 @@ module without the regulator, or a bypass of it.
 
 | JP5 pin | FPGA ball | RTL port | Fan wire |
 |--------:|-----------|----------|----------|
-| 43 | U24 | `fan_pwm` | blue — PWM in |
-| 44 | U25 | `fan_tach_in` | yellow — tach out |
+| 45 | U24 | `fan_pwm` | blue — PWM in |
+| 46 | U25 | `fan_tach_in` | yellow — tach out |
 | 45–48 | — | — | black — GND |
 | 49/50 | — | — | red — +5 V |
 
