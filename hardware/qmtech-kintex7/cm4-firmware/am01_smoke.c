@@ -139,8 +139,25 @@ int main(int argc, char **argv)
      * twice covers both parities. If finds become reliable at 2 and are
      * erratic at 1, that counter width is the bug. */
     int arm_reps = (argc > 4) ? atoi(argv[4]) : 1;
+    /* 6th arg: dispatch a DIFFERENT header on every re-arm, instead of
+     * re-arming the same one repeatedly.
+     *
+     * 2026-08-31: real pool mining showed found=861913 shares=1 stale=861912
+     * over 38 min on 0x0109 -- near-total staleness, even though this same
+     * tool with cycle_headers=0 measured 15/16 pass on the identical
+     * bitstream moments earlier. The one thing the default mode never
+     * exercises is a header CHANGE between dispatches: redispatch=1 only
+     * ever re-arms the SAME header/target, but real mining also redispatches
+     * on every new pool job (every 5-10s) with genuinely different content,
+     * via the same miner_io_pipe_dispatch() call. This mode reproduces that:
+     * disp_header is what was actually in flight when a result is drained
+     * (validated against, same disp/cur split as miner_pipe_am01.c), and a
+     * NEW header is only committed as disp_header for the FOLLOWING drain,
+     * never the one just validated. */
+    int cycle_headers = (argc > 5) ? atoi(argv[5]) : 0;
     if (tgt_msb == 0 || tgt_msb > 0xFF) {
-        fprintf(stderr, "usage: %s [target_msb 1..255] [samples]\n", argv[0]);
+        fprintf(stderr, "usage: %s [target_msb 1..255] [samples] [redispatch] "
+                        "[arm_reps] [cycle_headers]\n", argv[0]);
         return 2;
     }
     if (want < 1) want = 1;
@@ -172,6 +189,12 @@ int main(int argc, char **argv)
 
     uint8_t header[80];
     build_header(seed, header);
+    /* disp_header is the header actually armed for whatever result is next
+     * drained -- same split as miner_pipe_am01.c's disp/cur. Only relevant
+     * when cycle_headers is set; otherwise it just tracks `header`. */
+    uint8_t disp_header[80];
+    memcpy(disp_header, header, 80);
+    uint32_t next_key = seed;
 
     uint8_t target[32];
     memset(target, 0, sizeof(target));
@@ -221,24 +244,13 @@ int main(int argc, char **argv)
         if (got == 0) t_first = t - t0;
         got++;
 
-        /* RE-ARM. host_break_sm raises sha_host_break on ticket2moon and the
-         * wrapper clears start_hash_h on that, so the core HALTS on every
-         * solution and waits for the host to re-arm it. Re-writing the 8
-         * target words is what re-arms it -- the 8th sets start_hash.
-         *
-         * odo-miner does not do this: it dispatches only when a NEW job
-         * arrives, so the FPGA idles between jobs. If re-dispatching turns one
-         * find into a stream, that is the whole explanation for the observed
-         * "found=10 in 95 s". */
-        for (int r = 1; redispatch && r < arm_reps; r++)
-            miner_io_pipe_dispatch(header, target);
-        if (redispatch && miner_io_pipe_dispatch(header, target) != 0) {
-            printf("FAIL: re-dispatch failed\n");
-            break;
-        }
-
+        /* Validate against disp_header -- the header that was ACTUALLY armed
+         * when this nonce was computed -- before touching it for the next
+         * dispatch. Same ordering miner_pipe_am01.c uses and for the same
+         * reason: checking against a header that has already moved on is a
+         * guaranteed false "stale", not a real one. */
         uint8_t h[KeccakP800_stateSizeInBytes];
-        oracle_hash(&st, header, nonce, h);
+        oracle_hash(&st, disp_header, nonce, h);
         int ok = hash_lt(h, target);
         if (ok) pass++; else fail++;
 
@@ -248,7 +260,7 @@ int main(int argc, char **argv)
 
         if (!ok) {
             /* Distinguish a wrong CIPHER from a wrong REPORTED NONCE. */
-            long k = offset_search(&st, header, nonce, target);
+            long k = offset_search(&st, disp_header, nonce, target);
             if (k != LONG_MIN) {
                 printf("        -> but nonce%+ld DOES satisfy the target.\n", k);
                 printf("           The core hashed correctly and reported the\n");
@@ -262,6 +274,34 @@ int main(int argc, char **argv)
                        OFFSET_RANGE);
                 printf("           Not a simple offset; the hash itself differs.\n");
             }
+        }
+
+        /* RE-ARM. host_break_sm raises sha_host_break on ticket2moon and the
+         * wrapper clears start_hash_h on that, so the core HALTS on every
+         * solution and waits for the host to re-arm it. Re-writing the 8
+         * target words is what re-arms it -- the 8th sets start_hash.
+         *
+         * odo-miner does not do this: it dispatches only when a NEW job
+         * arrives, so the FPGA idles between jobs. If re-dispatching turns one
+         * find into a stream, that is the whole explanation for the observed
+         * "found=10 in 95 s".
+         *
+         * If cycle_headers, this is also where a genuinely NEW job's content
+         * gets built and dispatched -- disp_header only becomes the new
+         * content AFTER the dispatch call, so the NEXT drained result is what
+         * gets validated against it, never this one. */
+        if (redispatch) {
+            if (cycle_headers) {
+                next_key++;
+                build_header(next_key, header);
+            }
+            for (int r = 1; r < arm_reps; r++)
+                miner_io_pipe_dispatch(header, target);
+            if (miner_io_pipe_dispatch(header, target) != 0) {
+                printf("FAIL: re-dispatch failed\n");
+                break;
+            }
+            memcpy(disp_header, header, 80);
         }
     }
 

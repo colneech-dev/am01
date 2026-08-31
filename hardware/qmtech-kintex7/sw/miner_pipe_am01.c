@@ -428,12 +428,20 @@ int main(int argc, char **argv)
      *
      * So this must NOT simply be left in place after the rebuild. Gated on the
      * version the hardware reports, the same way the double-arm workaround is,
-     * so flashing 0x0108 retires it with no coordination. */
-    const uint32_t fpga_ver = miner_io_pipe_version() & 0xFFFFu;
-    const int warmup_broken = (fpga_ver < 0x0108u);
+     * so flashing 0x0108 retires it with no coordination.
+     *
+     * miner_io_pipe_version() returns major<<16 | minor (v1.8 -> 0x00010008),
+     * not the raw 16-bit VERSION register (0x0108). Masking that with 0xFFFF
+     * threw away the major byte and left only the minor (0x0008), which is
+     * always < 0x0108u -- so this never retired regardless of the flashed
+     * version. Compare against the same encoding the getter produces instead
+     * of the raw register value. */
+    const uint32_t fpga_ver = miner_io_pipe_version();
+    const int warmup_broken = (fpga_ver < ((1u << 16) | 8u));
     if (warmup_broken)
-        fprintf(stderr, "[pipe] FPGA 0x%04x predates the nonce_out fix; "
-                        "discarding the first find of each job\n", fpga_ver);
+        fprintf(stderr, "[pipe] FPGA v%u.%u predates the nonce_out fix; "
+                        "discarding the first find of each job\n",
+                        fpga_ver >> 16, fpga_ver & 0xFFFFu);
     uint64_t found = 0, shares = 0, stale = 0;
     time_t last_status = 0;
 
