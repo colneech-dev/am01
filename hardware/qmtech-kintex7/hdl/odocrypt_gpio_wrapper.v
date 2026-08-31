@@ -192,7 +192,7 @@ module odocrypt_gpio_wrapper #(
     // LOAD-BEARING, not cosmetic -- am01_bus_submit_work() uses it to decide
     // whether it must send the target words twice to work around the
     // every-other-dispatch arming bug in 0x0105 and earlier.
-    localparam [15:0] VERSION = 16'h0108;
+    localparam [15:0] VERSION = 16'h0109;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;
@@ -1173,6 +1173,26 @@ module odocrypt_gpio_wrapper #(
     end
     assign golden_nonce_h = golden_nonce_mux;
 
+    // FIT-CHECK 2026-08-31, hardware-confirmed via am01_smoke offset-search:
+    // golden_nonce_mux is only valid during the single cycle `ticket2moon`
+    // (= |t2m_arr, raw and combinational) is actually high. But the latch
+    // below that is supposed to save it fires on `ticket2moon_rise`, the
+    // rising edge of ticket2moon_i -- a REGISTERED, one-cycle-delayed copy
+    // (`ticket2moon_i <= ticket2moon & nonce_out_go_top`). By that cycle the
+    // raw signal has already gone low, so the mux has already fallen back to
+    // its default branch (nonce_arr[0]) -- reading whatever instance 0
+    // happens to hold at that moment, not the nonce that actually produced
+    // the hit. Measured on hardware: nonce reported -35 from the nonce that
+    // actually satisfies the target, and 100% first-encounter failures using
+    // a fixed repeated header (am01_smoke), matching a wrong-instance/stale-
+    // register read rather than a genuine cipher or alignment fault.
+    //
+    // Fix: capture the mux output on the RAW ticket2moon edge, when it is
+    // still valid, one cycle ahead of where the gated latch below needs it.
+    reg [31:0] golden_nonce_captured_h;
+    always @(posedge clk_h)
+        if (ticket2moon) golden_nonce_captured_h <= golden_nonce_mux;
+
     // -----------------------------------------------------------------
     // ticket2moon qualification -- must match atomminer_odocrypt.v.
     //
@@ -1305,7 +1325,11 @@ module odocrypt_gpio_wrapper #(
 
     always @(posedge clk_h) begin
         if (ticket2moon_rise) begin
-            golden_nonce_latch_h <= golden_nonce_h;
+            // golden_nonce_captured_h, NOT golden_nonce_h -- see the capture
+            // register above. golden_nonce_h is only valid on the raw
+            // ticket2moon cycle, which is already one cycle in the past by
+            // the time ticket2moon_rise (gated, registered) fires here.
+            golden_nonce_latch_h <= golden_nonce_captured_h;
             nonce_toggle_h       <= ~nonce_toggle_h;
         end
     end
