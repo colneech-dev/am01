@@ -303,47 +303,52 @@ def main():
                 sys.exit("ERROR: column %d has no RAMB18 sites" % c)
         stride = max(1, args.cols_stride)
 
-        # Partition columns among miners BY SITE COUNT. The columns are not
-        # equal (col 5 has ten gaps, col 6 stops at Y59), so an equal split by
-        # column count would hand one miner too few sites and fail late, deep
-        # in the assignment loop, as a confusing "column exhausted".
+        # Partition sites among miners with a BALANCED budget, allowing a
+        # column to be shared at a row boundary.
+        #
+        # Splitting on whole columns gave miner 0 exactly 420 sites for 420
+        # BRAMs -- 100% packed, no placement freedom at all -- while miner 1
+        # got 12% slack plus the short column (col 6 ends at Y59), whose
+        # exhaustion made its late rounds spill and widen. That layout did not
+        # converge: overuse fell 332512 -> 110321 -> 70128 -> 56617, the
+        # reduction ratio collapsing 3.01x -> 1.57x -> 1.24x toward 1.0.
+        #
+        # Walking sites in column-major order and cutting at each miner's share
+        # gives ~445 each for 420 BRAMs, so both carry ~6% slack and neither
+        # owns the awkward geometry alone.
         need = {mi: sum(len(v) for k, v in by_mr.items() if k[0] == mi) for mi in miners}
-        avail = {c: len([y for y in valid[c] if y >= max(0, args.y_base)]) for c in cols}
-        region = {}
-        pool = list(cols)
-        for mi in miners:
-            got, take = 0, []
-            while pool and got < need[mi]:
-                c = pool.pop(0)
-                take.append(c)
-                got += avail[c]
-            if got < need[mi]:
-                sys.exit("ERROR: miner %d needs %d sites, only %d left in columns %s "
-                         "(y-base %d). Lower --y-base or add columns."
-                         % (mi, need[mi], got, take, args.y_base))
-            region[mi] = take
-        # Hand any leftover columns to the last miner. Without this a single
-        # miner got only the columns its demand required (0-4 for 420 BRAMs)
-        # where it had always been given every column in --columns, quietly
-        # changing the layout underneath every measurement taken so far.
-        if pool:
-            region[miners[-1]].extend(pool)
-            pool = []
-        for mi in miners:
-            print("  miner %d -> columns %s (%d sites for %d BRAMs)"
-                  % (mi, ",".join(str(c) for c in region[mi]),
-                     sum(avail[c] for c in region[mi]), need[mi]))
+        avail_rows = {c: [y for y in valid[c] if y >= max(0, args.y_base)] for c in cols}
+        total_avail = sum(len(r) for r in avail_rows.values())
+        if total_avail < sum(need.values()):
+            sys.exit("ERROR: %d sites available from y-base %d, %d BRAMs to place"
+                     % (total_avail, args.y_base, sum(need.values())))
 
-        # cursor indexes into each column's sorted list of REAL rows, advanced
-        # past y-base. Shared across miners because regions are disjoint.
-        cursor = {c: 0 for c in cols}
+        share = total_avail // len(miners)
+        mrows = {mi: {} for mi in miners}       # miner -> {col: [rows]}
+        cur, got = 0, 0
         for c in cols:
-            while (cursor[c] < len(valid[c])
-                   and valid[c][cursor[c]] < max(0, args.y_base)):
-                cursor[c] += 1
+            for y in avail_rows[c]:
+                if got >= share and cur < len(miners) - 1:
+                    cur += 1
+                    got = 0
+                mrows[miners[cur]].setdefault(c, []).append(y)
+                got += 1
 
         for mi in miners:
-            rcols = region[mi]
+            have = sum(len(r) for r in mrows[mi].values())
+            if have < need[mi]:
+                sys.exit("ERROR: miner %d got %d sites for %d BRAMs" % (mi, have, need[mi]))
+            cols_desc = ",".join(
+                "X%d(Y%d-%d)" % (c, min(r), max(r)) for c, r in sorted(mrows[mi].items()))
+            print("  miner %d -> %s  = %d sites for %d BRAMs (%.0f%% slack)"
+                  % (mi, cols_desc, have, need[mi], 100.0 * (have - need[mi]) / need[mi]))
+
+        # Cursors index into each MINER's own row list for a column, so a shared
+        # column is consumed from both ends of its split without collision.
+        cursor = {(mi, c): 0 for mi in miners for c in mrows[mi]}
+
+        for mi in miners:
+            rcols = sorted(mrows[mi])
             rncol = len(rcols)
             rcpr = max(1, min(cpr, rncol))
             for idx, rnd in enumerate(rounds):
@@ -362,14 +367,14 @@ def main():
                     # neighbours. Fall back to any other column in this miner's
                     # region rather than failing, so a lopsided device does not
                     # make the layout impossible.
-                    if cursor[col] >= len(valid[col]):
-                        alt = [c for c in rcols if cursor[c] < len(valid[c])]
+                    if cursor[(mi, col)] >= len(mrows[mi][col]):
+                        alt = [c for c in rcols if cursor[(mi, c)] < len(mrows[mi][c])]
                         if not alt:
                             sys.exit("ERROR: miner %d ran out of sites in columns %s"
                                      % (mi, rcols))
                         col = alt[0]
-                    site_y = valid[col][cursor[col]]
-                    cursor[col] += 1
+                    site_y = mrows[mi][col][cursor[(mi, col)]]
+                    cursor[(mi, col)] += 1
                     placed.setdefault(col, []).append(site_y)
                     bel = "RAMB18_X%dY%d/RAMB18E1" % (col, site_y)
                     if not args.dry_run:
