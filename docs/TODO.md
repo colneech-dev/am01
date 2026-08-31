@@ -5,47 +5,72 @@ Open items, newest first. Things that are *done* live in git history and in
 
 ---
 
-## 1. The wrapper edit is PARSE-checked, not ELABORATED
+## 0. Bitstream rebuild for VERSION 0x0109 — golden_nonce_h latched one cycle late
 
 `hardware/qmtech-kintex7/hdl/odocrypt_gpio_wrapper.v`
 
-The `target_word_cnt_h` narrowing (4 bits -> 3) and the `VERSION` bump to
-`0x0106` were checked with:
+Found 2026-08-31 via `am01_smoke` run directly against the (then-current)
+0x0108 hardware, no pool involved: reported nonce was consistently -35 from
+the nonce that actually satisfies the target. On the pool this showed as
+`found=338112 shares=1 stale=338111` — virtually every genuine hit reported
+the wrong nonce and was rejected as stale. This is also why miningcore showed
+~700 H/s against a ~66.7 MH/s core: the pool estimator only sees the share
+arrival rate, and almost nothing was surviving to become a share.
 
-    iverilog -Wimplicit -g2005 -o /tmp/wrapcheck \
-        -y hdl/odocrypt -y hardware/qmtech-kintex7/hdl \
-        hardware/qmtech-kintex7/hdl/odocrypt_gpio_wrapper.v
+Root cause: `golden_nonce_h` (the mux picking the winning instance's nonce out
+of the two `miner_top` instances) is combinational and only valid during the
+single cycle the RAW `ticket2moon` (`= |t2m_arr`) is high. The latch meant to
+capture it fires on `ticket2moon_rise` — the rising edge of `ticket2moon_i`, a
+REGISTERED, one-cycle-delayed copy (`ticket2moon_i <= ticket2moon &
+nonce_out_go_top`). By the cycle that latch fires, the raw signal has already
+dropped, so the mux has fallen back to its default (`nonce_arr[0]`) — whatever
+instance 0 happens to hold at that moment, not the nonce that produced the hit.
 
-That run reported **6 errors during elaboration**:
+Fixed: capture the mux output into `golden_nonce_captured_h` on the RAW
+`ticket2moon` edge while it is still valid; the existing gated latch now reads
+from that captured register instead of the raw mux. Committed `824da3a`,
+VERSION bumped to `0x0109`.
 
-    Unknown module type: XADC
-    Unknown module type: odo_block_data
-    Unknown module type: host_break_sm
-    Unknown module type: miner_top   (x2)
+Verified by FULL iverilog elaboration (not just parse — see item 1, now
+resolved): zero errors, only two benign `@*`-sensitive-to-whole-array
+warnings unrelated to this change.
 
-Those are missing module definitions, not faults in the edit — `XADC` is a
-Xilinx library primitive with no iverilog model, and the other three live
-inside multi-module files (`hdl/odocrypt/atomminer_misc.v`, `miner.v`) that
-`-y` cannot resolve, since `-y` expects one module per file named after the
-module.
+**Not yet verified on hardware.** Vivado rebuild was in progress at time of
+writing. Once flashed: re-run `am01_smoke` (no pool, so staleness/timing
+noise is ruled out) and confirm zero offset failures before trusting pool
+share numbers again.
 
-**So the file was proven to PARSE and nothing more.** Width mismatches,
-truncation warnings and connectivity problems all surface at elaboration, and
-elaboration never completed. A three-bit change to a counter that is compared
-against a four-bit literal is exactly the kind of edit an elaboration pass
-would have something to say about.
+---
 
-Before trusting it, do one of:
+## 1. iverilog elaboration — RESOLVED 2026-08-31
 
-* elaborate with the real sources listed explicitly rather than via `-y`, and
-  a stub for `XADC`; or
-* let Vivado synthesis be the check — it parses the RTL properly and will
-  report width mismatches. This is the natural option because a bitstream
-  rebuild is needed anyway (item 2).
+`hardware/qmtech-kintex7/hdl/odocrypt_gpio_wrapper.v` used to only PARSE-check
+under iverilog, not elaborate, because `XADC` (a Xilinx hard primitive) had no
+model available. Full elaboration now works with Vivado's own bundled
+Xilinx simulation library:
 
-Do NOT treat "iverilog printed no syntax error" as verification. That is the
-same shape of mistake as the earlier `lcd_start` synthesis failure, where an
-iverilog run that filtered warnings hid the one diagnostic that mattered.
+    iverilog -Wall -g2005 -o /tmp/check \
+        -y "/c/AMDDesignTools/2026.1/Vivado/data/verilog/src/unisims" \
+        hardware/qmtech-kintex7/hdl/odocrypt_gpio_wrapper.v \
+        hdl/odocrypt/miner.v hdl/odocrypt/encrypt.v \
+        hdl/odocrypt/atomminer_misc.v hdl/odocrypt/keccak800.v \
+        "/c/AMDDesignTools/2026.1/Vivado/data/verilog/src/glbl.v"
+
+Two libs were needed: the `unisims/` behavioral models (for `XADC` and any
+other hard primitive) and `glbl.v` (provides the global `GSR`/`GTS` nets those
+primitives expect). Both ship with the Vivado install already — nothing
+external to fetch. This ran clean against the current wrapper (see item 0):
+zero errors, only benign `@*`/whole-array-sensitivity warnings.
+
+Use this full form for future RTL checks in this repo instead of the old
+partial `-y hdl/odocrypt`-only version, which could not resolve
+`odo_block_data`/`host_break_sm`/`miner_top` (they live in multi-module files
+that `-y` cannot handle) or `XADC`, and so only ever proved the file PARSES —
+width mismatches, truncation, and connectivity problems all surface at
+elaboration, which never used to complete. Do NOT treat "iverilog printed no
+syntax error" as verification; that was the same shape of mistake as the
+earlier `lcd_start` synthesis failure, where a run that filtered warnings hid
+the one diagnostic that mattered.
 
 ---
 
