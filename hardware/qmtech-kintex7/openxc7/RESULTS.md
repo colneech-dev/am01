@@ -249,20 +249,30 @@ Tested together (`TILE_NETS=8 WIRE_DEMAND=5.0`) on the same balanced
 At matched iterations the congestion-aware run ran at roughly **8x lower
 overuse than the plain floorplan by iter=11**, and kept dropping to a floor
 around **96-140** by iter~76-108 -- a **~30x lower residual** than seed 1's
-terminal 3034. It did not reach overuse=0: after iter=76 (best=96) it
-plateaued/oscillated without a new best for 30+ iterations, so it appears to
-have found a real floor rather than converging. Full outcome (plateau
-persisting, eventual stall-out, or a late break to 0) still being observed --
-check the live log / a later RESULTS.md update for the final iteration count
-and whether a post-route Max frequency was reached.
+terminal 3034.
+
+**FINAL for this attempt (2026-09-01):** it did not reach overuse=0. Best
+overuse was **96 at iter=76**, never beaten again; overuse then drifted
+upward (145 by iter=129, 219 by iter=164) rather than settling flat, so this
+was a genuine floor, not noise around a slow decline. Killed at iter=164 as
+no longer productive (~13h runtime). No stall-out or hard router error was
+reached -- it was still slowly getting worse when stopped, well before
+`NEXTPNR_ROUTER2_MAX_STALL=250` would have force-terminated it (~iter 326).
 
 **Revised conclusion:** placement-time congestion awareness is a real,
 large lever on this design -- not a marginal tweak. `TILE_NETS` and
 `WIRE_DEMAND` should be considered required, not optional, for any further
-94%-occupancy attempt. If this configuration's residual floor turns out to
-be non-zero, the two-pass `NEXTPNR_CONGESTION_MAP` feedback loop (dump real
-router overuse from a `NEXTPNR_SKIP_FAILED_ARCS=1 NEXTPNR_DUMP_CONGESTION=`
-run, feed it into a fresh placement via `NEXTPNR_CONGESTION_MAP=`) is the
-next thing to try, since it uses ground-truth router overuse rather than a
-placement-time proxy. Worth tuning `TILE_NETS`/`WIRE_DEMAND` magnitudes too --
-8 and 5.0 were first-guess starting values, not tuned.
+94%-occupancy attempt, but this configuration alone (8, 5.0) is not
+sufficient to fully route. Two follow-ups in progress/planned:
+
+1. **Ground-truth congestion feedback** (in progress) -- the same
+   `TILE_NETS=8 WIRE_DEMAND=5.0` placement forced through to completion via
+   `NEXTPNR_SKIP_FAILED_ARCS=1 NEXTPNR_DUMP_CONGESTION=<path>`
+   (`run_2miner_congmap.sh`), exporting router2's REAL per-tile overuse
+   rather than a placement-time proxy, to feed a second placement pass via
+   `NEXTPNR_CONGESTION_MAP=<path> NEXTPNR_CONGESTION_W=<w>`. This is the
+   principled next step since 8/5.0 were first-guess values, not tuned, and
+   the residual is likely concentrated in a small number of specific tiles
+   this run's own congestion export will locate exactly.
+2. Retune `TILE_NETS`/`WIRE_DEMAND` magnitudes directly (e.g. `TILE_NETS=16`
+   or `24`) as a cheaper, less targeted parallel bet.
