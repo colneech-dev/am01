@@ -173,6 +173,17 @@ int main(int argc, char **argv)
     uint32_t ver  = miner_io_pipe_version();
     printf("FPGA version 0x%04x, bitstream epoch %u\n", ver, seed);
 
+    /* v2.0+ runs a free-running core: it never halts on a find, so there is
+     * nothing to re-arm, and a dispatch is a COMMIT that restarts the settle
+     * window. Re-dispatching after every find would keep that window open and
+     * suppress most finds -- the opposite of what this test wants. Default it
+     * off there unless the caller explicitly asked for it. */
+    if ((ver >> 16) >= 2u && argc <= 3) {
+        redispatch = 0;
+        printf("free-running core (v%u.%u): re-dispatch off by default\n",
+               ver >> 16, ver & 0xFFFFu);
+    }
+
     if (seed == 0 || seed == 0xFFFFFFFFu) {
         printf("FAIL: implausible epoch read back -- the bus is not returning\n"
                "      real register data, so nothing below would mean anything.\n");

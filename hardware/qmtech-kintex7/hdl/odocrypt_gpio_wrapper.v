@@ -28,10 +28,15 @@
 // socket drives header/target words and reads the golden nonce over 24
 // general-purpose GPIO lines using a simple 4-phase parallel bus, instead
 // of the FX3's DQ-bus/USB link or the Zynq variant's on-chip AXI4-Lite.
-// odo_block_data, host_break_sm and miner_top (and everything below
-// them) are reused completely unmodified from hdl/odocrypt/ (a copy of
+// odo_block_data is reused unmodified from hdl/odocrypt/ (a copy of
 // exmaples/odocrypt/fpga/src/hdl/ kept in sync with the current OdoCrypt
 // epoch -- see hdl/odocrypt/NOTICE).
+//
+// v2.0 no longer uses that tree's miner_top/host_break_sm. The hash cores
+// are hdl/odocrypt/miner_pipelined.v, adopted from odo-miner-cyclonev: they
+// free-run rather than halting on every find and being re-armed, which is
+// what the AtomMiner lineage did and what four separate nonce-alignment
+// bugs traced back to. See the VERSION 0x0200 note below.
 //
 // STATUS: reference skeleton for a hardware proposal, not verified/timed
 // silicon-ready RTL. See "What's still needed before this is real
@@ -51,6 +56,12 @@ module odocrypt_gpio_wrapper #(
     // original single-core behaviour back. See ../README.md
     // "Expected hashrate" for the derivation.
     parameter integer NUM_MINERS = 2,
+
+    // Cycles of found-reporting suppression after each job commit.
+    // SIMULATION OVERRIDE ONLY -- see the SETTLE_CYCLES comment further down
+    // for why it is 4096 and what goes wrong when it is too small. The
+    // testbench drives it to 0 as a negative control.
+    parameter integer SETTLE_CYCLES_P = 4096,
 
     // OdoCrypt epoch seed that hdl/odocrypt/encrypt.v was generated for,
     // read back by the host at SEED_LO/SEED_HI as bitstream_epoch.
@@ -86,7 +97,7 @@ module odocrypt_gpio_wrapper #(
     output wire        gpio_irq,    // level, asserted while a nonce is pending
 
     // ---------------------------------------------------------------
-    // Hash-core clock domain. clk_h is whatever feeds miner_top today
+    // Hash-core clock domain. clk_h is whatever feeds the miner cores today
     // (an MMCM output derived from the 50MHz crystal, same role
     // artix200_v3_clocking plays on the stock AM01).
     // ---------------------------------------------------------------
@@ -174,6 +185,12 @@ module odocrypt_gpio_wrapper #(
     // without emitting a second, surplus byte after them.
     localparam [4:0] ADDR_LCD_DATA8   = 5'h17;  // write: 8-bit data, DC=1
 
+    // v2.0. read: [15:8] saturating lost-find count, [3:0] found-FIFO depth.
+    // Exists so a dropped find is VISIBLE. v1.x had a single nonce latch that
+    // a second find would overwrite silently, and the only symptom was a
+    // share that never arrived -- indistinguishable from bad luck.
+    localparam [4:0] ADDR_FIFO_STAT   = 5'h18;  // read: {lost[7:0], 4'h0, depth[3:0]}
+
     // v1.1 adds SEED_LO/SEED_HI. The daemon treats a VERSION below this as
     // "seed unreadable" rather than misreading 0 as a real epoch.
     // v1.2 adds TEMP, the XADC supply rails, and autonomous fan control.
@@ -192,7 +209,30 @@ module odocrypt_gpio_wrapper #(
     // LOAD-BEARING, not cosmetic -- am01_bus_submit_work() uses it to decide
     // whether it must send the target words twice to work around the
     // every-other-dispatch arming bug in 0x0105 and earlier.
-    localparam [15:0] VERSION = 16'h0109;
+    //
+    // 0x0200 -- MAJOR bump, because the core changed and the interface with it.
+    //
+    // The AtomMiner core (miner.v) is gone, replaced by the free-running
+    // miner_pipelined. Four separate RTL fixes (0x0106 arming, 0x0107 settle
+    // width, 0x0108 nonce_out gating, 0x0109 golden_nonce latch timing) were
+    // all symptoms of one root cause: miner.v resets nonce_in/nonce_out to
+    // NONCE_BASE on every halt, and that core halts on EVERY find, so every
+    // single find restarted the warm-up from zero. Measured on hardware
+    // 2026-08-31 with a header-cycling am01_smoke: 16/16 wrong nonces the
+    // moment each dispatch explored fresh nonce territory instead of
+    // deterministically replaying an already-good sequence.
+    //
+    // What changed at the interface:
+    //   * the 8th target word COMMITS a job instead of ARMING the core; the
+    //     cores never stop, so there is nothing to arm
+    //   * STATUS.hash_active now means "committed job, settle window closed",
+    //     not "armed"
+    //   * OP_HOST_BREAK (CTRL bit 1) is accepted and ignored
+    //   * new ADDR_FIFO_STAT (0x18): found-FIFO depth and lost-find count
+    // Header/target word order, NONCE_LO/HI, and the read-HI-clears-valid
+    // convention are all unchanged, so a v1.x host still dispatches and
+    // drains correctly -- it just cannot see the new FIFO telemetry.
+    localparam [15:0] VERSION = 16'h0200;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;
@@ -975,6 +1015,10 @@ module odocrypt_gpio_wrapper #(
                         ADDR_TOUCH_X:  rdata_reg <= {4'h0, touch_x};
                         ADDR_TOUCH_Y:  rdata_reg <= {4'h0, touch_y};
                         ADDR_TOUCH_STAT: rdata_reg <= {15'h0, touch_pressed};
+                        // 8 + 4 + 4 = 16. The depth field is 4 bits, which
+                        // is exactly enough for an 8-deep FIFO's 0..8.
+                        ADDR_FIFO_STAT: rdata_reg <=
+                            {lost_sync2_bus, 4'h0, fifocnt_sync2_bus};
                         default: rdata_reg <= 16'h0;
                     endcase
                     gpio_data_oe <= 1'b1;
@@ -997,10 +1041,14 @@ module odocrypt_gpio_wrapper #(
     assign gpio_data = gpio_data_oe ? rdata_reg : 16'bz;
 
     // =====================================================================
-    // Hash-core (clk_h) domain: decode the request into the same pulses
-    // odo_block_data / host_break_sm expect, and drive miner_top exactly
-    // like exmaples/odocrypt/fpga/src/hdl/atomminer_odocrypt.v did. This
-    // section mirrors hardware/zynq/hdl/odocrypt_axi_wrapper.v verbatim.
+    // Hash-core (clk_h) domain: decode the request into the shift pulses
+    // odo_block_data expects, and commit a completed job into the snapshot
+    // registers the free-running cores read.
+    //
+    // Up to v1.9 this mirrored atomminer_odocrypt.v (and the Zynq wrapper)
+    // verbatim, including its arm-on-8th-target-word behaviour. v2.0 keeps
+    // the bus protocol identical but turns that arm into a COMMIT -- see
+    // commit_arm_h.
     // =====================================================================
     reg [31:0] data_from_host_h;
     reg        get_block_pulse_h;
@@ -1032,22 +1080,28 @@ module odocrypt_gpio_wrapper #(
     // both parities, and with that am01_smoke returned 6 nonces out of 6 valid
     // against a 1-in-256 target. Six chance passes would be 1 in 2.8e14.
     reg [2:0]  target_word_cnt_h; // 0..7, wraps at 8 -- see above
-    reg        start_hash_h;
 
-    // DECLARED HERE, NOT WITH THE OTHER wires BELOW, because the always block
-    // immediately following reads it. Using an identifier before its
-    // declaration creates an implicit 1-bit net at the point of use; whether
-    // that is unified with the later declaration is tool-dependent, and if it
-    // ever were not, this would test a floating net -- start_hash_h would never
-    // clear on a host break and host-break handling would silently stop.
+    // COMMIT, not ARM. v2.0 replaced the AtomMiner core (miner.v, halts on
+    // every find and must be re-armed) with the free-running miner_pipelined.
+    // There is no start_hash and nothing to arm: the cores hash continuously
+    // from configuration. What the 8th target word now does is COMMIT the
+    // freshly-shifted-in job into the snapshot registers the cores actually
+    // read (header_committed_h / target_committed_h below).
     //
-    // Driven by host_break_sm's sha_host_break output, instantiated below.
-    wire         host_break_debounced;
+    // commit_arm_h delays the commit by exactly one cycle. odo_block_data
+    // shifts on posedge clk_h when get_target_in is high, so the 8th target
+    // word only lands at the END of the cycle in which get_target_pulse_h is
+    // asserted -- snapshotting in that same cycle would capture a target
+    // still missing its last word.
+    reg        commit_arm_h   = 1'b0;
+    reg        commit_pulse_h = 1'b0;
 
     always @(posedge clk_h) begin
         get_block_pulse_h  <= 1'b0;
         get_target_pulse_h <= 1'b0;
         host_break_pulse_h <= 1'b0;
+        commit_arm_h       <= 1'b0;
+        commit_pulse_h     <= commit_arm_h;
 
         if (req_pulse_h) begin
             data_from_host_h <= req_data_bus;
@@ -1060,29 +1114,26 @@ module odocrypt_gpio_wrapper #(
                     get_target_pulse_h <= 1'b1;
                     target_word_cnt_h  <= target_word_cnt_h + 1'b1;
                     if (target_word_cnt_h == 3'd7)
-                        start_hash_h <= 1'b1; // 8th (last) target word arms the core
+                        commit_arm_h <= 1'b1; // 8th (last) word completes the job
                 end
+                // Accepted and ignored. A v1.x host still sets CTRL bit 1 to
+                // request a host break; with a free-running core there is
+                // nothing to break. Kept as an explicit no-op rather than
+                // deleted so an older host cannot fall through to a case
+                // default and have its write silently mean something else.
                 OP_HOST_BREAK: begin
                     host_break_pulse_h <= 1'b1;
                 end
                 OP_SOFT_RESET: begin
                     header_word_cnt_h <= 5'h0;
                     target_word_cnt_h <= 3'h0;
-                    start_hash_h      <= 1'b0;
                 end
             endcase
         end
-
-        if (host_break_debounced)
-            start_hash_h <= 1'b0;
     end
 
     wire [607:0] header;
     wire [255:0] target;
-    // host_break_debounced is declared above, before the always block
-    // that reads it.
-    wire         ticket2moon;
-    wire [31:0]  golden_nonce_h;
 
     odo_block_data odo_block_data_inst (
         .clk_h            (clk_h),
@@ -1094,29 +1145,31 @@ module odocrypt_gpio_wrapper #(
         .target           (target)
     );
 
-    // DECLARED HERE, NOT WITH ITS always BLOCK ~110 LINES BELOW.
+    // -----------------------------------------------------------------
+    // COMMITTED JOB SNAPSHOT -- new in v2.0, and mandatory for a
+    // free-running core.
     //
-    // It is consumed by the host_break_sm port connection immediately below.
-    // An undeclared identifier in a port connection creates an implicit 1-bit
-    // net at the point of use, and whether that net is unified with a later
-    // `reg` of the same name is tool-dependent -- if it is not, host_break_sm
-    // gets an undriven net and the ticket2moon qualification silently does
-    // nothing. yosys was measured to bind them correctly, so no openXC7 build
-    // was affected, but `default_nettype none` is not set in this tree so the
-    // implicit net would be created SILENTLY, and Vivado has never parsed this
-    // file (those runs read the yosys netlist, not the RTL).
+    // odo_block_data is a shift register: while the host is writing the 27
+    // words of a dispatch, `header`/`target` are a moving mixture of the old
+    // job and the new one. The AtomMiner core got away with reading them
+    // directly because start_hash held it halted for the whole load. The
+    // free-running core has no such gate -- it would spend the entire
+    // 27-word load hashing half-written garbage, and worse, would report
+    // finds against it.
     //
-    // Assigned by the qualification block further down, next to the reasoning
-    // that explains the 205-cycle warm-up.
-    reg       ticket2moon_i      = 1'b0;
+    // So the cores read these snapshot registers, never the shift register
+    // directly. They change exactly once per dispatch, atomically, on
+    // commit_pulse_h. This is also what makes the CDC below sound: the data
+    // the cores see is stable between commits by construction.
+    reg [607:0] header_committed_h = 608'h0;
+    reg [255:0] target_committed_h = 256'h0;
 
-    host_break_sm host_break_sm_inst (
-        .clk_h         (clk_h),
-        .host_break    (host_break_pulse_h),
-        .ticket2moon   (ticket2moon_i),   // gated -- see below, NOT raw
-        .hash_cmplt    (1'b0),
-        .sha_host_break(host_break_debounced)
-    );
+    always @(posedge clk_h) begin
+        if (commit_pulse_h) begin
+            header_committed_h <= header;
+            target_committed_h <= target;
+        end
+    end
 
     // -----------------------------------------------------------------
     // Hash-core bank. NUM_MINERS instances share one work item, each
@@ -1135,204 +1188,94 @@ module odocrypt_gpio_wrapper #(
     // with 50 RAMB18 spare. 3 would need 1260 and cannot fit. Do not
     // raise this without re-measuring.
     // -----------------------------------------------------------------
-    wire [NUM_MINERS-1:0] t2m_arr;
+    wire [NUM_MINERS-1:0] found_arr;
     wire [31:0]           nonce_arr [0:NUM_MINERS-1];
 
     genvar gi;
     generate
         for (gi = 0; gi < NUM_MINERS; gi = gi + 1) begin : g_miner
-            miner_top #(
+            miner_pipelined #(
                 // Even split of the nonce space: instance gi sweeps
                 // [gi*span, (gi+1)*span). For NUM_MINERS=2 that is
-                // 0x00000000 and 0x80000000.
-                .NONCE_BASE(gi * ((32'hFFFFFFFF / NUM_MINERS) + 32'h1))
-            ) miner_top_inst (
-                .osc_clk    (clk_h),
-                .header     (header),
-                .target     (target),
-                .start_hash (start_hash_h),
-                .ticket2moon(t2m_arr[gi]),
-                .nonce      (nonce_arr[gi])
+                // 0x00000000 and 0x80000000. Same convention miner.v called
+                // NONCE_BASE; the free-running core spells it INONCE.
+                .INONCE(gi * ((32'hFFFFFFFF / NUM_MINERS) + 32'h1))
+            ) miner_inst (
+                .clk   (clk_h),
+                // The SNAPSHOT, never odo_block_data's shift register --
+                // see the header_committed_h comment above.
+                .header(header_committed_h),
+                .target(target_committed_h),
+                .nonce (nonce_arr[gi]),
+                .found (found_arr[gi])
             );
         end
     endgenerate
 
-    // Any instance finding a solution raises the shared ticket2moon.
-    assign ticket2moon = |t2m_arr;
-
-    // Pick the winning instance's nonce. If two hit on the same cycle
-    // the lower index wins and the other is lost -- the same
-    // single-latch limitation ../README.md already documents for
-    // back-to-back solves, not a new one introduced by the bank.
-    integer mi;
-    reg [31:0] golden_nonce_mux;
-    always @* begin
-        golden_nonce_mux = nonce_arr[0];
-        for (mi = NUM_MINERS - 1; mi >= 0; mi = mi - 1)
-            if (t2m_arr[mi]) golden_nonce_mux = nonce_arr[mi];
-    end
-    assign golden_nonce_h = golden_nonce_mux;
-
-    // FIT-CHECK 2026-08-31, hardware-confirmed via am01_smoke offset-search:
-    // golden_nonce_mux is only valid during the single cycle `ticket2moon`
-    // (= |t2m_arr, raw and combinational) is actually high. But the latch
-    // below that is supposed to save it fires on `ticket2moon_rise`, the
-    // rising edge of ticket2moon_i -- a REGISTERED, one-cycle-delayed copy
-    // (`ticket2moon_i <= ticket2moon & nonce_out_go_top`). By that cycle the
-    // raw signal has already gone low, so the mux has already fallen back to
-    // its default branch (nonce_arr[0]) -- reading whatever instance 0
-    // happens to hold at that moment, not the nonce that actually produced
-    // the hit. Measured on hardware: nonce reported -35 from the nonce that
-    // actually satisfies the target, and 100% first-encounter failures using
-    // a fixed repeated header (am01_smoke), matching a wrong-instance/stale-
-    // register read rather than a genuine cipher or alignment fault.
-    //
-    // Fix: capture the mux output on the RAW ticket2moon edge, when it is
-    // still valid, one cycle ahead of where the gated latch below needs it.
-    reg [31:0] golden_nonce_captured_h;
-    always @(posedge clk_h)
-        if (ticket2moon) golden_nonce_captured_h <= golden_nonce_mux;
-
     // -----------------------------------------------------------------
-    // ticket2moon qualification -- must match atomminer_odocrypt.v.
+    // Result path: settle window, found FIFO, and the handoff to bus_clk.
     //
-    // miner_top's `ticket2moon` is the RAW combinational "hash meets
-    // target" comparator coming out of odo_keccak (miner.v ends with
-    // `assign ticket2moon = res;`), and miner.v captures its own `nonce`
-    // only under `has_res & start_hash & nonce_out_go`. The reference top
-    // level never consumes that raw signal: it builds a gated, registered
-    // copy and feeds *that* to both host_break_sm and its result path
-    // (atomminer_odocrypt.v, lines ~158 / ~176 / ~221):
+    // Lives in found_path.v rather than inline here specifically so it can be
+    // simulated without the cipher. Four bitstreams in a row shipped a bug in
+    // this logic (0x0106..0x0109) and every one of them was found on hardware
+    // rather than in simulation, because exercising it inline meant
+    // elaborating two 15.5k-line odo_encrypt pipelines. tb_found_path drives
+    // the extracted module directly and runs in under a second.
     //
-    //     always @ (posedge clk_h)
-    //         ticket2moon_i <= ticket2moon & nonce_out_go_top;
+    // SETTLE_CYCLES is 4096, unchanged in value from v1.7 but now hung off the
+    // job COMMIT instead of start_hash, because there is no longer an arm to
+    // hang it off. odo-miner-cyclonev's pipelined_miner_top.v uses the same
+    // number for the same reason: after a commit the pipeline still holds
+    // in-flight nonces hashed with the PREVIOUS header, those drain over the
+    // pipeline latency, and they can spuriously qualify against the new
+    // target. At the 205 cycles v1.6 inherited from the AtomMiner reference
+    // the window closed while they were still draining, which is what made
+    // the first find after every arm a previous-header result wearing a
+    // new-sweep nonce.
     //
-    // An earlier revision of this wrapper used the raw signal in both
-    // places while claiming in comments to mirror that file. This restores
-    // the reference's behaviour.
-    //
-    // HONESTY NOTE ON WHY: this is reference fidelity / defence in depth,
-    // NOT a demonstrated bug fix. Two failure modes were hypothesised for
-    // the raw signal -- a spurious assertion during pipeline warm-up, and
-    // a multi-cycle level breaking the CDC toggle below. **Neither
-    // reproduced in simulation.** Driving miner_top with target=all-ones
-    // (so every hash "wins") from reset, iverilog measured:
-    //
-    //     during warm-up (206 cycles): ticket2moon === 1'b0 for all of
-    //         them; 0 cycles at 1, and 0 cycles at X (so the 0 is a real
-    //         0, not an X that `if (ticket2moon)` silently read as false)
-    //     after warm-up: 48 assertions over ~200 cycles -- one per
-    //         THROUGHPUT(4)-cycle result slot -- each exactly 1 cycle
-    //         long, never 2+ consecutive
-    //
-    // i.e. in that test the raw signal already behaved as a clean, warm-up
-    // -respecting one-shot, and this gating is a measured no-op. It is
-    // kept because the reference authors put it there and this file claims
-    // to mirror them, and because it is provably unable to do harm (see
-    // the 205-vs-204 note below). Reverting it would also be defensible;
-    // what is NOT defensible is leaving the earlier commit message's
-    // claim that it "could stall the miner" standing, since the evidence
-    // does not support that.
-    //
-    // cou_deltanonce_top counts every clk_h cycle up to 8'hcd (205), which
-    // is the same warm-up interval miner.v expresses internally as 6'h33
-    // (51) counts of `advance` (51 x THROUGHPUT(4) = 204). Kept byte-for-
-    // byte identical to the reference rather than re-derived.
-    //
-    // That 205-vs-204 relationship is why this gate cannot lose a real
-    // solution: miner.v does not validly capture a nonce until its own
-    // 204-cycle qualifier is met, so a nonce suppressed by opening this
-    // gate one cycle later was never a nonce miner.v would have reported.
-    // -----------------------------------------------------------------
-    // SETTLE WINDOW -- 4096 cycles, not 205. MEASURED CONSEQUENCE, 2026-08-30.
-    //
-    // The 205 (8'hcd) that used to be here came from mirroring the AtomMiner
-    // reference byte for byte. That fidelity is what carried the wrong constant
-    // across: 205 was sized for the reference's shallower pipeline, not this
-    // one, and nothing in this file ever re-derived it.
-    //
-    // odo-miner-cyclonev, running the SAME miner.v core, uses 4096 and says why
-    // (hdl/src/pipelined/pipelined_miner_top.v):
-    //
-    //     After a commit the pipeline still holds in-flight nonces hashed with
-    //     the PREVIOUS header; those drain over the pipeline latency and can
-    //     spuriously qualify against the new target. Suppress found-reporting
-    //     for SETTLE cycles after each commit so only nonces fully processed
-    //     with the new header are reported.
-    //
-    // That is a description of what this board was doing. With 205 cycles the
-    // window closed while stale old-header results were still draining, so the
-    // first find after every arm was a result computed with the PREVIOUS
-    // header, reported wearing a nonce from the new sweep. On hardware:
-    //
-    //   odo-miner  found=35440 shares=0 stale=35440  in ~100 s
-    //   am01_smoke first find out by +16 on one run and -112 on another --
-    //              not a fixed misalignment, but however far through the stale
-    //              drain the pipeline happened to be when that find escaped
-    //
-    // The old counter was 8 bits and could not have expressed 4096 even if the
-    // right value had been known, so the width is part of the fix, not
-    // incidental to it.
-    //
-    // COST: 4096 clk_h cycles is ~30.8us at 133.33MHz, once per arm. The core
-    // halts on every find (host_break_sm), so that is once per solution --
-    // which bounds the find rate at ~32k/s, far above anything this design
-    // reaches. It buys correctness for throughput that was never available.
-    localparam [12:0] SETTLE_CYCLES = 13'd4096;
-
-    reg [12:0] cou_deltanonce_top = 13'd0;
-    reg        nonce_out_go_top   = 1'b0;
-    // ticket2moon_i is declared above, before host_break_sm consumes it.
-
-    // Saturating, not wrapping. The old counter free-ran and wrapped every 256
-    // cycles, which re-satisfied its own == comparison forever; that did no
-    // harm while the flag was sticky, but a wrapping counter next to an
-    // equality test is a trap and there is no reason to keep one.
-    always @(posedge clk_h)
-        if (~start_hash_h)                        cou_deltanonce_top <= 13'd0;
-        else if (cou_deltanonce_top != SETTLE_CYCLES)
-                                                  cou_deltanonce_top <= cou_deltanonce_top + 1'b1;
-
-    always @(posedge clk_h)
-        if (~start_hash_h)                            nonce_out_go_top <= 1'b0;
-        else if (cou_deltanonce_top == SETTLE_CYCLES) nonce_out_go_top <= 1'b1;
-
-    always @(posedge clk_h)
-        ticket2moon_i <= ticket2moon & nonce_out_go_top;
-
-    // One-shot on top of the reference's gating. This wrapper -- unlike
-    // the reference, which ships results over FX3 -- hands the nonce
-    // across a clock domain using the two-phase toggle below. If
-    // ticket2moon_i were ever high for 2+ consecutive cycles, flipping the
-    // toggle on the level would flip it once per cycle, and the bus-side
-    // 2-flop synchroniser would be sampling a signal changing faster than
-    // it can track (golden_nonce_latch_h moving while captured = a torn
-    // nonce). Measured longest run in simulation was exactly 1 cycle, so
-    // today this is equivalent to the level-triggered version -- it makes
-    // the one-shot assumption explicit and enforced rather than relying on
-    // odo_keccak's comparator continuing to behave that way.
-    reg  ticket2moon_i_d = 1'b0;
-    always @(posedge clk_h) ticket2moon_i_d <= ticket2moon_i;
-    wire ticket2moon_rise = ticket2moon_i & ~ticket2moon_i_d;
-
-    // -----------------------------------------------------------------
-    // Result latch + clk_h -> bus_clk status/nonce synchronization.
-    // Same "accepted race on a status/telemetry register" simplification
-    // as the Zynq wrapper -- see its comments for the rationale.
-    // -----------------------------------------------------------------
-    reg        nonce_toggle_h;
-    reg [31:0] golden_nonce_latch_h;
-
-    always @(posedge clk_h) begin
-        if (ticket2moon_rise) begin
-            // golden_nonce_captured_h, NOT golden_nonce_h -- see the capture
-            // register above. golden_nonce_h is only valid on the raw
-            // ticket2moon cycle, which is already one cycle in the past by
-            // the time ticket2moon_rise (gated, registered) fires here.
-            golden_nonce_latch_h <= golden_nonce_captured_h;
-            nonce_toggle_h       <= ~nonce_toggle_h;
+    // It does NOT gate the cores' nonce counters -- see found_path.v.
+    wire [32*NUM_MINERS-1:0] nonce_flat_h;
+    genvar fj;
+    generate
+        for (fj = 0; fj < NUM_MINERS; fj = fj + 1) begin : g_flat
+            assign nonce_flat_h[32*fj +: 32] = nonce_arr[fj];
         end
-    end
+    endgenerate
+
+    wire        report_ok_h;
+    wire [7:0]  lost_count_h;
+    wire [3:0]  fifo_count_h;
+    wire        nonce_toggle_h;
+    wire [31:0] golden_nonce_latch_h;
+
+    // DECLARED HERE, NOT WITH THE BUS-SIDE REGISTERS ~20 LINES BELOW that
+    // drive it. found_path's port connection reads it first, and an
+    // undeclared identifier in a port connection creates an implicit 1-bit
+    // net at the point of use; whether that net is then unified with the
+    // later `reg` is tool-dependent. If it were not, found_path would see a
+    // permanently-undriven ack, never clear its busy flag, and hand over
+    // exactly one nonce ever -- with no error anywhere. This file already
+    // carries the same note for host_break_debounced; iverilog warned about
+    // this one, which is why the declaration moved rather than the warning
+    // being filtered.
+    reg         nonce_ack_toggle_bus = 1'b0;
+
+    found_path #(
+        .NUM_MINERS   (NUM_MINERS),
+        .SETTLE_CYCLES(SETTLE_CYCLES_P),
+        .FIFO_AW      (3)
+    ) found_path_inst (
+        .clk          (clk_h),
+        .commit       (commit_pulse_h),
+        .found_in     (found_arr),
+        .nonce_in_flat(nonce_flat_h),
+        .ack_toggle   (nonce_ack_toggle_bus),
+        .nonce_toggle (nonce_toggle_h),
+        .nonce_latch  (golden_nonce_latch_h),
+        .report_ok    (report_ok_h),
+        .lost_count   (lost_count_h),
+        .fifo_count   (fifo_count_h)
+    );
 
     (* ASYNC_REG = "TRUE" *) reg nonce_sync1_bus;
     reg nonce_sync2_bus, nonce_sync3_bus;
@@ -1340,6 +1283,20 @@ module odocrypt_gpio_wrapper #(
     reg hash_active_sync2_bus;
     reg [31:0] golden_nonce_reg;
     reg        nonce_valid_reg;
+
+    // Flipped when the host reads NONCE_HI, i.e. when it has taken the nonce
+    // out of the latch. The clk_h side waits for this before handing over the
+    // next FIFO entry -- see handoff_busy_h.
+
+    // Telemetry only, and knowingly unsynchronised as a multi-bit bus: these
+    // can tear if sampled mid-update, exactly like the XADC values above, and
+    // for the same reason it is accepted here -- a torn read of a loss counter
+    // is a cosmetically wrong number in a diagnostic register, not a
+    // correctness problem. Nothing downstream makes a decision on it.
+    (* ASYNC_REG = "TRUE" *) reg [7:0] lost_sync1_bus;
+    reg [7:0] lost_sync2_bus;
+    (* ASYNC_REG = "TRUE" *) reg [3:0] fifocnt_sync1_bus;
+    reg [3:0] fifocnt_sync2_bus;
 
     wire nonce_new_pulse_bus = nonce_sync2_bus ^ nonce_sync3_bus;
 
@@ -1354,19 +1311,49 @@ module odocrypt_gpio_wrapper #(
             hash_active_sync2_bus <= 1'b0;
             nonce_valid_reg <= 1'b0;
             golden_nonce_reg <= 32'h0;
+            nonce_ack_toggle_bus <= 1'b0;
+            lost_sync1_bus <= 8'h0;
+            lost_sync2_bus <= 8'h0;
+            fifocnt_sync1_bus <= 4'h0;
+            fifocnt_sync2_bus <= 4'h0;
         end else begin
             nonce_sync1_bus <= nonce_toggle_h;
             nonce_sync2_bus <= nonce_sync1_bus;
             nonce_sync3_bus <= nonce_sync2_bus;
 
-            hash_active_sync1_bus <= start_hash_h;
+            // v2.0: "hashing" no longer means "armed" -- the cores never stop.
+            // What the host actually wants to know is whether the FPGA is
+            // working on a committed job whose settle window has closed, i.e.
+            // whether a find reported now would be trustworthy.
+            hash_active_sync1_bus <= report_ok_h;
             hash_active_sync2_bus <= hash_active_sync1_bus;
+
+            lost_sync1_bus    <= lost_count_h;
+            lost_sync2_bus    <= lost_sync1_bus;
+            fifocnt_sync1_bus <= fifo_count_h;
+            fifocnt_sync2_bus <= fifocnt_sync1_bus;
 
             if (nonce_new_pulse_bus) begin
                 golden_nonce_reg <= golden_nonce_latch_h;
                 nonce_valid_reg  <= 1'b1;
-            end else if (nonce_valid_clear_pulse) begin
+            end else if (nonce_valid_clear_pulse && nonce_valid_reg) begin
                 nonce_valid_reg  <= 1'b0;
+                // Tell clk_h the latch is free.
+                //
+                // GATED ON nonce_valid_reg, and that is load-bearing.
+                // nonce_valid_clear_pulse is NOT a one-cycle pulse despite the
+                // name: S_READ persists until the CM4 releases RD_N, and the
+                // ADDR_NONCE_HI case re-asserts it on every cycle in between --
+                // hundreds of bus_clk cycles over a bit-banged GPIO bus. It was
+                // written for an idempotent target (clearing a level), which it
+                // is; a toggle is not. Flipping once per cycle would give the
+                // clk_h side hundreds of ack edges for one host read, and it
+                // would pop and discard a FIFO entry for each.
+                //
+                // nonce_valid_reg self-clears on the first of those cycles, so
+                // this fires exactly once per nonce actually consumed. It also
+                // means a read of NONCE_HI with nothing pending cannot ack.
+                nonce_ack_toggle_bus <= ~nonce_ack_toggle_bus;
             end
         end
     end

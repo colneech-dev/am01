@@ -438,6 +438,17 @@ int main(int argc, char **argv)
      * of the raw register value. */
     const uint32_t fpga_ver = miner_io_pipe_version();
     const int warmup_broken = (fpga_ver < ((1u << 16) | 8u));
+
+    /* v2.0 (0x0200 -> major 2) replaced the halt-on-find AtomMiner core with
+     * the free-running one. Below that, the core stops dead on every find and
+     * the host must re-arm it. At or above it, re-dispatching would re-commit
+     * the job and reopen the settle window instead -- see the RE-ARM comment
+     * in the drain loop. */
+    const int rearm_on_find = ((fpga_ver >> 16) < 2u);
+    fprintf(stderr, "[pipe] FPGA v%u.%u: %s\n",
+            fpga_ver >> 16, fpga_ver & 0xFFFFu,
+            rearm_on_find ? "halt-on-find core, re-arming after each find"
+                          : "free-running core, no re-arm");
     if (warmup_broken)
         fprintf(stderr, "[pipe] FPGA v%u.%u predates the nonce_out fix; "
                         "discarding the first find of each job\n",
@@ -569,11 +580,22 @@ int main(int argc, char **argv)
                         stale++;
                     }
 
-                    /* RE-ARM after every find, solution or not. The core halted
-                     * when it raised ticket2moon; without this it idles until
-                     * the next job arrives, which is why the measured find rate
-                     * was ~1 per job rather than a continuous stream. */
-                    miner_io_pipe_dispatch(disp.header, disp.share_target);
+                    /* RE-ARM after every find, solution or not. The AtomMiner
+                     * core halted when it raised ticket2moon; without this it
+                     * idles until the next job arrives, which is why the
+                     * measured find rate was ~1 per job rather than a
+                     * continuous stream.
+                     *
+                     * MUST NOT be done on v2.0+. There the core free-runs and
+                     * never halts, so there is nothing to re-arm -- and a
+                     * dispatch is no longer an arm, it is a COMMIT that
+                     * restarts the 4096-cycle settle window. Re-committing
+                     * after every find would hold that window open essentially
+                     * all the time and suppress nearly every find, which would
+                     * present exactly like the found>0/shares=0 symptom this
+                     * whole line of work started from. */
+                    if (rearm_on_find)
+                        miner_io_pipe_dispatch(disp.header, disp.share_target);
                 }
             }
 

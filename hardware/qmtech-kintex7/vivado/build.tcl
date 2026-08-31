@@ -43,8 +43,10 @@ add_files -norecurse [list \
     [file join $odocrypt_hdl encrypt.v] \
     [file join $odocrypt_hdl keccak800.v] \
     [file join $odocrypt_hdl miner.v] \
+    [file join $odocrypt_hdl miner_pipelined.v] \
     [file join $odocrypt_hdl atomminer_misc.v] \
     [file join $this_hdl clk_gen_hash.v] \
+    [file join $this_hdl found_path.v] \
     [file join $this_hdl odocrypt_gpio_wrapper.v] \
     [file join $this_hdl am01_qmtech_top.v] \
 ]

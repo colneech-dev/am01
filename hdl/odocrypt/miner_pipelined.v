@@ -34,6 +34,16 @@
 //   - comments above are new; everything else is unchanged from
 //     odo-miner-cyclonev's odo_miner_core.v `miner` module
 
+// miner.v defines THROUGHPUT too, and both must agree -- they wrap the same
+// odo_keccak. Guarded rather than assumed, because `define propagation across
+// files is compile-ORDER dependent (Vivado adds files to a fileset, iverilog
+// takes them in argv order), and a file that silently picks up a stale value
+// for its pipeline depth would be a very quiet way to get a wrong hash.
+// If miner.v's value ever changes, change it here too.
+`ifndef THROUGHPUT
+`define THROUGHPUT 4
+`endif
+
 module miner_pipelined(clk, header, target, nonce, found);
     parameter INONCE = 0; // NONCE_BASE for this instance, same convention as
                            // miner.v's NONCE_BASE
