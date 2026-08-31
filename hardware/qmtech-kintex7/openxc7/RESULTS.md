@@ -195,7 +195,7 @@ does not converge:
 | seed | iter=1 overuse | outcome |
 |---|---|---|
 | 1 | 307999 | ground down to 3034 by iter=31 (~15h), then **hard router failure**: `ERROR: Failed to route arc 174 of net odocrypt_gpio_wrapper_inst.g_miner[1]...midread, from SITEWIRE/SLICE_X88Y222/DQ to SITEWIRE/SLICE_X89Y220/C3` |
-| 3 | 320092 | tracking seed 1's trajectory closely at every matched iteration; still running |
+| 3 | 320092 | tracked seed 1's trajectory closely at every matched iteration (e.g. iter=11: 5608 vs seed 1's 5330); killed intentionally at iter=16 (overuse=3878, no error yet) to free RAM for the congestion-aware experiment below, which had become the higher-value run |
 
 Seed 1's failure is not a slow-convergence timeout -- router2 exhausted its
 search budget on one specific arc near the miner-1 boundary and aborted the
@@ -211,11 +211,58 @@ redistributes the unconstrained LUT/FF logic around the BEL-pinned BRAMs; at
 94% occupancy there's no free area for that redistribution to drain
 congestion into).
 
-**Working conclusion:** 94% BRAM occupancy does not route to completion in
-this flow (yosys/nextpnr-xilinx/prjxray) on this device within a practical
-time budget, even with a floorplan tuned specifically for it. This is
-consistent with the placer/router having no congestion-aware placement step
-(see `am01-general-floorplanner-idea` memory) -- Vivado handles the same BRAM
-density because it spreads logic away from saturated columns *during*
-placement rather than discovering the jam during routing and fighting it with
-rip-up/reroute after the fact.
+**Working conclusion (superseded below):** 94% BRAM occupancy does not route
+to completion in this flow (yosys/nextpnr-xilinx/prjxray) on this device
+within a practical time budget, with a plain floorplan and no congestion
+awareness in placement. This was consistent with the placer/router having no
+congestion-aware placement step (see `am01-general-floorplanner-idea`
+memory) -- Vivado handles the same BRAM density because it spreads logic away
+from saturated columns *during* placement rather than discovering the jam
+during routing and fighting it with rip-up/reroute after the fact.
+
+## Congestion-aware placement: ~30x lower residual overuse, still does not fully route -- 2026-08-31
+
+`nextpnr-xilinx-heatmap` commit `42cecc26` (2026-08-23) already implements
+the missing congestion-aware placement step, gated behind env vars, unused
+and "unmeasured on any real design" until now:
+
+* `NEXTPNR_TILE_NETS=<w>` -- during strict legalisation, charges a cell for
+  each of its input nets that is not already entering the destination tile
+  (shared-driver cells are free; a genuinely new source costs `w`). Targets
+  the verified geometric-median hotspot mechanism directly (see
+  `am01-placement-hotspot-findings` memory).
+* `NEXTPNR_WIRE_DEMAND=<cap>` -- a RUDY estimate (each net spreads its
+  half-perimeter uniformly across its bounding box) feeding HeAP's spreader,
+  which is otherwise blind to routing demand on a design this lightly
+  occupied in LUTs/FFs.
+
+Tested together (`TILE_NETS=8 WIRE_DEMAND=5.0`) on the same balanced
+2-miner floorplan, seed 5:
+
+| iter | plain floorplan (seed 1/3) | congestion-aware |
+|---|---|---|
+| 1 | 307999 / 320092 | 301961 |
+| 2 | 45858 / 49770 | 39540 |
+| 11 | 5330 / 5608 | 687 |
+| 29 | (seed1 hadn't reached this low) | 262 |
+
+At matched iterations the congestion-aware run ran at roughly **8x lower
+overuse than the plain floorplan by iter=11**, and kept dropping to a floor
+around **96-140** by iter~76-108 -- a **~30x lower residual** than seed 1's
+terminal 3034. It did not reach overuse=0: after iter=76 (best=96) it
+plateaued/oscillated without a new best for 30+ iterations, so it appears to
+have found a real floor rather than converging. Full outcome (plateau
+persisting, eventual stall-out, or a late break to 0) still being observed --
+check the live log / a later RESULTS.md update for the final iteration count
+and whether a post-route Max frequency was reached.
+
+**Revised conclusion:** placement-time congestion awareness is a real,
+large lever on this design -- not a marginal tweak. `TILE_NETS` and
+`WIRE_DEMAND` should be considered required, not optional, for any further
+94%-occupancy attempt. If this configuration's residual floor turns out to
+be non-zero, the two-pass `NEXTPNR_CONGESTION_MAP` feedback loop (dump real
+router overuse from a `NEXTPNR_SKIP_FAILED_ARCS=1 NEXTPNR_DUMP_CONGESTION=`
+run, feed it into a fresh placement via `NEXTPNR_CONGESTION_MAP=`) is the
+next thing to try, since it uses ground-truth router overuse rather than a
+placement-time proxy. Worth tuning `TILE_NETS`/`WIRE_DEMAND` magnitudes too --
+8 and 5.0 were first-guess starting values, not tuned.
