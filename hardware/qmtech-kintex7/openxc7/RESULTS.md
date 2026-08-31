@@ -172,3 +172,50 @@ Note the two runs were initially recorded under one tag, producing a
 meaningless n=10 median belonging to neither baseline. `run_e2nb_fixed.sh` now
 tags by `RTL_PINNED_COMMIT` so datasets from different sources cannot merge
 silently.
+
+## Two miners: balanced-partition floorplan reaches 3034 residual overuse, then hard-fails -- 2026-08-31
+
+Motivation: hashrate scales as `NUM_MINERS x Fmax`, so two miners beats one
+even at a clock that fails the 133.33 MHz target (2 miners @ 100 MHz = 1.28x
+one miner @ 155.79). `am01_qmtech_top_nm2.v` is `nm1` with `NUM_MINERS(2)` and
+nothing else, so the comparison attributes cleanly to miner count.
+
+Two miners need 840/890 BRAM sites (94% occupancy), so the y-base-40 floorplan
+trick that was worth +29 MHz for one miner is unavailable -- there is no free
+half of the device left. `floorplan_brams.py --mode compact` partitions sites
+BY BUDGET rather than by whole column, giving each miner ~445 sites (6% slack)
+with column 3 shared at a row boundary, replacing an earlier whole-column
+split that gave miner 0 zero slack and miner 1 the short column (col 6 ends at
+Y59) -- that version stalled at overuse 56617 (iter 1-4: 332512 -> 110321 ->
+70128 -> 56617, reduction ratio collapsing 3.01x -> 1.57x -> 1.24x).
+
+The balanced partition is a large, real improvement over that -- but still
+does not converge:
+
+| seed | iter=1 overuse | outcome |
+|---|---|---|
+| 1 | 307999 | ground down to 3034 by iter=31 (~15h), then **hard router failure**: `ERROR: Failed to route arc 174 of net odocrypt_gpio_wrapper_inst.g_miner[1]...midread, from SITEWIRE/SLICE_X88Y222/DQ to SITEWIRE/SLICE_X89Y220/C3` |
+| 3 | 320092 | tracking seed 1's trajectory closely at every matched iteration; still running |
+
+Seed 1's failure is not a slow-convergence timeout -- router2 exhausted its
+search budget on one specific arc near the miner-1 boundary and aborted the
+whole run. After 31 iterations of steady (if noisy and decelerating)
+improvement, the last handful of contested arcs proved genuinely unroutable
+within budget, not merely slow to resolve.
+
+`--placer-heap-beta` was tested both directions (0.5, 1.4) against default
+(0.9), compared at iter=1: 373111 and 439092 respectively, both worse than
+default's 307999. Beta is not a lever here -- see
+`am01-placement-hotspot-findings` memory for the mechanism (it only
+redistributes the unconstrained LUT/FF logic around the BEL-pinned BRAMs; at
+94% occupancy there's no free area for that redistribution to drain
+congestion into).
+
+**Working conclusion:** 94% BRAM occupancy does not route to completion in
+this flow (yosys/nextpnr-xilinx/prjxray) on this device within a practical
+time budget, even with a floorplan tuned specifically for it. This is
+consistent with the placer/router having no congestion-aware placement step
+(see `am01-general-floorplanner-idea` memory) -- Vivado handles the same BRAM
+density because it spreads logic away from saturated columns *during*
+placement rather than discovering the jam during routing and fighting it with
+rip-up/reroute after the fact.
