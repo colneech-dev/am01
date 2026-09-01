@@ -70,10 +70,12 @@ void cyd_fmt_hashrate(double h_per_s, char *out, int n)
 /*
  * Temperature. "62 C", or "--" when unknown.
  *
- * THE -1 CASE IS LIVE RIGHT NOW, not hypothetical: the miner runs as user
- * 'miner', its thermal init fails on /dev/mem, and it publishes temp_c = -1.
- * The web dashboard currently shows that as "-1", which reads as a fault.
- * This panel will not repeat it.
+ * THE -1 CASE IS NOT HYPOTHETICAL. The miner published temp_c = -1
+ * permanently until 2026-09-01, and the web dashboard rendered it literally
+ * as "-1", which reads as a board fault. sw/thermal_am01.c fixed the source
+ * of it -- the daemon had been built against the Cyclone V's thermal.c, which
+ * drives hardware this board does not have -- but a bus read can still fail,
+ * so the sentinel is still reachable and this panel still must not print it.
  *
  * ANY NEGATIVE VALUE is unknown, not just -1. This started as a "<= -50"
  * guard on the reasoning that -1 was the sentinel and other negatives might
@@ -103,8 +105,13 @@ void cyd_fmt_temp(int temp_c, char *out, int n)
  * is one function rather than two. The tach needs an external 10k pull-up to
  * 3.3V that a given build may not have fitted (it was missing on this board
  * until 2026-08-30), while the duty cycle is always known because the FPGA
- * sets it. Showing "-- rpm" while hiding a known 55% duty would misreport a
- * working fan as an unknown one.
+ * sets it and reports it back. Showing "-- rpm" while hiding a known 55% duty
+ * would misreport a working fan as an unknown one.
+ *
+ * Both come from ADDR_FAN: [7:0] duty, [15:8] tach pulses/sec. Measured live
+ * on 2026-09-01 as 55% / 3000 rpm at 57 C -- and 55% is exactly what the
+ * fabric curve prescribes in the 55-70 C band, which is a useful thing to
+ * know when deciding whether a reading is real.
  */
 void cyd_fmt_fan(int rpm, int duty_pct, char *out, int n)
 {

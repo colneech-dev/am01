@@ -109,6 +109,11 @@ uint32_t miner_io_pipe_version(void)
     return g_version;
 }
 
+am01_bus_t *miner_io_gpio_bus(void)
+{
+    return g_bus;
+}
+
 uint32_t miner_io_pipe_seed(void)
 {
     return g_seed;

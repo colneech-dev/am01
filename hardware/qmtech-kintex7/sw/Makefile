@@ -94,7 +94,7 @@ SOURCES_STRATUM := \
 # automatically right there. The divergence list is in the file banner.
 SOURCES_DAEMON := \
 	miner_pipe_am01.c \
-	$(ODO_HPS)/thermal.c \
+	thermal_am01.c \
 	miner_io_gpio.c \
 	$(GPIO_BUS)/am01_gpio_bus.c \
 	$(GPIO_BUS)/am01_panel.c

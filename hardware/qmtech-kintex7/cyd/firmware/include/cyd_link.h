@@ -38,10 +38,16 @@
  * JSON through verbatim, so adding a field to the miner needs no protocol
  * change and no change here until something wants to display it.
  *
- * Sentinels matter: temp_c and fan_rpm come through as -1 when the miner
- * cannot read them (it runs as user 'miner' and its thermal init fails on
- * /dev/mem). The panel must show those as unknown rather than as "-1 C",
- * which would look like a fault in the board rather than in the reporting.
+ * Sentinels matter: temp_c and fan_rpm are -1 when the miner cannot read
+ * them, and the panel must show that as unknown rather than as "-1 C", which
+ * would look like a fault in the board rather than a gap in the reporting.
+ *
+ * They WERE -1 permanently until 2026-09-01, because the daemon was built
+ * against the Cyclone V's thermal.c -- a DS18B20 on an Avalon-MM PIO reached
+ * through /dev/mem, none of which exists on this board. sw/thermal_am01.c now
+ * reads the FPGA's XADC and tach registers instead and the fields are live.
+ * The sentinel handling stays: it is still the right behaviour for a bus read
+ * that fails, it just is not the permanent state any more.
  */
 typedef struct {
     bool     valid;             /* false until a STATUS has ever arrived   */

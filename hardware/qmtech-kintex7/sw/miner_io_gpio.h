@@ -57,4 +57,16 @@ int miner_io_pipe_wait(int timeout_ms);
 /* Return the backend name (for logging/status). */
 const char *miner_io_pipe_backend(void);
 
+/* The open bus handle, or NULL before miner_io_pipe_init().
+ *
+ * Exposed for thermal_am01.c, which reads the FPGA's XADC temperature and
+ * fan registers over this same bus. The alternative -- a second
+ * am01_bus_open() on the same gpiochip -- would mean two owners of one set
+ * of GPIO lines, and the kernel would refuse the second request-lines call.
+ *
+ * Callers should go through the am01_bus_* accessors rather than reaching
+ * past them. */
+struct am01_bus;
+struct am01_bus *miner_io_gpio_bus(void);
+
 #endif /* MINER_IO_PIPE_H */

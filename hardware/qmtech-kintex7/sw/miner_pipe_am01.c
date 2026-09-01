@@ -26,7 +26,12 @@
 #include "odocrypt_state.h"
 #include "KeccakP-800-SnP.h"
 #include "miner_io_pipe.h"
-#include "thermal.h"
+/* thermal_am01.h, NOT the sibling repo's thermal.h. That one drives a
+ * DS18B20 over a bit-banged one-wire bus on a Cyclone V Avalon-MM PIO via
+ * /dev/mem; none of those three things exist on this board, so
+ * thermal_init() failed here and temp_c/fan_rpm stayed at -1 on the
+ * dashboard. Same API, FPGA registers underneath. */
+#include "thermal_am01.h"
 
 #include <stdio.h>
 #include <stdlib.h>

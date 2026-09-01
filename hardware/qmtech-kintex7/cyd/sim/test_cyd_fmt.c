@@ -85,9 +85,10 @@ int main(void)
     expect(b, "62 C", "a normal die temperature");
 
     cyd_fmt_temp(-1, b, sizeof b);
-    /* THE LIVE CASE. The miner runs as user 'miner', its thermal init fails on
-     * /dev/mem, and it publishes -1. The web dashboard renders that as "-1"
-     * today, which reads as a board fault rather than a reporting gap. */
+    /* NOT HYPOTHETICAL. The miner published -1 here permanently until
+     * 2026-09-01 and the dashboard rendered it as "-1", which reads as a board
+     * fault. Fixed at the source in sw/thermal_am01.c, but a bus read can
+     * still fail, so the sentinel remains reachable. */
     expect(b, "--", "-1 is the miner's \"could not read\" sentinel");
 
     cyd_fmt_temp(0, b, sizeof b);
