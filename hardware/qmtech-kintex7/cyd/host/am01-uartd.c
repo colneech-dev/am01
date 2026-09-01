@@ -1,10 +1,34 @@
 /*
  * am01-uartd -- bridge the FPGA-hosted UART to a PTY, and to the CYD panel.
  *
- * SCAFFOLDING. This does not build yet: hdl/uart_bridge.v does not exist, so
- * the register accessors below are stubs. It is committed as a skeleton so the
- * host and RTL halves are designed against one protocol definition rather than
- * two that drift. Nothing here touches the existing ILI9341 path.
+ * The register accessors are REAL as of 2026-09-01 -- hdl/uart_bridge.v is
+ * instantiated on JP5 15-18 and a bitstream reporting VERSION >= 0x0202 has
+ * it. The protocol/PTY layers above them are still scaffolding. Nothing here
+ * touches the existing ILI9341 path.
+ *
+ * TWO CONSTRAINTS FOUND WHILE WIRING THE ACCESSORS UP, both worth knowing
+ * before trusting this:
+ *
+ * 1. THE BUS CANNOT BE SHARED BETWEEN PROCESSES. libgpiod line requests are
+ *    exclusive, and odo-miner holds all 25 lines while it runs. So this
+ *    daemon cannot open the bus alongside the miner -- it must be run with
+ *    the miner STOPPED, which is fine for flashing (you are updating the
+ *    panel) but is not a design for the normal once-a-second status push.
+ *    That wants folding into odo-miner as a thread instead; the bus mutex
+ *    added in 5413a04 is what makes that safe.
+ *
+ * 2. UART_STAT CANNOT REPORT A FULL TX FIFO. Its layout is
+ *    {rx_err[7:0], rx_cnt[3:0], tx_cnt[2:0], rx_empty} -- and the TX FIFO is
+ *    16 deep, so a 5-bit count is truncated to 3 bits and depths 0, 8 and 16
+ *    are indistinguishable. There is no tx_full bit. The RTL drops a write
+ *    into a full FIFO silently and its own comment says "the host can read
+ *    UART_STAT first", which UART_STAT cannot actually answer.
+ *
+ *    uart_tx() works around it exactly rather than approximately: never let
+ *    more than 7 bytes be outstanding, so tx_cnt[2:0] == 0 is unambiguous.
+ *    That costs nothing -- 7 bytes at 115200 baud is 608us, which is line
+ *    rate -- so the workaround is not even slow. Worth fixing in RTL anyway,
+ *    next time the register map is touched.
  *
  * TWO JOBS, one link:
  *
@@ -30,8 +54,13 @@
  */
 
 #define _POSIX_C_SOURCE 200809L
+/* usleep() is obsolescent and _POSIX_C_SOURCE alone hides it. The rest of
+ * this tree compiles with both (see sw/Makefile), so match that rather
+ * than open-coding nanosleep here. */
+#define _DEFAULT_SOURCE
 
 #include "cyd_proto.h"
+#include "am01_gpio_bus.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,30 +71,112 @@
 #include <time.h>
 
 /* ------------------------------------------------------------------ */
-/* FPGA UART access -- STUBS until hdl/uart_bridge.v exists.           */
-/*                                                                     */
-/* These will wrap am01_bus_read_reg/am01_bus_write_reg from            */
-/* cm4-firmware/am01_gpio_bus.h, which already exist and are already    */
-/* used by am01_reg. Deliberately NOT wired up yet: a stub that returns */
-/* "no data" is honest, whereas one that pretended to work would make   */
-/* the first real bring-up debug two unknowns at once.                  */
+/* FPGA UART access, over the same register bus the miner uses.         */
 /* ------------------------------------------------------------------ */
+
+static am01_bus_t *g_bus;
+
+/* UART_STAT field layout, from odocrypt_gpio_wrapper.v:
+ *   {uart_rx_err[7:0], uart_rx_cnt[3:0], uart_tx_cnt[2:0], uart_rx_empty} */
+#define ST_RX_EMPTY(v)  ((v) & 0x1u)
+#define ST_TX_CNT(v)    (((v) >> 1) & 0x7u)
+#define ST_RX_CNT(v)    (((v) >> 4) & 0xFu)
+#define ST_RX_ERR(v)    (((v) >> 8) & 0xFFu)
+
+/* Keep TX in flight below 8 so ST_TX_CNT()==0 means EMPTY and not
+ * "8 or 16, indistinguishable". See the note in the banner. */
+#define TX_BURST 7
+
+int uart_open_bus(void)
+{
+    g_bus = am01_bus_open(NULL);
+    if (!g_bus) {
+        fprintf(stderr, "am01-uartd: cannot open the GPIO bus: %s\n",
+                strerror(errno));
+        fprintf(stderr, "            odo-miner holds these lines while it runs;"
+                        " stop it first.\n");
+        return -1;
+    }
+
+    uint16_t ver = 0;
+    if (am01_bus_read_version(g_bus, &ver) < 0) {
+        fprintf(stderr, "am01-uartd: cannot read VERSION: %s\n", strerror(errno));
+        am01_bus_close(g_bus); g_bus = NULL;
+        return -1;
+    }
+    /* REFUSE rather than read zeros back from unmapped addresses and report a
+     * dead panel. That distinction is the whole reason 0x0202 exists. */
+    if (ver < 0x0202) {
+        fprintf(stderr, "am01-uartd: bitstream is v%u.%u -- it has no UART. "
+                        "Needs >= v2.2.\n", ver >> 8, ver & 0xFF);
+        am01_bus_close(g_bus); g_bus = NULL;
+        return -1;
+    }
+    return 0;
+}
+
+void uart_close_bus(void)
+{
+    if (g_bus) { am01_bus_close(g_bus); g_bus = NULL; }
+}
 
 /* Returns bytes read, 0 if none pending, -1 on error. */
 static int uart_rx(uint8_t *buf, size_t max)
 {
-    (void)buf; (void)max;
-    errno = ENOSYS;
-    return -1;
+    if (!g_bus) { errno = ENOTCONN; return -1; }
+
+    size_t n = 0;
+    while (n < max) {
+        uint16_t st;
+        if (am01_bus_read_reg(g_bus, CYD_REG_UART_STAT, &st) < 0)
+            return n ? (int)n : -1;
+        if (ST_RX_EMPTY(st))
+            break;
+
+        uint16_t d;
+        if (am01_bus_read_reg(g_bus, CYD_REG_UART_DATA, &d) < 0)
+            return n ? (int)n : -1;
+        buf[n++] = (uint8_t)(d & 0xFF);
+    }
+    return (int)n;
 }
 
-/* Returns bytes written, -1 on error. Short writes are expected and normal:
- * the FPGA TX FIFO is finite and the caller must be prepared to resume. */
+/* Returns bytes written, -1 on error. A SHORT WRITE IS NORMAL -- the caller
+ * must resume from where this stopped. */
 static int uart_tx(const uint8_t *buf, size_t len)
 {
-    (void)buf; (void)len;
-    errno = ENOSYS;
-    return -1;
+    if (!g_bus) { errno = ENOTCONN; return -1; }
+
+    size_t n = 0;
+    while (n < len) {
+        /* Wait for the TX FIFO to drain fully before queueing the next burst.
+         * Bounded so a dead link cannot wedge the daemon: at 115200 a 7-byte
+         * burst is 608us, so 200 polls is orders of magnitude of headroom. */
+        int spins = 0;
+        for (;;) {
+            uint16_t st;
+            if (am01_bus_read_reg(g_bus, CYD_REG_UART_STAT, &st) < 0)
+                return n ? (int)n : -1;
+            if (ST_TX_CNT(st) == 0)
+                break;
+            if (++spins > 200) {
+                errno = ETIMEDOUT;
+                return n ? (int)n : -1;
+            }
+            usleep(100);
+        }
+
+        size_t burst = len - n;
+        if (burst > TX_BURST)
+            burst = TX_BURST;
+
+        for (size_t i = 0; i < burst; i++) {
+            if (am01_bus_write_reg(g_bus, CYD_REG_UART_DATA, buf[n]) < 0)
+                return n ? (int)n : -1;
+            n++;
+        }
+    }
+    return (int)n;
 }
 
 /* Drive the ESP32's EN/IO0. The reset-into-bootloader sequence lives HERE, in
@@ -74,9 +185,32 @@ static int uart_tx(const uint8_t *buf, size_t len)
  * chase one would be absurd. */
 static int esp_ctrl(int en, int io0)
 {
-    (void)en; (void)io0;
-    errno = ENOSYS;
-    return -1;
+    if (!g_bus) { errno = ENOTCONN; return -1; }
+
+    uint16_t v = (uint16_t)((en ? CYD_ESP_CTRL_EN : 0) |
+                            (io0 ? CYD_ESP_CTRL_IO0 : 0));
+    return am01_bus_write_reg(g_bus, CYD_REG_ESP_CTRL, v);
+}
+
+/* Hold IO0 low across a reset, which is how the ESP32 ROM enters its serial
+ * bootloader. Timings are the conventional esptool ones and are here, in
+ * software, for exactly the reason above.
+ *
+ * EN is active LOW: pulling it low resets the chip. */
+int esp_enter_bootloader(void)
+{
+    if (esp_ctrl(0, 1) < 0) return -1;   /* EN low (reset), IO0 low */
+    usleep(100000);
+    if (esp_ctrl(1, 1) < 0) return -1;   /* release EN, IO0 still low */
+    usleep(50000);
+    return esp_ctrl(1, 0);               /* release IO0 -- now in the ROM */
+}
+
+int esp_reset_run(void)
+{
+    if (esp_ctrl(0, 0) < 0) return -1;
+    usleep(100000);
+    return esp_ctrl(1, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -167,15 +301,49 @@ static int handle_cmd(const char *line)
 
 int main(int argc, char **argv)
 {
-    (void)argc; (void)argv;
+
+    /* `selftest` is all that is wired up so far, and it is deliberately the
+     * first thing built: it answers "is there a UART in this bitstream and
+     * does a byte come back" without a CYD attached at all, by looping TX to
+     * RX. Wire JP5 15 to JP5 16 and run it. Everything above this -- the PTY,
+     * the status push -- is worth nothing until that passes. */
+    if (argc > 1 && strcmp(argv[1], "selftest") == 0) {
+        if (uart_open_bus() < 0)
+            return 1;
+
+        static const uint8_t pat[] = "AM01-CYD-LOOPBACK-0123456789";
+        const size_t n = sizeof(pat) - 1;
+
+        int w = uart_tx(pat, n);
+        printf("tx: %d of %zu bytes\n", w, n);
+
+        /* One byte at 115200 is 87us; allow generously for the whole burst. */
+        usleep(20000 + n * 200);
+
+        uint8_t got[64] = {0};
+        int r = uart_rx(got, sizeof(got) - 1);
+        printf("rx: %d bytes: \"%s\"\n", r, got);
+
+        uint16_t st = 0;
+        am01_bus_read_reg(g_bus, CYD_REG_UART_STAT, &st);
+        printf("UART_STAT 0x%04x  rx_err=%u rx_cnt=%u tx_cnt=%u rx_empty=%u\n",
+               st, ST_RX_ERR(st), ST_RX_CNT(st), ST_TX_CNT(st), ST_RX_EMPTY(st));
+
+        int ok = (w == (int)n) && (r == (int)n) && memcmp(pat, got, n) == 0;
+        printf("%s\n", ok ? "LOOPBACK OK" : "LOOPBACK FAILED "
+               "(is JP5 15 wired to JP5 16?)");
+        uart_close_bus();
+        return ok ? 0 : 1;
+    }
 
     fprintf(stderr,
-        "am01-uartd: SCAFFOLDING ONLY -- hdl/uart_bridge.v does not exist yet,\n"
-        "            so the UART accessors are stubs and this does nothing.\n"
-        "            See docs/PLAN-cyd-display.md and cyd/README.md.\n");
+        "am01-uartd: the register accessors are implemented; the PTY and\n"
+        "            status-push layers are not. Usable command:\n"
+        "              am01-uartd selftest   (loop JP5 15 -> 16 first)\n"
+        "            Requires a v2.2+ bitstream and odo-miner STOPPED --\n"
+        "            libgpiod line requests are exclusive.\n");
 
-    /* Silence unused-function warnings while the stubs are stubs, without
-     * deleting the call sites that document the intended shape. */
-    (void)uart_rx; (void)esp_ctrl; (void)push_status; (void)handle_cmd;
+    (void)push_status; (void)handle_cmd;
+    (void)esp_enter_bootloader; (void)esp_reset_run;
     return 1;
 }
