@@ -837,10 +837,16 @@ cyd_center_mm     = [30, 45];
 //
 // cyd_ldr_far_end picks WHICH of the two. The band is measured 8-14mm from a
 // short edge, so there are two candidate positions on the 50mm axis and they
-// are mirror images. `true` keeps the one FURTHER from the high-X edge, i.e.
-// 8-14mm from the low-X edge. The render echoes the resulting position in mm
-// from both edges -- check that against the board rather than against this
-// comment.
+// are mirror images.
+//
+// LOW-X IS THE TOP in the as-built orientation. Established by printing it
+// the other way round first: `true` put the aperture at the top, which is the
+// wrong end. So `false` is correct here -- it keeps the LOWER position,
+// 7-15mm from the high-X edge.
+//
+// Recording which way round this is matters more than it looks. The two
+// positions are mirror images 8mm wide on a 50mm axis, so the wrong one is
+// not obviously wrong in a render -- it is only obvious against the board.
 //
 // WHICH END ALONG Y is NOT a setting -- it is derived from the margins above,
 // because the sensor lives on the 9mm side by construction. Swap the margins
@@ -849,7 +855,7 @@ cyd_ldr_from_glass_mm = 4;
 cyd_ldr_band_mm       = [8, 14];   // measured, from the short edge
 cyd_ldr_clear_mm      = 1;         // each side, for print tolerance
 cyd_ldr_both_ends     = false;     // one hole only
-cyd_ldr_far_end       = true;      // keep the one further from the high-X edge
+cyd_ldr_far_end       = false;     // LOWER position: 7-15mm from the high-X edge
 cyd_ldr_slot_mm       = [cyd_ldr_band_mm[1] - cyd_ldr_band_mm[0]
                          + 2*cyd_ldr_clear_mm, 5];   // X extent, Y extent
 
@@ -860,6 +866,31 @@ screen_window_mm  = is_cyd ? cyd_window_mm     : ili_window_mm;
 screen_window_off_mm = is_cyd ? cyd_window_off_mm : ili_window_off_mm;
 screen_ldr_slot_mm   = is_cyd ? cyd_ldr_slot_mm  : [0, 0];
 screen_ldr_from_glass_mm = is_cyd ? cyd_ldr_from_glass_mm : 0;
+
+// WHERE THE LIGHT-SENSOR APERTURE ACTUALLY ENDS UP, in mm from each short
+// edge, so a print can be checked against the board instead of against a
+// comment. Reports the position that is RETAINED, following cyd_ldr_far_end.
+//
+// At file scope deliberately. This lived inside the lid module first, as a
+// child of the difference() that cuts the slot, and never printed -- so the
+// one check that would have caught the aperture being on the wrong side was
+// silently doing nothing, and the error was found on the part instead. An
+// unreliable verification step is worse than none, because it is trusted.
+cyd_ldr_lo_edge_mm = cyd_ldr_far_end
+    ? [cyd_ldr_band_mm[0] - cyd_ldr_clear_mm,
+       cyd_ldr_band_mm[1] + cyd_ldr_clear_mm]
+    : [cyd_module_mm[0] - cyd_ldr_band_mm[1] - cyd_ldr_clear_mm,
+       cyd_module_mm[0] - cyd_ldr_band_mm[0] + cyd_ldr_clear_mm];
+
+if (is_cyd)
+    echo(str("CYD light-sensor aperture: ",
+             cyd_ldr_lo_edge_mm[0], "-", cyd_ldr_lo_edge_mm[1],
+             "mm from the low-X edge (the TOP), ",
+             cyd_module_mm[0] - cyd_ldr_lo_edge_mm[1], "-",
+             cyd_module_mm[0] - cyd_ldr_lo_edge_mm[0],
+             "mm from the high-X edge (the LOWER). Sensor band is ",
+             cyd_ldr_band_mm[0], "-", cyd_ldr_band_mm[1],
+             "mm from ITS edge -- these must agree."));
 screen_body_mm    = 6;          // deepest point, protrudes into the case
 screen_flange_mm  = 2;          // flange thickness
 
@@ -1362,16 +1393,6 @@ module lid_screen_cutout() {
                  - (cyd_ldr_band_mm[0] + cyd_ldr_band_mm[1])/2;
         // -1 puts it at band[] from the LOW-X edge; +1 mirrors it.
         ldr_sx = cyd_ldr_far_end ? -1 : 1;
-        // Stated in millimetres from BOTH edges, so the print can be checked
-        // against the board instead of against a comment.
-        echo(str("   CYD light-sensor aperture: ",
-                 cyd_ldr_band_mm[0] - cyd_ldr_clear_mm, "-",
-                 cyd_ldr_band_mm[1] + cyd_ldr_clear_mm,
-                 "mm from the low-X edge, ",
-                 screen_module_mm[0] - cyd_ldr_band_mm[1] - cyd_ldr_clear_mm,
-                 "-",
-                 screen_module_mm[0] - cyd_ldr_band_mm[0] + cyd_ldr_clear_mm,
-                 "mm from the high-X edge"));
         for (sx = cyd_ldr_both_ends ? [-1, 1] : [ldr_sx])
             translate([wx + sx*ldr_dx - screen_ldr_slot_mm[0]/2,
                        ldr_cy - screen_ldr_slot_mm[1]/2, -1])
