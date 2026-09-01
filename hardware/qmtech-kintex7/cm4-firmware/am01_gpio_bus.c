@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <pthread.h>
 #include <time.h>
 
 #define CONSUMER "am01-gpio-bus"
@@ -116,6 +117,28 @@ struct am01_bus {
     struct gpiod_line *ready;
     struct gpiod_line *irq;
     int data_is_output; /* -1 = unknown/unrequested, 0 = input, 1 = output */
+
+    /* SERIALISES EVERY REGISTER TRANSACTION.
+     *
+     * A transaction is not one syscall: a write drives ADDR and DATA, pulses
+     * WR_N, and waits on READY twice; a read flips the data lines to inputs
+     * first. Two threads interleaving those corrupt each other's bus cycle
+     * outright -- and `data_is_output` above is shared mutable state, so one
+     * thread can flip the lines to inputs midway through another's write and
+     * short both ends of the bus against each other.
+     *
+     * This was latent until 2026-09-01. There had only ever been one bus
+     * user, the mining loop; the thermal thread reached for /dev/mem and
+     * failed at init, so it never got here. Pointing it at these registers
+     * instead (thermal_am01.c) made it a second caller in a second thread,
+     * and the first symptom was fan_duty_pct intermittently reading -1 while
+     * temperature and tach beside it read fine.
+     *
+     * Held across the WHOLE transaction, not per syscall -- a half-serialised
+     * bus cycle is no better than an unserialised one. Uncontended that is
+     * tens of nanoseconds against a transaction measured in tens of
+     * microseconds, so the mining path does not notice. */
+    pthread_mutex_t lock;
 };
 
 static long elapsed_us(const struct timespec *start, const struct timespec *now)
@@ -203,7 +226,7 @@ static int sample_data(am01_bus_t *bus, uint16_t *data_out)
 /* 4-phase interlocked write -- mirrors odocrypt_gpio_wrapper.v's
  * S_WRITE state: drive ADDR+DATA, assert WR_N, wait READY, release
  * WR_N, wait READY to drop. */
-static int reg_write16(am01_bus_t *bus, uint8_t addr, uint16_t data)
+static int reg_write16_locked(am01_bus_t *bus, uint8_t addr, uint16_t data)
 {
     if (set_data_direction(bus, 1) < 0) return -1;
     if (drive_addr(bus, addr) < 0) return -1;
@@ -219,7 +242,7 @@ static int reg_write16(am01_bus_t *bus, uint8_t addr, uint16_t data)
 /* 4-phase interlocked read -- mirrors odocrypt_gpio_wrapper.v's S_READ
  * state: drive ADDR, assert RD_N, wait READY, sample DATA, release
  * RD_N, wait READY to drop. */
-static int reg_read16(am01_bus_t *bus, uint8_t addr, uint16_t *data_out)
+static int reg_read16_locked(am01_bus_t *bus, uint8_t addr, uint16_t *data_out)
 {
     /* Release the data bus BEFORE asserting RD_N.
      *
@@ -243,6 +266,44 @@ static int reg_read16(am01_bus_t *bus, uint8_t addr, uint16_t *data_out)
     if (gpiod_line_set_value(bus->rd_n, 1) < 0) return -1;
     if (wait_ready(bus, 0) < 0) return -1;
     return 0;
+}
+
+/* The locking wrappers everything else calls.
+ *
+ * The lock lives HERE rather than at the public API, because every public
+ * entry point reaches the bus through these two and nothing bypasses them.
+ * Locking here also means no deadlock to reason about: these are leaf
+ * functions, so a plain non-recursive mutex is enough, whereas locking at the
+ * public API would need a recursive one (am01_bus_submit_work calls
+ * am01_bus_write_header_word).
+ *
+ * PER-TRANSACTION IS SUFFICIENT, and it is worth saying why, since a
+ * multi-register sequence like submit_work is not held as a unit: the FPGA's
+ * state machines are per-address. Its header shift register only advances on
+ * a write to ADDR_HEADER_*, so a thermal read of ADDR_FAN landing between two
+ * header words leaves the shift state untouched. What must not interleave is
+ * the bus cycle itself, and that is exactly what this protects.
+ *
+ * errno is preserved across the unlock so callers still see the real failure
+ * rather than whatever pthread_mutex_unlock last set. */
+static int reg_write16(am01_bus_t *bus, uint8_t addr, uint16_t data)
+{
+    pthread_mutex_lock(&bus->lock);
+    int rc = reg_write16_locked(bus, addr, data);
+    int e = errno;
+    pthread_mutex_unlock(&bus->lock);
+    errno = e;
+    return rc;
+}
+
+static int reg_read16(am01_bus_t *bus, uint8_t addr, uint16_t *data_out)
+{
+    pthread_mutex_lock(&bus->lock);
+    int rc = reg_read16_locked(bus, addr, data_out);
+    int e = errno;
+    pthread_mutex_unlock(&bus->lock);
+    errno = e;
+    return rc;
 }
 
 /* Find the SoC's own GPIO controller by label rather than by number.
@@ -283,6 +344,14 @@ am01_bus_t *am01_bus_open(const char *gpiochip_name)
     if (!bus)
         return NULL;
     bus->data_is_output = -1;
+
+    /* Before anything can reach the bus. A default (non-recursive) mutex is
+     * correct here: it is only ever taken by reg_read16/reg_write16, which
+     * are leaf functions and never nest. */
+    if (pthread_mutex_init(&bus->lock, NULL) != 0) {
+        free(bus);
+        return NULL;
+    }
 
     /* NULL or "auto" means find it ourselves. An explicit name still wins,
      * so the test tool can override when debugging. */
@@ -343,6 +412,7 @@ void am01_bus_close(am01_bus_t *bus)
         return;
     if (bus->chip)
         gpiod_chip_close(bus->chip); /* releases every line opened from it */
+    pthread_mutex_destroy(&bus->lock);
     free(bus);
 }
 
