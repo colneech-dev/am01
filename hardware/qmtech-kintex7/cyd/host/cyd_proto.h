@@ -1,9 +1,13 @@
 /*
  * cyd_proto.h -- wire protocol between the CM4 and the CYD front panel.
  *
- * SCAFFOLDING. Nothing builds against this yet, and nothing here touches the
- * existing ILI9341 path (cm4-firmware/am01_panel.c and the display block in
- * hdl/odocrypt_gpio_wrapper.v), which is still the live solution.
+ * Compiled by BOTH halves -- the ESP32 firmware (via -I../host) and the CM4
+ * daemon -- which is the only thing that stops the protocol becoming two
+ * subtly different protocols.
+ *
+ * Nothing here touches the existing ILI9341 path (cm4-firmware/am01_panel.c
+ * and the display block in hdl/odocrypt_gpio_wrapper.v), which remains the
+ * live solution and now keeps its own JP5 pins.
  *
  * LINE-ORIENTED TEXT, deliberately, not a packed binary struct. The link
  * carries one status update a second and the occasional touch, so there is no
@@ -87,12 +91,14 @@
 #define CYD_POOL_CONF_PATH  "/boot/am01-miner.conf"
 
 /*
- * FPGA registers this rides on. NOT YET IMPLEMENTED -- hdl/uart_bridge.v does
- * not exist. Listed so the host and RTL halves are designed against one
- * definition instead of two that drift.
+ * FPGA registers this rides on. IMPLEMENTED as of VERSION 0x0202 --
+ * hdl/uart_bridge.v is instantiated by odocrypt_gpio_wrapper.v on JP5 15-18.
+ * A bitstream reporting less than 0x0202 has no UART, and reads of these
+ * addresses return zeros from unmapped space rather than failing, so
+ * am01-uartd must CHECK THE VERSION instead of inferring a dead panel.
  *
  * Addresses continue the map in odocrypt_gpio_wrapper.v, which is 5 bits wide
- * and currently used up to 0x18 (FIFO_STAT).
+ * and was used up to 0x18 (FIFO_STAT) before these.
  */
 #define CYD_REG_UART_DATA 0x19  /* w: push TX byte   r: pop RX byte        */
 #define CYD_REG_UART_STAT 0x1A  /* r: tx_free, rx_avail, FIFO depths       */

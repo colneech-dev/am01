@@ -82,6 +82,12 @@ cyd_action_t cyd_ui_touch(cyd_ui_t *ui, int x, int y);
 void cyd_fmt_hashrate(double h_per_s, char *out, int n);
 void cyd_fmt_temp(int temp_c, char *out, int n);
 void cyd_fmt_fan(int rpm, int duty_pct, char *out, int n);
-void cyd_fmt_epoch_left(uint32_t epoch_next, char *out, int n);
+/* Takes `now` EXPLICITLY rather than calling time(). The ESP32's clock is not
+ * necessarily set -- there is no RTC on a CYD and NTP may never have run --
+ * so the trustworthy clock is the miner's, arriving in the status object. A
+ * formatter that reached for a global clock would render a confident,
+ * completely wrong countdown on a panel that had just booted, and could not
+ * be tested against a fixed instant. */
+void cyd_fmt_epoch_left_at(uint32_t epoch_next, uint32_t now, char *out, int n);
 
 #endif /* CYD_UI_H */

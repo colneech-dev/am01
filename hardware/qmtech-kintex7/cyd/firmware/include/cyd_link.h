@@ -23,8 +23,13 @@
 /* INCLUDED, not merely referenced in a comment. The protocol constants are
  * shared with the CM4 daemon, and "shared" only means anything if both sides
  * actually compile against the same file -- a comment saying where they live
- * lets them drift, which is the failure this is meant to prevent. */
-#include "../host/cyd_proto.h"
+ * lets them drift, which is the failure this is meant to prevent.
+ *
+ * Found on the include path (platformio.ini adds ../host, and the host-side
+ * test uses -I) rather than by a relative "../host/..." -- that form silently
+ * depended on this header sitting in the firmware root, and broke the moment
+ * it moved into include/. */
+#include "cyd_proto.h"
 
 /* Mirrors the fields the miner publishes in /run/odod/status.json, which is
  * the same object odo-webd and odo-ui already consume.
