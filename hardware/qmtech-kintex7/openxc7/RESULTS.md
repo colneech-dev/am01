@@ -300,3 +300,16 @@ magnitudes directly (e.g. `TILE_NETS=16` or `24`) as a cheaper, less
 targeted next bet, or fall back to BRAM->LUT conversion (see
 `am01-hashrate-scaling-options` memory) to reduce occupancy below whatever
 level this flow can actually route.
+
+**`CONGESTION_W=2` result (2026-09-01): killed at iter=10, consistently
+worse than the plain congestion-aware baseline (no map) at every matched
+iteration** -- iter=1: 305287 vs 301961, iter=3: 14003 vs 7021, iter=9: 5989
+vs 824, iter=10: 5847 vs 727 (baseline numbers). The gap widened rather than
+closed as iterations progressed. Killed for memory pressure (a second test,
+`CONGESTION_W=0.5`, seed 8, was contending for RAM and swap had started
+being used) rather than for a decisive failure, but the trend gave no reason
+to expect it to catch up. **`CONGESTION_W=0.5`** (same base config, seed 8)
+launched in its place, to test whether weight=2 was simply too strong
+rather than the ground-truth-map approach being unhelpful outright -- watch
+its early iterations against the same baseline numbers above for the
+comparison.
