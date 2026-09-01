@@ -39,7 +39,7 @@ void setup(void)
     cyd_ui_init(&g_ui);
 
 #if CYD_USE_UART
-    /* The real link: FPGA-hosted UART on JP5 pins 5/6. 115200 because the
+    /* The real link: FPGA-hosted UART on JP5 pins 15/16. 115200 because the
      * payload is one status line a second and the entire point of leaving SPI
      * behind was to stop spending signal-integrity margin we do not need. */
     g_link = cyd_link_uart_open(CYD_BAUD_DEFAULT);
