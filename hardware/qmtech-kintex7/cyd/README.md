@@ -64,6 +64,55 @@ block is untouched, one bitstream serves both panels, and a CYD can be brought
 up on a board whose ILI9341 is still wired -- which matters, because the
 ILI9341 is the thing that does not work and is being diagnosed.
 
+### The CYD end: connector P5
+
+Read off the board on 2026-09-01 (silkscreen `ESP32-2432S028`, panel
+`TPM408-2.8`), not inferred:
+
+| Connector | Pins | Use |
+|---|---|---|
+| **P5** | `VIN, TX, RX, GND` | **this is the one.** Power and UART on one 4-pin JST |
+| P3 | `GND, IO35, IO22, IO21` | general GPIO. IO35 is INPUT-ONLY (ESP32 34-39) |
+| CN1 | `GND, IO22, IO27, 3.3V` | general GPIO + 3.3V |
+| SPEAK | 2-pin | speaker amp |
+
+P5 means no soldering and no header work: one plug carries 5V, GND, TX and RX.
+
+**CONFIRM P5's PIN 1 WITH A METER BEFORE PLUGGING ANYTHING IN.** The labels are
+legible but which physical end is which is not something to take off a
+photograph, and reversing VIN and GND destroys the board. Continuity from the
+GND pin to a mounting hole settles it.
+
+**NEITHER P3 NOR CN1 BREAKS OUT EN OR IO0.** That was checked specifically,
+because the plan assumed they would be available. They are not, and IO35 is
+input-only so it cannot substitute.
+
+### Which means cyd_esp_en / cyd_esp_io0 are OPTIONAL
+
+JP5 17/18 have nowhere to land. Rather than solder to the RST/BOOT button
+pads, the ESP32 can enter its own ROM bootloader in software:
+
+    REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
+    esp_restart();
+
+The firmware accepts an "enter bootloader" command over the same UART, sets
+that bit, reboots, and esptool takes over on the same four wires. NOT YET
+VERIFIED ON HARDWARE -- it is the documented mechanism for ESP32 classic, but
+prove it before relying on it.
+
+That leaves the four-wire link doing everything: status, commands and
+firmware updates, over one JST.
+
+**The fallback still exists and does not need us to design for it.** If the
+firmware is bricked it cannot act on the command -- but the ROM bootloader is
+in mask ROM and the board has RST and BOOT buttons, so holding BOOT and
+tapping RST always works. Wire JP5 17/18 to those button pads only if you want
+to recover a bricked panel without opening the case.
+
+**This board has BOTH micro-USB and USB-C**, so a first flash needs no wiring
+at all. But P5's TX/RX are GPIO1/GPIO3, the same pair the onboard USB-serial
+chip drives: never have USB connected while P5 is plugged into the FPGA.
+
 TX goes to RX. Wiring TX-TX gives a link where neither end hears anything and
 both look healthy.
 
