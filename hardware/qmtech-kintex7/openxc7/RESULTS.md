@@ -263,16 +263,40 @@ reached -- it was still slowly getting worse when stopped, well before
 large lever on this design -- not a marginal tweak. `TILE_NETS` and
 `WIRE_DEMAND` should be considered required, not optional, for any further
 94%-occupancy attempt, but this configuration alone (8, 5.0) is not
-sufficient to fully route. Two follow-ups in progress/planned:
+sufficient to fully route.
 
-1. **Ground-truth congestion feedback** (in progress) -- the same
-   `TILE_NETS=8 WIRE_DEMAND=5.0` placement forced through to completion via
-   `NEXTPNR_SKIP_FAILED_ARCS=1 NEXTPNR_DUMP_CONGESTION=<path>`
-   (`run_2miner_congmap.sh`), exporting router2's REAL per-tile overuse
-   rather than a placement-time proxy, to feed a second placement pass via
-   `NEXTPNR_CONGESTION_MAP=<path> NEXTPNR_CONGESTION_W=<w>`. This is the
-   principled next step since 8/5.0 were first-guess values, not tuned, and
-   the residual is likely concentrated in a small number of specific tiles
-   this run's own congestion export will locate exactly.
-2. Retune `TILE_NETS`/`WIRE_DEMAND` magnitudes directly (e.g. `TILE_NETS=16`
-   or `24`) as a cheaper, less targeted parallel bet.
+## Ground-truth congestion feedback -- phase 1 result, phase 2 launched -- 2026-09-01
+
+`run_2miner_congmap.sh`: the same `TILE_NETS=8 WIRE_DEMAND=5.0` placement,
+seed 5, forced through to completion via
+`NEXTPNR_SKIP_FAILED_ARCS=1 NEXTPNR_DUMP_CONGESTION=<path>` instead of
+hard-erroring on the first unroutable arc. Ran ~15h (574 iterations). The
+run was not monotonic -- it broke through its earlier plateau mid-way
+(new best: overused=59, unrouted=2 at iter=324, later briefly overused=61
+unrouted=0 at iter=385) before degrading again into a worse oscillation
+(peaked overused=258). Final accepted state at iter=574 (stall-out):
+
+    router2: SKIP_FAILED_ARCS - accepting partial route with 188 overused
+    wire(s) after 574 iterations; 319 net(s) left with unrouted arcs.
+
+Not a working design (319 unrouted nets is substantial), and the `clk_h`
+timing line reported was unchanged from the pre-route estimate (nextpnr
+can't compute real post-route delay through that many unrouted nets) --
+not a genuine result either way. But it exported
+`seedrun/2miner_congmap_s5_tn8_wd5.0/congestion.csv` (365 rows, 188KB): the
+REAL per-tile overuse this specific placement produced, not a proxy.
+
+**Phase 2** (`run_2miner_congmap2.sh`, launched immediately after, seed 7):
+same `TILE_NETS=8 WIRE_DEMAND=5.0` base plus
+`NEXTPNR_CONGESTION_MAP=<phase-1 congestion.csv> NEXTPNR_CONGESTION_W=2`
+(first-guess weight, not tuned) -- confirmed loading
+(`NEXTPNR_CONGESTION_MAP: loaded 365 rows`) and actively legalising against
+it. This is the design's first attempt guided by measured routing failure
+rather than a placement-time guess. Check the live log / a later update for
+the outcome.
+
+**If this does not fully route either:** retune `TILE_NETS`/`WIRE_DEMAND`
+magnitudes directly (e.g. `TILE_NETS=16` or `24`) as a cheaper, less
+targeted next bet, or fall back to BRAM->LUT conversion (see
+`am01-hashrate-scaling-options` memory) to reduce occupancy below whatever
+level this flow can actually route.
