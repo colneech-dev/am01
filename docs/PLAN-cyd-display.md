@@ -249,6 +249,10 @@ unproven thing in a bitstream at a time.
 
 ## Open question
 
-The CYD's light sensor position across the board's width was not measured, so
-`case/v4-cyd`'s lid currently cuts a 26mm slot to catch it wherever it sits.
-Measure it and that becomes a neat hole.
+~~The CYD's light sensor position across the board's width was not measured~~
+MEASURED 2026-09-01: 8-14mm in from the edge along the 50mm short axis.
+
+The 26mm slot did NOT "catch it wherever it sits" -- centred on a 50mm module
+it spanned 12-38mm from either edge, so the sensor fell almost entirely
+outside it and the lid would have blinded it. Now an 8mm aperture at the
+measured position, cut at both ends until the build orientation is fixed.
