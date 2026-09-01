@@ -269,3 +269,54 @@ be a **5 V** module and was disconnected before a successful run.
 
 Before reconnecting, see the 5 V warning in `docs/JP5-WIRING.md`: bank 12 is not
 5 V tolerant, so `T_DO` must be metered before it goes anywhere near JP5 pin 5.
+
+---
+
+## 8. The FPGA can wedge across a miner restart, and only a reload clears it
+
+Seen 2026-09-01 16:10. The miner was stopped and restarted to deploy a new
+binary. It came back, connected to the pool, took jobs -- and never dispatched
+a single one. Hashrate 0, shares 0, indefinitely.
+
+**It was not the software.** Restoring the previous, known-good binary left it
+equally dead, which is what ruled the deploy out. The registers told the real
+story:
+
+    STATUS     0x0001   hash_active=1  nonce_valid=0
+    FIFO_STAT  0xff00   lost=255 (SATURATED)  depth=0
+
+The core was still hashing and still finding nonces, but the host never
+consumed them: the found-FIFO overflowed until its lost counter saturated, and
+the main thread sat in `do_sys_poll` -- waiting on an IRQ edge that was never
+going to arrive.
+
+The likely mechanism is a SIGTERM landing mid-transaction, leaving the 4-phase
+handshake half-completed: the host dies between asserting RD_N/WR_N and
+releasing it, the wrapper stays in S_READ/S_WRITE waiting for a deassert that
+never comes, and the IRQ path never fires again. That is consistent with the
+symptom surviving a process restart -- nothing on the host side resets the
+FPGA's state machine.
+
+**Recovery, which works and takes seconds:**
+
+    systemctl stop odo-miner
+    am01-fpga-reload            # reloads from flash over JTAG
+    systemctl start odo-miner
+
+Immediately after: `STATUS 0x0000`, `FIFO_STAT 0x0000`, and mining resumed at
+67.7 MH/s with 461 found / 461 accepted.
+
+**Worth fixing properly**, because this will happen again on any deploy:
+
+  * a SIGTERM handler that finishes the in-flight transaction before exiting,
+    or refuses to die mid-cycle
+  * and/or a bus-recovery routine at startup -- deassert WR_N/RD_N, wait for
+    READY to drop, and only then proceed. Cheap, and it would make the daemon
+    self-healing rather than needing JTAG.
+  * `FIFO_STAT`'s lost counter is the tell. A saturated 255 with a live
+    `hash_active` means finds are being dropped on the floor; nothing
+    currently surfaces that, and it deserves to be in status.json where the
+    dashboard would show it.
+
+Until then: if the miner comes back from a restart with hashrate 0, read
+`am01_reg` before assuming the deploy was at fault, and reload the FPGA.
