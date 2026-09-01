@@ -214,18 +214,32 @@ static int esp_ctrl(int en, int io0)
  * EN is active LOW: pulling it low resets the chip. */
 int esp_enter_bootloader(void)
 {
-    if (esp_ctrl(0, 1) < 0) return -1;   /* EN low (reset), IO0 low */
+    /* esp_ctrl(en, io0): 1 drives the pin HIGH.
+     *
+     * EN  low  = held in reset.        EN  high = running.
+     * IO0 low  = ROM download mode.    IO0 high = boot from flash.
+     *
+     * The ROM samples IO0 on the RISING edge of EN, so IO0 must already be
+     * low before reset is released and must stay low across it.
+     *
+     * THIS SEQUENCE WAS INVERTED until 2026-09-01: it passed io0=1 under
+     * comments saying "IO0 low", so it would have reset the chip straight
+     * back into normal boot and never reached the bootloader. */
+    if (esp_ctrl(0, 0) < 0) return -1;   /* EN low: reset. IO0 low: select ROM */
     usleep(100000);
-    if (esp_ctrl(1, 1) < 0) return -1;   /* release EN, IO0 still low */
+    if (esp_ctrl(1, 0) < 0) return -1;   /* release EN with IO0 STILL low */
     usleep(50000);
-    return esp_ctrl(1, 0);               /* release IO0 -- now in the ROM */
+    return esp_ctrl(1, 1);               /* IO0 back high; the ROM has latched */
 }
 
 int esp_reset_run(void)
 {
-    if (esp_ctrl(0, 0) < 0) return -1;
+    /* IO0 HIGH throughout, so the ROM boots from flash. Passing io0=0 here --
+     * as this did before 2026-09-01 -- drops it into download mode instead,
+     * which presents as a panel that resets and then shows nothing. */
+    if (esp_ctrl(0, 1) < 0) return -1;   /* EN low: reset, IO0 high */
     usleep(100000);
-    return esp_ctrl(1, 0);
+    return esp_ctrl(1, 1);               /* release: normal boot */
 }
 
 /* ------------------------------------------------------------------ */

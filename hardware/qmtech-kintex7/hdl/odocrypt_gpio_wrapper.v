@@ -644,10 +644,22 @@ module odocrypt_gpio_wrapper #(
     wire [7:0] uart_rx_err;
     reg        uart_tx_wr, uart_rx_rd;
 
-    // EN high = ESP32 running, IO0 low = normal boot. Both are the states a
-    // CYD needs in order to just run, so a panel that is wired up but never
-    // addressed behaves as though this block were not here.
-    reg  [1:0] esp_ctrl_r = 2'b01;
+    // BOTH HIGH is the run state: EN high = not held in reset, IO0 high =
+    // boot from flash. A panel that is wired up but never addressed therefore
+    // behaves as though this block were not here.
+    //
+    // WAS 2'b01, WHICH WAS BACKWARDS, with a comment asserting "IO0 low =
+    // normal boot". It is the other way round: on ESP32 GPIO0 LOW at reset
+    // selects the ROM download mode and HIGH boots from flash. Confirmed on
+    // the bench 2026-09-01 -- the board reports boot:0x13 SPI_FAST_FLASH_BOOT
+    // precisely because its pull-up holds IO0 high.
+    //
+    // The old default would have driven IO0 low and held the panel in
+    // download mode forever: it would have powered up, shown nothing, and
+    // never run its firmware. Latent only because EN/IO0 are not yet wired
+    // (P5 does not carry them), which is exactly the wiring now being
+    // considered -- so this had to be fixed before it could bite.
+    reg  [1:0] esp_ctrl_r = 2'b11;
 
     assign cyd_esp_en  = esp_ctrl_r[0];
     assign cyd_esp_io0 = esp_ctrl_r[1];
