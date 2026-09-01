@@ -326,6 +326,31 @@ int main(int argc, char **argv)
                 printf("FAIL: re-dispatch failed\n");
                 break;
             }
+
+            /* DRAIN THE HANDOVER GAP, exactly as miner_pipe_am01.c does.
+             *
+             * A find can land while the 27-word dispatch above is still being
+             * written, and it belongs to the OLD header. The commit at the
+             * last target word flushes the FPGA's found-FIFO but not the
+             * already-offered nonce in the handoff latch, so without this it
+             * surfaces on the next poll and gets judged against the NEW
+             * header -- where it fails.
+             *
+             * Anything pollable right now provably predates the commit: the
+             * settle window is open, so no post-commit find can be reported
+             * yet. Discarding here rather than validating, because unlike the
+             * miner this test has no use for a share.
+             *
+             * WITHOUT THIS the test reported 0/10 while production measured
+             * found=547 shares=547 on the same bitstream. The test was wrong,
+             * not the hardware -- it modelled a handover the miner does not
+             * actually perform. A test that disagrees with a working system
+             * is a bug in the test until proven otherwise. */
+            uint32_t gap;
+            int gap_n = 0;
+            while (gap_n++ < 8 && miner_io_pipe_poll(&gap) == 0)
+                ;   /* discarded on purpose */
+
             memcpy(disp_header, header, 80);
         }
     }

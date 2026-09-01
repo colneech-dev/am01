@@ -612,7 +612,67 @@ int main(int argc, char **argv)
                                 cur.epoch, seed);
                     }
                     odocrypt_build_header(&cur, cur.header);
+
+                    /* Keep the OUTGOING job: a find can land while the
+                     * dispatch below is still being written, and that find
+                     * belongs to this job, not the new one. */
+                    job_t prev = disp;
+                    int   had_prev = have_disp;
+
                     miner_io_pipe_dispatch(cur.header, cur.share_target);
+
+                    /* DRAIN THE HANDOVER GAP.
+                     *
+                     * The loop already drains before dispatching, but a
+                     * 27-word dispatch takes a few hundred microseconds over
+                     * the bit-banged bus, and a find arriving inside that
+                     * window is latched by the FPGA against the OLD job. The
+                     * commit at the last target word flushes the found-FIFO
+                     * but NOT the already-offered nonce in the handoff latch
+                     * -- deliberately, because clearing it from the RTL would
+                     * reopen the torn-read window that 0x0201 just closed.
+                     *
+                     * So it is taken here instead, where the ambiguity does
+                     * not exist: this nonce provably predates the commit, and
+                     * the job it belongs to is still in hand.
+                     *
+                     * It is VALIDATED, not discarded. It is a genuine find for
+                     * the previous job and the pool will still take it -- the
+                     * old job stays current for seconds after a new one
+                     * arrives. Throwing away real work to tidy up a race would
+                     * be the wrong trade.
+                     *
+                     * Without this the nonce surfaces on the next iteration
+                     * and is checked against the NEW header, where it fails
+                     * and is counted stale. Measured: harmless in production
+                     * (found=547 shares=547, no bad shares), but it is a real
+                     * mismatch and am01_smoke's header-cycling mode shows it
+                     * as a 100% failure. */
+                    if (had_prev) {
+                        uint32_t gap_nonce;
+                        int gap_drained = 0;
+                        while (gap_drained++ < 8 &&
+                               miner_io_pipe_poll(&gap_nonce) == 0) {
+                            found++;
+                            g_st.found = found;
+                            uint8_t gh[32];
+                            compute_pow(prev.header, gap_nonce, gh);
+                            if (target_met(gh, prev.share_target)) {
+                                if (stratum_submit_share(&st, &prev, gap_nonce) == 0) {
+                                    shares++;
+                                    g_st.shares     = shares;
+                                    g_st.last_share = time(NULL);
+                                    g_st.work_acc  += share_work(prev.share_target);
+                                    printf("[pipe] SHARE (handover) job=%s "
+                                           "nonce=0x%08" PRIx32 "\n",
+                                           prev.job_id, gap_nonce);
+                                }
+                            } else {
+                                stale++;
+                            }
+                        }
+                    }
+
                     /* Remember what the FPGA is now working on. Copied AFTER
                      * odocrypt_build_header() so disp.header is the built
                      * header, byte for byte what was pushed to the core. */
