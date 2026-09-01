@@ -10,7 +10,8 @@
 # job epoch to decide whether the bitstream is stale, so a wrong ODO_SEED
 # makes a stale bitstream look current.
 #
-# Exit 0 current, 1 stale, 2 inconsistent or unreadable.
+# Exit 0 current, 1 stale, 2 inconsistent or unreadable,
+#      3 prepared ahead of the chain (built early for a rollover).
 
 set -e
 here=$(dirname "$0")
@@ -66,6 +67,34 @@ if [ "$enc_seed" != "$wrap_seed" ]; then
 	echo "$wrap_seed. The daemon's staleness check would be comparing against the"
 	echo "wrong value. Fix ODO_SEED in odocrypt_gpio_wrapper.v."
 	exit 2
+fi
+
+# AHEAD of the chain, i.e. built early for a rollover that has not happened.
+# Reported separately because it is a DELIBERATE state, not a fault: the
+# rebuild takes ~1h35m and the sensible time to do it is before the deadline,
+# not after it.
+#
+# This case used to fall through to the stale branch below, which printed
+# "STALE by -1 epoch(s)" -- a negative count -- and then instructed the reader
+# to regenerate back to the current epoch. Following that would silently undo
+# the preparation it was reporting on.
+if [ "$enc_seed" -gt "$cur" ]; then
+	ahead=$(( (enc_seed - cur) / INTERVAL ))
+	echo
+	echo "PREPARED, $ahead epoch(s) AHEAD of the chain. This is not an error."
+	echo
+	echo "The tree implements $(fmt "$enc_seed"), the chain is still on"
+	echo "$(fmt "$cur"). A bitstream built from this tree is CORRECT but must"
+	echo "NOT be flashed until the rollover -- until then it would mine rejects."
+	echo
+	echo "  flash after : $(fmt "$enc_seed")"
+	echo "  that is in  : $(( (enc_seed - now) / 3600 )) hours"
+	echo
+	echo "To go back to the live epoch instead:"
+	echo "  cd tools/odo_gen && make odo_gen"
+	echo "  ./odo_gen $cur $enc_thr encrypt_4$enc_flags > ../../hdl/odocrypt/encrypt.v"
+	echo "  then set ODO_SEED = 32'd$cur in odocrypt_gpio_wrapper.v"
+	exit 3
 fi
 
 if [ "$enc_seed" != "$cur" ]; then

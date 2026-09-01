@@ -70,7 +70,7 @@ module odocrypt_gpio_wrapper #(
     // either build flow having to pass a generic. It MUST match the seed
     // stamped in encrypt.v's header -- tools/check-epoch.sh enforces that and
     // flags staleness against the current date. Update both together.
-    parameter [31:0] ODO_SEED = 32'd1787616000
+    parameter [31:0] ODO_SEED = 32'd1788480000
 ) (
     // ---------------------------------------------------------------
     // Bus clock domain -- the board's onboard 50MHz crystal
@@ -267,7 +267,14 @@ module odocrypt_gpio_wrapper #(
     // the host one nonce's low half with another's high half. See the
     // ADDR_NONCE_HI note in S_READ. found_path also flushes the FIFO on
     // commit. No interface change; 0x0200 bitstreams are simply wrong.
-    localparam [15:0] VERSION = 16'h0201;
+    //
+    // 0x0202: adds the CYD serial link on JP5 15-18 -- UART_DATA (0x19),
+    // UART_STAT (0x1A), ESP_CTRL (0x1B). Purely additive: nothing existing
+    // moved, and a host that never touches those three registers cannot tell
+    // this apart from 0x0201. The version bump exists so am01-uartd can
+    // REFUSE to run against a bitstream with no UART in it, rather than
+    // reading back zeros from unmapped addresses and reporting a dead panel.
+    localparam [15:0] VERSION = 16'h0202;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;
