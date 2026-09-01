@@ -63,9 +63,11 @@ on four wires instead of nine.
 |---|---|
 | `docs/PLAN-cyd-display.md` | written |
 | `case/v4-cyd` lid | rendered, printable |
-| `host/am01-uartd` | skeleton, does not build yet |
-| `host/cyd_proto.h` | protocol defined |
-| `firmware/` | not started |
+| `host/am01-uartd` | skeleton, compiles, accessors stubbed |
+| `host/cyd_proto.h` | protocol defined, shared by both halves |
+| `firmware/cyd_link.h` | link interface, transport-agnostic |
+| `firmware/cyd_ui.h` | screen model, ported from odo-ui |
+| `firmware/main.cpp` | entry point, no board support yet |
 | `hdl/uart_bridge.v` | not started |
 
 ## Order of work
