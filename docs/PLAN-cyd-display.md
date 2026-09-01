@@ -147,6 +147,16 @@ polling `UART_STAT`. Then **everything downstream works unmodified**:
 
 with the daemon driving `ESP_CTRL` for the reset-into-bootloader sequence.
 
+**This REQUIRES EN and IO0 to be wired**, which the CYD's P5 connector does
+not carry -- it has VIN/TX/RX/GND only. Two wires to the RST and BOOT button
+pads, ~1k in series each.
+
+There is no software alternative on this chip. `RTC_CNTL_FORCE_DOWNLOAD_BOOT`
+exists only on esp32c3/esp32s2; the ESP32 classic in a CYD does not have that
+register (checked against the SDK, 2026-09-01). esptool cannot enter download
+mode unaided either, because DTR does not reach IO0 on this board -- proven on
+the bench, boot mode 0x13 every attempt.
+
 This is the key move: it means firmware updates need no bespoke flashing code,
 and the CYD can be reflashed from the Pi over the same four wires that carry its
 normal traffic. No cable, no button, no removing it from the case.

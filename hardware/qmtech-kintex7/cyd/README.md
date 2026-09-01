@@ -167,10 +167,34 @@ works is hold BOOT, tap RST, KEEP HOLDING BOOT through the whole operation --
 each esptool invocation reopens the port and pulses RTS, and holding BOOT
 means every one of those resets lands back in download mode.
 
-This is the same missing-EN/IO0 problem the wired link has, seen over USB. It
-makes verifying the RTC_CNTL_FORCE_DOWNLOAD_BOOT software path a priority
-rather than a nicety: without it, flashing over JP5 would need the case open
-and a finger on a button, which defeats the point.
+This is the same missing-EN/IO0 problem the wired link has, seen over USB.
+
+### RTC_CNTL_FORCE_DOWNLOAD_BOOT DOES NOT EXIST ON THIS CHIP
+
+I proposed it as the way to flash with no extra wires: the firmware sets an
+RTC bit, restarts, and the ROM comes up in download mode. Checked against the
+SDK on 2026-09-01, and it is not available here.
+
+`RTC_CNTL_OPTION1_REG` and `RTC_CNTL_FORCE_DOWNLOAD_BOOT` are defined only in
+the **esp32c3** and **esp32s2** SoC headers. The esp32 (classic) header has
+neither. This board is an ESP32-D0WD-V3 -- the original silicon -- so the
+register was never there. I had carried the idea over from the newer chips
+without checking.
+
+It is not a UART-versus-USB question: the mechanism is a register write
+inside the chip and would have been transport-independent. It simply does not
+exist on this part.
+
+**So wiring EN and IO0 is the ONLY route to hands-off flashing**, over USB or
+over JP5. Two wires from JP5 17/18 to the RST and BOOT button pads, each with
+~1k in series -- the FPGA drives push-pull, so without the resistor, pressing
+a button while the FPGA holds that pin high shorts the output to ground. 1k
+caps it at ~3.3mA and still swings both lines against their pull-ups and EN's
+reset capacitor.
+
+That also makes the IO0 polarity fix in 0bf4ea9 load-bearing rather than
+tidy-up: with EN/IO0 wired and the old default, the panel would have sat in
+download mode forever.
 
 ### The factory demo is backed up
 
