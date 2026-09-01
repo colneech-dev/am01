@@ -47,6 +47,18 @@ static bool g_bram_out_reg = false;
 // plus one more when the output register is enabled.
 static int RoundCycles() { return g_bram_out_reg ? 3 : 2; }
 
+// Number of the 10 large-S-box module TYPES (sbox_large0..9) to infer as
+// distributed RAM (SLICEM LUTRAM) instead of block RAM. Set by --lutram=N.
+//
+// Each of the 10 types is instantiated once per unrolled round, so N of 10
+// converts almost exactly N/10 of total large-S-box BRAM demand into LUT
+// fabric -- a direct lever on BRAM occupancy for wide/multi-miner configs
+// where BRAM, not LUTs, is the binding resource (see RESULTS.md, AM01
+// hashrate scaling options). Cost model (per am01-hashrate-scaling-options
+// memory): ~420 LUTs per converted instance (a 1024x10 dual-port ROM as
+// logic, ~21 LUTs/bit x 10 bits x 2 ports).
+static int g_lutram_count = 0;
+
 // Which period[] tap feeds round i's key.
 //
 // full_round applies the key COMBINATIONALLY after the sboxes:
@@ -117,7 +129,15 @@ void GenerateSboxes(const T (&sbox)[sz1][sz2], bool dual_port, const char* prefi
             // Vivado conflating duplicate instances either). With this
             // attribute the correct count holds even past that threshold.
             // yosys already infers this correctly regardless; unaffected.
-            fprintf(f, "    (* ram_style = \"block\" *) reg [%d:0] mem[0:%zd];\n", width-1, sz2-1);
+            //
+            // --lutram=N converts the first N of these sz1 module TYPES
+            // (i < g_lutram_count) to distributed RAM instead. Only meaningful
+            // when dual_port (the large S-boxes, the only ones this cost model
+            // was measured against); small S-boxes are already tiny enough
+            // that yosys/Vivado map them to LUTs on their own.
+            fprintf(f, "    (* ram_style = \"%s\" *) reg [%d:0] mem[0:%zd];\n",
+                    (dual_port && i < g_lutram_count) ? "distributed" : "block",
+                    width-1, sz2-1);
             // Separate always blocks per port, each with its own read of the
             // shared `mem` array -- Vivado's dual-port BRAM inference is
             // pattern-sensitive and doesn't reliably collapse two reads in
@@ -510,12 +530,23 @@ int main(int argc, char* argv[])
     uint32_t key = 0;
     uint32_t throughput = 0;
     const char* prefix = NULL;
-    // --bram-out-reg may appear anywhere; strip it before positional parsing.
+    // --bram-out-reg and --lutram=N may appear anywhere; strip them before
+    // positional parsing.
     for (int i = 1; i < argc; i++)
     {
         if (strcmp(argv[i], "--bram-out-reg") == 0)
         {
             g_bram_out_reg = true;
+            for (int j = i; j < argc - 1; j++)
+                argv[j] = argv[j+1];
+            argc--;
+            i--;
+        }
+        else if (strncmp(argv[i], "--lutram=", 9) == 0)
+        {
+            g_lutram_count = atoi(argv[i] + 9);
+            if (g_lutram_count < 0 || g_lutram_count > 10)
+                return usage(argv[0], "--lutram=N must be 0..10 (10 large S-box module types exist)");
             for (int j = i; j < argc - 1; j++)
                 argv[j] = argv[j+1];
             argc--;
