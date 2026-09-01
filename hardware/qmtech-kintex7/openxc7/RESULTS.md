@@ -305,11 +305,48 @@ level this flow can actually route.
 worse than the plain congestion-aware baseline (no map) at every matched
 iteration** -- iter=1: 305287 vs 301961, iter=3: 14003 vs 7021, iter=9: 5989
 vs 824, iter=10: 5847 vs 727 (baseline numbers). The gap widened rather than
-closed as iterations progressed. Killed for memory pressure (a second test,
-`CONGESTION_W=0.5`, seed 8, was contending for RAM and swap had started
-being used) rather than for a decisive failure, but the trend gave no reason
-to expect it to catch up. **`CONGESTION_W=0.5`** (same base config, seed 8)
-launched in its place, to test whether weight=2 was simply too strong
-rather than the ground-truth-map approach being unhelpful outright -- watch
-its early iterations against the same baseline numbers above for the
-comparison.
+closed as iterations progressed.
+
+**`CONGESTION_W=0.5` result: also killed, also underperforming** -- iter=3:
+17948 (vs baseline 7021, vs cw=2's 14003 -- WORSE than both), iter=5: 11464
+(vs baseline 1761). Confounded by seed variance (seed 8 vs 7 vs 5), but
+across both weights tried, the ground-truth `CONGESTION_MAP` never beat the
+plain `TILE_NETS`/`WIRE_DEMAND` baseline at any matched iteration. Killed at
+iter=7 (overuse=10148) to redirect effort.
+
+## Discovered pre-existing research -- reframes the whole approach (2026-09-01)
+
+Found `CONGESTION-RESEARCH-PLAN.md`, `SESSIONS.md`, `TESTS-TO-RUN.md`, and
+`AUDIT-BUILT-VS-TESTED.md` in this same directory, dated 2026-08-22 through
+08-28 -- extensive prior work on these exact same placer knobs
+(`TILE_NETS`/`WIRE_DEMAND`/`CONGESTION_MAP`), not previously read this
+session. Key facts that change confidence in tonight's approach:
+
+* **`TESTS-TO-RUN.md` T16 confirms tonight is the first real 2-miner routing
+  attempt** -- "openXC7 has only ever built `nm1`." Not duplicated work.
+* **`SESSIONS.md` already flagged the exact regime tonight is fighting**:
+  "`NUM_MINERS=2` needs 840/890 BRAMs = 94% utilisation. Vivado does it; the
+  striping strategy has almost no room to distribute egress at that
+  density." Written before tonight, independently arrives at the same
+  conclusion reached the hard way over ~30h of nextpnr runs.
+* **`WIRE_DEMAND=5.0` (used all night) was never grounded.** The 1-miner
+  placer-knob screen in `AUDIT-BUILT-VS-TESTED.md` sec 2a found `WIRE_DEMAND`
+  has a real, non-monotonic optimum near **1.0** (2.0 too loose to trip any
+  tile, 0.5 tight enough to thin the whole die). Different regime (1-miner
+  Fmax vs 2-miner routability), so not guaranteed to transfer, but a far
+  better-grounded value than the blind guess used tonight.
+* **The single most decisive untried experiment is a 2-miner version of T5**
+  (Vivado's placement fed into nextpnr's own router). The 1-miner equivalent
+  already ran (`CONGESTION-RESEARCH-PLAN.md` "Step 1") and established
+  *"placement owns the gap, not routing"* -- nextpnr's own router beat
+  Vivado's router (89.30 vs 63.55 MHz) on the *same* nextpnr placement. That
+  result validates attacking placement rather than the router -- but only
+  for the 1-miner Fmax problem; nobody has run the 2-miner routability
+  version. Would need the existing `vivado_route_nextpnr_placement.tcl`
+  name-mapping pipeline extended to the 2-miner netlist. Bigger undertaking
+  than a parameter sweep; flagged as the real next investment, not
+  attempted tonight.
+
+**Next test launched:** `TILE_NETS=8 WIRE_DEMAND=1.0` (seed 9), no
+`CONGESTION_MAP` -- the one concretely-grounded correction from the above,
+replacing the blind `WIRE_DEMAND=5.0` guess.
