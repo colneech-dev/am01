@@ -46,8 +46,9 @@ Two consequences worth stating plainly:
 * The three spare CM4 GPIOs are useless here. They terminate at FPGA balls and
   the BCM2711 has no UART alternate function on them anyway, so even a
   pass-through would be bit-banged.
-* The JP5 pins freed by removing the ILI9341 (5–13) are exactly the pins the
-  CYD needs. Nothing new has to be found.
+* The ILI9341 does not have to be removed to make room. JP5 has 42 signal
+  pins and only 15 are constrained, so the CYD gets its own (15–18) and the
+  display keeps 5–13.
 
 ---
 
@@ -56,20 +57,37 @@ Two consequences worth stating plainly:
 A UART, hosted in the FPGA, driven by the Pi over the register bus it already
 uses.
 
-| JP5 pin | Signal | Direction |
-|---:|---|---|
-| 5 | UART TX | FPGA -> CYD RX |
-| 7 | UART RX | CYD TX -> FPGA |
-| 8 | ESP_EN | FPGA -> CYD reset |
-| 9 | ESP_IO0 | FPGA -> CYD boot select |
-| 47/48 | GND | |
-| 49/50 | +5V | supply |
+| JP5 pin | Ball | RTL port | Direction |
+|---:|---|---|---|
+| 15 | AF24 | `cyd_uart_tx` | FPGA -> CYD RX |
+| 16 | AF25 | `cyd_uart_rx` | CYD TX -> FPGA |
+| 17 | AB21 | `cyd_esp_en` | FPGA -> CYD reset |
+| 18 | AC21 | `cyd_esp_io0` | FPGA -> CYD boot select |
+| 47/48 | | GND | |
+| 49/50 | | +5V | supply |
 
-RX IS ON PIN 7, NOT PIN 6. Corrected 2026-09-01 while wiring the mux: only
-two of the wrapper's JP5 ports are inputs (lcd_miso and touch_irq), and pin 6
-is lcd_mosi -- an OUTPUT. A UART receiver there could never have received
-anything, and the mistake would have surfaced as a panel that transmits fine
-and hears nothing.
+**ON ITS OWN PINS. Revised 2026-09-01, and this replaces two earlier
+mistakes.**
+
+This plan originally put the link on the display's pins 5-9, on the reasoning
+that removing the ILI9341 freed them. Two things went wrong with that:
+
+* Pin 6 is `lcd_mosi`, an **output**. A UART receiver there could never have
+  received anything, and it would have presented as a panel that transmits
+  fine and hears nothing.
+* Reusing the pins at all forced a build-time `PANEL_IF` parameter choosing
+  one panel or the other, and left `lcd_sclk`/`lcd_miso`/`lcd_cs_n`/`lcd_dc`
+  as port names describing hardware they no longer drove.
+
+Neither was necessary. JP5 carries 42 BANK12 signal pins and this design
+constrains 15; pins 14 and 19-44 are free. Moving to 15-18 removes the mux,
+the parameter, and the either/or: the display path is byte-for-byte unchanged,
+one bitstream serves both panels, and the CYD can be brought up on a board
+whose ILI9341 is still wired.
+
+The premise in "The constraint that shapes everything" below is therefore
+narrower than it first appeared: the link must still go Pi -> bus -> FPGA ->
+JP5, but it does not have to displace anything to get there.
 
 Four signals. Both sides are 3.3V logic (BANK12 is LVCMOS33, ESP32 is 3.3V), so
 no level shifting.
@@ -105,9 +123,9 @@ reason `found_path` has one: so a host that is briefly late does not lose data.
 entered by a specific EN/IO0 sequence, and that sequence belongs in software
 where it can be adjusted, not baked into a state machine.
 
-**Reuse, do not reinvent:** the display block on JP5 pins 5–13 is being removed,
-so its pin constraints, CDC pattern and register-decode slot are all free and
-already proven. `found_path.v`'s FIFO is a working model to copy.
+**Reuse the patterns, not the pins:** the display block's CDC approach and
+register-decode style are proven and worth copying, and `found_path.v`'s FIFO
+is a working model. Its *pins* are not reused — see the pin table above.
 
 **Test it the way `found_path` was tested** — `tb_uart_bridge` driving the
 module directly, loopback TX->RX, FIFO overflow, and a negative control.

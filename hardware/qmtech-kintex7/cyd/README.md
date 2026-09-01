@@ -28,8 +28,9 @@ four slow signals.
       host/       runs on the CM4 -- the UART bridge daemon and its protocol
       firmware/   runs on the ESP32 -- the UI
 
-    hdl/uart_bridge.v          (not yet written) FPGA-side UART + ESP EN/IO0
-    sim/tb_uart_bridge.v       (not yet written) its testbench
+    hdl/uart_bridge.v          FPGA-side UART + ESP EN/IO0, instantiated by
+                               odocrypt_gpio_wrapper.v on JP5 15-18
+    sim/tb_uart_bridge.v       its testbench -- 22 checks, all passing
 
 ## The constraint
 
@@ -39,19 +40,32 @@ leaves through JP5, which is FPGA BANK12. The link can therefore only be:
 
     Pi --(existing parallel bus)--> FPGA --(JP5)--> CYD
 
-That is not a workaround; it is the only topology the hardware allows. It also
-happens to free exactly the pins needed, because the ILI9341 vacates JP5 5-13.
+That is not a workaround; it is the only topology the hardware allows.
 
-## Wiring (proposed)
+It does NOT, however, mean the display has to be given up to make room. That
+was the original assumption here -- that the CYD would take over JP5 5-13 as
+the ILI9341 vacated them -- and it was simply wrong about how much of the
+header was spoken for. JP5 carries 42 BANK12 signal pins; this design
+constrains 15.
 
-| JP5 | Signal | Direction |
-|---:|---|---|
-| 5 | UART TX | FPGA -> CYD RX |
-| 7 | UART RX | CYD TX -> FPGA |
-| 8 | ESP_EN | FPGA -> CYD reset |
-| 9 | ESP_IO0 | FPGA -> CYD boot select |
-| 47/48 | GND | |
-| 49/50 | +5V | supply |
+## Wiring
+
+| JP5 | Ball | RTL port | CYD pin |
+|---:|---|---|---|
+| 15 | AF24 | `cyd_uart_tx` | RX (GPIO3) |
+| 16 | AF25 | `cyd_uart_rx` | TX (GPIO1) |
+| 17 | AB21 | `cyd_esp_en` | EN |
+| 18 | AC21 | `cyd_esp_io0` | IO0 |
+| 47/48 | | GND | GND |
+| 49/50 | | +5V | VIN |
+
+**Its own pins.** No mux, no build-time parameter, no either/or: the display
+block is untouched, one bitstream serves both panels, and a CYD can be brought
+up on a board whose ILI9341 is still wired -- which matters, because the
+ILI9341 is the thing that does not work and is being diagnosed.
+
+TX goes to RX. Wiring TX-TX gives a link where neither end hears anything and
+both look healthy.
 
 Both sides are 3.3V logic, so no level shifting. A 115200-baud bit period is
 8.7us against the failing SPI's 160ns — roughly fifty times the timing margin,
@@ -68,7 +82,8 @@ on four wires instead of nine.
 | `firmware/cyd_link.h` | link interface, transport-agnostic |
 | `firmware/cyd_ui.h` | screen model, ported from odo-ui |
 | `firmware/main.cpp` | entry point, no board support yet |
-| `hdl/uart_bridge.v` | not started |
+| `hdl/uart_bridge.v` | written, 22/22 checks pass, instantiated on JP5 15-18 |
+| bitstream | not yet built with it |
 
 ## Order of work
 

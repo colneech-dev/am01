@@ -63,19 +63,6 @@ module odocrypt_gpio_wrapper #(
     // testbench drives it to 0 as a negative control.
     parameter integer SETTLE_CYCLES_P = 4096,
 
-    // WHICH FRONT PANEL the JP5 display pins carry.
-    //
-    //   "ili9341"  the SPI panel wired directly to JP5 -- the current design,
-    //              and the DEFAULT, so this parameter changes nothing unless
-    //              it is set deliberately
-    //   "cyd"      an ESP32 Cheap Yellow Display on a UART; the ESP32 drives
-    //              its own panel, so these pins carry a serial link instead
-    //
-    // The two cannot coexist: they need the same balls. This is a build-time
-    // choice, which is honest about that -- and it is exactly the situation
-    // the case files already model with VARIANT_SCREEN.
-    parameter PANEL_IF = "ili9341",
-
     // OdoCrypt epoch seed that hdl/odocrypt/encrypt.v was generated for,
     // read back by the host at SEED_LO/SEED_HI as bitstream_epoch.
     //
@@ -134,7 +121,28 @@ module odocrypt_gpio_wrapper #(
     output wire        lcd_rst_n,
     output wire        lcd_bl,
     output wire        touch_cs_n,
-    input  wire        touch_irq
+    input  wire        touch_irq,
+
+    // ---------------------------------------------------------------
+    // CYD front panel: a serial link on its OWN JP5 pins.
+    //
+    // These do NOT share the display's pins. JP5 carries 21 BANK12 signal
+    // pairs and this design uses only 5-13 (display/touch) and 45-46 (fan),
+    // so pins 14-44 were sitting unconstrained -- thirty of them. Taking four
+    // means the ILI9341 and a CYD can be wired at the same time, one
+    // bitstream serves both, and the display path needs no mux, no
+    // build-time parameter, and no modification at all.
+    //
+    // An earlier revision of this reused lcd_sclk/lcd_miso/lcd_cs_n/lcd_dc.
+    // It worked, but it made the two panels mutually exclusive for no reason
+    // and left every one of those port names describing hardware it was no
+    // longer driving -- which is how the next person reading the XDC ends up
+    // scoping the wrong pin.
+    // ---------------------------------------------------------------
+    output wire        cyd_uart_tx,   // JP5 15 -> CYD RX
+    input  wire        cyd_uart_rx,   // JP5 16 <- CYD TX
+    output wire        cyd_esp_en,    // JP5 17 -> ESP32 EN (reset)
+    output wire        cyd_esp_io0    // JP5 18 -> ESP32 IO0 (boot select)
 );
 
     // -----------------------------------------------------------------
@@ -204,9 +212,9 @@ module odocrypt_gpio_wrapper #(
     // share that never arrived -- indistinguishable from bad luck.
     localparam [4:0] ADDR_FIFO_STAT   = 5'h18;  // read: {lost[7:0], 4'h0, depth[3:0]}
 
-    // CYD front panel (PANEL_IF="cyd"). Inert otherwise: the reads return 0
-    // and the writes go nowhere, so their presence cannot affect an ILI9341
-    // build. See hdl/uart_bridge.v and docs/PLAN-cyd-display.md.
+    // CYD front panel, on its own JP5 pins (15-18). Always present, and
+    // harmless with no CYD attached: an unread RX FIFO simply stays empty.
+    // See hdl/uart_bridge.v and docs/PLAN-cyd-display.md.
     localparam [4:0] ADDR_UART_DATA   = 5'h19;  // w: push TX byte  r: pop RX byte
     localparam [4:0] ADDR_UART_STAT   = 5'h1A;  // r: {err, rx_cnt, tx_cnt, flags}
     localparam [4:0] ADDR_ESP_CTRL    = 5'h1B;  // w: [0] EN  [1] IO0
@@ -595,94 +603,57 @@ module odocrypt_gpio_wrapper #(
     reg         lcd_ctrl_wr;
     reg  [15:0] lcd_ctrl_data;
 
-    localparam PANEL_IS_CYD = (PANEL_IF == "cyd");
-
-    // ---- JP5 pin muxing -------------------------------------------------
-    //
-    // RX HAS TO BE lcd_miso. Only two JP5 ports on this module are inputs --
-    // lcd_miso and touch_irq -- and a UART needs one. docs/PLAN-cyd-display.md
-    // originally put RX on JP5 pin 6, which is lcd_mosi: an OUTPUT, and so a
-    // pin that could never have received anything. Corrected here and there.
-    //
-    //   JP5 5  (AD21, lcd_sclk) -> UART TX
-    //   JP5 7  (AE22, lcd_miso) <- UART RX
-    //   JP5 8  (AF22, lcd_cs_n) -> ESP_EN
-    //   JP5 9  (AE23, lcd_dc)   -> ESP_IO0
-    //
-    // Unused outputs are parked at their INACTIVE levels, not at zero: a
-    // floating or wrongly-driven RST_N would hold a panel in reset, and
-    // lcd_bl low is simply a dark backlight. Getting this wrong is invisible
-    // until someone wires a panel to a CYD bitstream and blames the panel.
-    wire uart_tx_pin, uart_rx_pin;
-    wire esp_en_pin, esp_io0_pin;
-
-    generate
-    if (PANEL_IS_CYD) begin : g_panel_cyd
-        assign lcd_sclk   = uart_tx_pin;
-        assign lcd_mosi   = 1'b0;
-        assign lcd_cs_n   = esp_en_pin;
-        assign lcd_dc     = esp_io0_pin;
-        assign lcd_rst_n  = 1'b1;      // inactive: nothing held in reset
-        assign lcd_bl     = 1'b0;
-        assign touch_cs_n = 1'b1;      // inactive: chip select is active-low
-    end else begin : g_panel_ili
-        // Byte-for-byte what this file did before PANEL_IF existed.
-        assign lcd_sclk   = spi_sclk;
-        assign lcd_mosi   = spi_mosi;
-        assign lcd_cs_n   = spi_cs_lcd_n;
-        assign lcd_dc     = spi_dc;
-        assign lcd_rst_n  = lcd_rst_n_r;
-        assign lcd_bl     = lcd_bl_r;
-        assign touch_cs_n = spi_cs_touch_n;
-    end
-    endgenerate
-
-    assign uart_rx_pin = PANEL_IS_CYD ? lcd_miso : 1'b1;
+    // The display pins, untouched. The CYD link is on its own pins, so there
+    // is nothing to mux and these are exactly what they always were.
+    assign lcd_sclk   = spi_sclk;
+    assign lcd_mosi   = spi_mosi;
+    assign lcd_cs_n   = spi_cs_lcd_n;
+    assign lcd_dc     = spi_dc;
+    assign lcd_rst_n  = lcd_rst_n_r;
+    assign lcd_bl     = lcd_bl_r;
+    assign touch_cs_n = spi_cs_touch_n;
 
     // ---- CYD serial link -------------------------------------------------
-    // Instantiated only for PANEL_IF="cyd", so an ILI9341 build carries none
-    // of it and its netlist is unchanged.
+    // On JP5 15-18, which nothing else uses. The display block above is
+    // therefore untouched, and a board with an ILI9341 and no CYD sees no
+    // behavioural difference at all.
     wire [7:0] uart_rx_data;
     wire       uart_tx_full, uart_rx_empty;
     wire [4:0] uart_tx_cnt, uart_rx_cnt;
     wire [7:0] uart_rx_err;
     reg        uart_tx_wr, uart_rx_rd;
-    reg  [1:0] esp_ctrl_r = 2'b01;   // EN high = ESP32 running, IO0 low
 
-    assign esp_en_pin  = esp_ctrl_r[0];
-    assign esp_io0_pin = esp_ctrl_r[1];
+    // EN high = ESP32 running, IO0 low = normal boot. Both are the states a
+    // CYD needs in order to just run, so a panel that is wired up but never
+    // addressed behaves as though this block were not here.
+    reg  [1:0] esp_ctrl_r = 2'b01;
 
-    generate
-    if (PANEL_IS_CYD) begin : g_uart
-        uart_bridge #(
-            .CLK_HZ (50_000_000),   // bus_clk, sys_clk_50m straight through
-            .BAUD   (115200),
-            .FIFO_AW(4)
-        ) uart_i (
-            .clk     (bus_clk),
-            .rst_n   (bus_rst_n),
-            .tx_wr   (uart_tx_wr),
-            .tx_data (wdata_latched[7:0]),
-            .tx_full (uart_tx_full),
-            .rx_rd   (uart_rx_rd),
-            .rx_data (uart_rx_data),
-            .rx_empty(uart_rx_empty),
-            .tx_count(uart_tx_cnt),
-            .rx_count(uart_rx_cnt),
-            .rx_err  (uart_rx_err),
-            .uart_tx (uart_tx_pin),
-            .uart_rx (uart_rx_pin)
-        );
-    end else begin : g_no_uart
-        assign uart_tx_pin  = 1'b1;   // a UART line idles high
-        assign uart_rx_data = 8'h0;
-        assign uart_tx_full = 1'b0;
-        assign uart_rx_empty= 1'b1;
-        assign uart_tx_cnt  = 5'h0;
-        assign uart_rx_cnt  = 5'h0;
-        assign uart_rx_err  = 8'h0;
-    end
-    endgenerate
+    assign cyd_esp_en  = esp_ctrl_r[0];
+    assign cyd_esp_io0 = esp_ctrl_r[1];
+
+    // Instantiated unconditionally. On its own pins it conflicts with
+    // nothing, so one bitstream serves either panel and a CYD can be brought
+    // up without disturbing a working display. It costs a few dozen LUTs
+    // against the 73,711 this design already uses.
+    uart_bridge #(
+        .CLK_HZ (50_000_000),   // bus_clk, sys_clk_50m straight through
+        .BAUD   (115200),
+        .FIFO_AW(4)
+    ) uart_i (
+        .clk     (bus_clk),
+        .rst_n   (bus_rst_n),
+        .tx_wr   (uart_tx_wr),
+        .tx_data (wdata_latched[7:0]),
+        .tx_full (uart_tx_full),
+        .rx_rd   (uart_rx_rd),
+        .rx_data (uart_rx_data),
+        .rx_empty(uart_rx_empty),
+        .tx_count(uart_tx_cnt),
+        .rx_count(uart_rx_cnt),
+        .rx_err  (uart_rx_err),
+        .uart_tx (cyd_uart_tx),
+        .uart_rx (cyd_uart_rx)
+    );
 
     always @(posedge bus_clk or negedge bus_rst_n) begin
         if (!bus_rst_n) begin

@@ -259,16 +259,16 @@ set_property IOSTANDARD LVCMOS33 [get_ports user_key_sw3]
 # ---------------------------------------------------------------------------
 # Fan, on JP5's spare BANK12 I/O.
 #
-# Deliberately at the FAR END of the header (pins 43/44), immediately beside
+# Deliberately at the FAR END of the header (pins 45/46), immediately beside
 # the 5V0 pins at 49/50 -- so a fan lead picks up power and PWM from the same
-# corner, and pins 3..42 stay contiguous for a display/touch panel.
+# corner, and pins 5..44 stay contiguous for a display/touch panel.
 #
 # Bank 12's VCCO is the 3V3 rail (see the SW2/SW3 note above), so LVCMOS33.
 # A 4-pin fan's PWM input is 3.3V-tolerant; a 2-pin fan needs a MOSFET, gate
 # driven from fan_pwm.
 #
-#   JP5 pin 43 = BANK12_U24 -> fan_pwm      (24.4kHz PWM out)
-#   JP5 pin 44 = BANK12_U25 -> fan_tach_in  (open-collector tach, needs pull-up)
+#   JP5 pin 45 = BANK12_U24 -> fan_pwm      (24.4kHz PWM out)
+#   JP5 pin 46 = BANK12_U25 -> fan_tach_in  (open-collector tach, needs pull-up)
 # ---------------------------------------------------------------------------
 set_property PACKAGE_PIN U24 [get_ports fan_pwm]
 set_property PACKAGE_PIN U25 [get_ports fan_tach_in]
@@ -281,19 +281,25 @@ set_property PULLUP true [get_ports fan_tach_in]
 # ---------------------------------------------------------------------------
 # ILI9341 panel + XPT2046 touch, on JP5's spare BANK12 I/O.
 #
-# Contiguous at the low end of the header (pins 3-11) so a ribbon lands
-# naturally; the fan sits at 43/44 by the 5V0 pins, well clear.
+# Contiguous at the low end of the header (pins 5-13) so a ribbon lands
+# naturally; the fan sits at 45/46 by the 5V0 pins, well clear.
 #
 # SCLK/MOSI/MISO are shared between panel and touch controller; each has its
 # own chip select. Bank 12's VCCO is the 3V3 rail, so LVCMOS33 throughout --
 # both devices are 3.3V parts.
 #
-#   JP5  3 (AD21) lcd_sclk     JP5  9 (V21) lcd_bl
-#   JP5  4 (AE21) lcd_mosi     JP5 10 (W21) touch_cs_n
-#   JP5  5 (AE22) lcd_miso     JP5 11 (Y22) touch_irq
-#   JP5  6 (AF22) lcd_cs_n
-#   JP5  7 (AE23) lcd_dc
-#   JP5  8 (AF23) lcd_rst_n
+# PIN NUMBERS CORRECTED 2026-09-01. This block used to say 3-11. JP5 1-4 are
+# GND and VCCO_12, so the first signal pin is 5, and every number here was two
+# low; docs/JP5-WIRING.md, read off the vendor schematic at 400 dpi, is the
+# authority. The BALLS were always right, so no wiring that worked has changed
+# -- but the numbers are what someone counts along the header with.
+#
+#   JP5  5 (AD21) lcd_sclk     JP5 11 (V21) lcd_bl
+#   JP5  6 (AE21) lcd_mosi     JP5 12 (W21) touch_cs_n
+#   JP5  7 (AE22) lcd_miso     JP5 13 (Y22) touch_irq
+#   JP5  8 (AF22) lcd_cs_n
+#   JP5  9 (AE23) lcd_dc
+#   JP5 10 (AF23) lcd_rst_n
 # ---------------------------------------------------------------------------
 set_property PACKAGE_PIN AD21 [get_ports lcd_sclk]
 set_property PACKAGE_PIN AE21 [get_ports lcd_mosi]
@@ -320,6 +326,45 @@ set_property IOSTANDARD LVCMOS33 [get_ports touch_cs_n]
 set_property IOSTANDARD LVCMOS33 [get_ports touch_irq]
 # XPT2046 PENIRQ is open-drain.
 set_property PULLUP true [get_ports touch_irq]
+
+# ---------------------------------------------------------------------------
+# CYD front panel -- ESP32 serial link, on JP5 15-18.
+#
+# ITS OWN PINS, not the display's. An earlier revision multiplexed this onto
+# lcd_sclk/lcd_miso/lcd_cs_n/lcd_dc behind a PANEL_IF parameter, which forced
+# a choice of one panel or the other at build time and left four ports named
+# after hardware they were no longer driving. There was never a need: JP5
+# carries 21 BANK12 signal pairs and this design constrained only 11 of them,
+# so pins 14-44 were sitting entirely free. Thirty pins.
+#
+# Picking 15-18 leaves pin 14 (AA22) as a gap after the display block, so the
+# two groups do not get miscounted into each other on the header.
+#
+# Both ends are 3.3V (BANK12 VCCO is the 3V3 rail; the ESP32 is a 3.3V part),
+# so no level shifting.
+#
+#   JP5 15 (AF24) cyd_uart_tx  -> CYD RX
+#   JP5 16 (AF25) cyd_uart_rx  <- CYD TX
+#   JP5 17 (AB21) cyd_esp_en   -> ESP32 EN  (reset, active low)
+#   JP5 18 (AC21) cyd_esp_io0  -> ESP32 IO0 (boot select)
+#   JP5 47/48     GND
+#   JP5 49/50     5V0 supply
+# ---------------------------------------------------------------------------
+set_property PACKAGE_PIN AF24 [get_ports cyd_uart_tx]
+set_property PACKAGE_PIN AF25 [get_ports cyd_uart_rx]
+set_property PACKAGE_PIN AB21 [get_ports cyd_esp_en]
+set_property PACKAGE_PIN AC21 [get_ports cyd_esp_io0]
+
+set_property IOSTANDARD LVCMOS33 [get_ports cyd_uart_tx]
+set_property IOSTANDARD LVCMOS33 [get_ports cyd_uart_rx]
+set_property IOSTANDARD LVCMOS33 [get_ports cyd_esp_en]
+set_property IOSTANDARD LVCMOS33 [get_ports cyd_esp_io0]
+
+# A UART line idles HIGH. With no CYD attached this pin floats, and a floating
+# input drifts across the threshold and reads as a stream of start bits --
+# framing errors accumulating in rx_err on a board that has no panel at all.
+# The pull-up makes "nothing connected" read as "idle", which is the truth.
+set_property PULLUP true [get_ports cyd_uart_rx]
 
 # ---------------------------------------------------------------------------
 # Bitstream configuration for booting from the on-board SPI flash.

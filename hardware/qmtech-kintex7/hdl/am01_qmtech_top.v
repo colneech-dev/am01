@@ -61,6 +61,15 @@ module am01_qmtech_top (
     output wire        lcd_bl,
     output wire        touch_cs_n,
     input  wire        touch_irq,
+
+    // CYD front panel: a 115200-baud serial link on JP5 15-18, which nothing
+    // else uses. Separate pins from the display above, so both can be wired
+    // at once and one bitstream serves either. See docs/PLAN-cyd-display.md.
+    output wire        cyd_uart_tx,
+    input  wire        cyd_uart_rx,
+    output wire        cyd_esp_en,
+    output wire        cyd_esp_io0,
+
     input  wire        user_key_sw2,   // active low, used here as manual reset
     input  wire        user_key_sw3    // unused, reserved
 );
@@ -127,6 +136,11 @@ module am01_qmtech_top (
         .lcd_bl     (lcd_bl),
         .touch_cs_n (touch_cs_n),
         .touch_irq  (touch_irq),
+
+        .cyd_uart_tx (cyd_uart_tx),
+        .cyd_uart_rx (cyd_uart_rx),
+        .cyd_esp_en  (cyd_esp_en),
+        .cyd_esp_io0 (cyd_esp_io0),
 
         .gpio_data (gpio_data),
         .gpio_addr (gpio_addr),

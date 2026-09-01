@@ -1,4 +1,4 @@
-# JP5 — display, touch and fan wiring
+# JP5 — display, touch, fan and CYD wiring
 
 Everything the AM01 adds to the QMTECH board — the ILI9341 panel, its XPT2046
 touch controller, and the fan — connects through **JP5**, the board's 50-pin
@@ -158,7 +158,7 @@ module without the regulator, or a bypass of it.
 |--------:|-----------|----------|----------|
 | 45 | U24 | `fan_pwm` | blue — PWM in |
 | 46 | U25 | `fan_tach_in` | yellow — tach out |
-| 45–48 | — | — | black — GND |
+| 47/48 | — | — | black — GND |
 | 49/50 | — | — | red — +5 V |
 
 A whole 4-wire fan wires into the bottom corner of the header.
@@ -168,6 +168,42 @@ duty 30/40/55/75/100% at 40/55/70/85 °C. The fail-safe is deliberate: a raw
 XADC code of `0x0000` means *temperature unknown* and runs the fan at **100%**,
 never 0%. An unknown temperature must never be treated as a cold one.
 
+## CYD front panel — ESP32 serial link
+
+An alternative to the ILI9341 above: an ESP32 "Cheap Yellow Display" driving its
+own panel, linked to the FPGA by a UART. See `docs/PLAN-cyd-display.md`.
+
+| JP5 pin | FPGA ball | RTL port | CYD pin |
+|--------:|-----------|----------|---------|
+| 15 | AF24 | `cyd_uart_tx` | RX (GPIO3) |
+| 16 | AF25 | `cyd_uart_rx` | TX (GPIO1) |
+| 17 | AB21 | `cyd_esp_en` | EN |
+| 18 | AC21 | `cyd_esp_io0` | IO0 |
+| 47/48 | — | — | GND |
+| 49/50 | — | — | +5 V (VIN) |
+
+**These are its own pins, not the display's.** An earlier revision multiplexed
+the link onto `lcd_sclk`/`lcd_miso`/`lcd_cs_n`/`lcd_dc` behind a build-time
+`PANEL_IF` parameter, which forced a choice of one panel or the other and left
+four port names describing hardware they no longer drove. There was never a
+need for that: this design constrains 15 of JP5's 42 signal pins, so pins 14
+and 19–44 are still free. One bitstream now serves either panel, and both can
+be wired at once.
+
+Pin 14 (`AA22`) is deliberately skipped, so the display block (5–13) and this
+one do not run into each other when counting along the header.
+
+Both ends are 3.3 V — bank 12's VCCO is the 3V3 rail and the ESP32 is a 3.3 V
+part — so unlike the ILI9341 there is no level-shifting question here.
+
+`cyd_uart_rx` has `PULLUP true` in the XDC. Without it the pin floats when no
+CYD is attached, drifts across the input threshold, and reads as a stream of
+start bits — filling `rx_err` with framing errors on a board that has no panel
+at all.
+
+**Note the crossover.** TX goes to RX. Wiring TX–TX is the classic way to get a
+link where neither end hears anything and both look healthy.
+
 ## Power, and two things that will bite
 
 **There is no 12 V on this board.** The rails are `VIN` (6 V in), `5V0`, `3V3`,
@@ -176,7 +212,7 @@ steps down. No `12V` net exists anywhere in the schematic. **Fit a 5 V fan.**
 
 **If you insist on a 12 V fan, the tach will destroy an FPGA pin** unless you
 are careful. It is an open-collector output: pulled up to 12 V it presents 12 V
-to a 3.3 V input. Wire the fan's tach *directly* to pin 44 with **no external
+to a 3.3 V input. Wire the fan's tach *directly* to pin 46 with **no external
 pull-up** — the FPGA's own 3.3 V pull-up is already enabled — and share ground
 between the two supplies. `fan_pwm` at 3.3 V drives a real 4-wire fan's PWM
 input correctly; the standard specifies 3.3 V logic for it.
