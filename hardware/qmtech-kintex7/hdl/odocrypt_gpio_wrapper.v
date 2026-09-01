@@ -70,7 +70,7 @@ module odocrypt_gpio_wrapper #(
     // either build flow having to pass a generic. It MUST match the seed
     // stamped in encrypt.v's header -- tools/check-epoch.sh enforces that and
     // flags staleness against the current date. Update both together.
-    parameter [31:0] ODO_SEED = 32'd1787616000
+    parameter [31:0] ODO_SEED = 32'd1788480000
 ) (
     // ---------------------------------------------------------------
     // Bus clock domain -- the board's onboard 50MHz crystal
