@@ -61,17 +61,38 @@
 // this is the first setting here grounded in a number from this part
 // rather than from another vendor's.
 //
-// STATUS: clk_2x at 266.67MHz has NOT been shown to close timing on
-// real place-and-route. The block RAM itself has margin (ds182 rates
-// FMAX_BRAM at 458MHz for -1), so the path to watch is the address
-// muxing in sbox_large_mux2, not the memory.
+// STATUS: clk_2x at 2x clk_h has NOT been shown to close timing on real
+// place-and-route. The block RAM itself has margin (ds182 rates FMAX_BRAM
+// at 458MHz for -1), so the path to watch is the address muxing in
+// sbox_large_mux2, not the memory. Moot at present: nothing consumes
+// clk_2x, synthesis drops its BUFG, and it appears in no clock table.
+//
+// SPEED BUMP, 2026-09-01: MULT 16 -> 19, clk_h 133.33 -> 158.33MHz (+18.75%).
+//
+// Grounded in a measurement rather than a guess. The 0x0202 build closed at
+// WNS +1.398ns against a 7.500ns period, so the worst path takes 6.102ns and
+// the design is good for at least 163.9MHz. "At least" is the important part:
+// the tool stops optimising once it meets the constraint, so 163.9 is a lower
+// bound, and constraining tighter usually buys more.
+//
+//   MULT 18 -> 150.00MHz, 6.667ns, predicted slack +0.565ns
+//   MULT 19 -> 158.33MHz, 6.316ns, predicted slack +0.214ns   <- chosen
+//   MULT 20 -> 166.67MHz, 6.000ns, predicted slack -0.102ns   would fail
+//
+// VCO 950MHz is inside the -1 grade's 600-1200MHz range. bus_clk is
+// sys_clk_50m straight through and is NOT affected, so uart_bridge's
+// CLK_HZ=50_000_000 and the fan PWM divider stay correct -- worth stating
+// because a clock change that silently rebaudsthe panel would be found late.
+//
+// If this does not close, fall back to MULT 18 before anything else: it is
+// still +12.5% and has more than twice the predicted margin.
 //
 `timescale 1ns / 1ps
 
 module clk_gen_hash #(
     parameter CLKIN_PERIOD_NS = 20.000, // 50MHz input
-    parameter CLKFBOUT_MULT   = 16,     // VCO = 50MHz * 16 = 800MHz (7-series -1: 600-1200MHz range)
-    parameter CLKOUT_DIVIDE_2X = 3      // clk_2x = 800/3 = 266.67MHz, clk_h = 800/6 = 133.33MHz
+    parameter CLKFBOUT_MULT   = 19,     // VCO = 50MHz * 19 = 950MHz (7-series -1: 600-1200MHz range)
+    parameter CLKOUT_DIVIDE_2X = 3      // clk_2x = 950/3 = 316.67MHz, clk_h = 950/6 = 158.33MHz
 )
 (
     input  wire clk_in,     // from sys_clk_50m (via IBUF upstream)
