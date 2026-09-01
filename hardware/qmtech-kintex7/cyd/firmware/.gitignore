@@ -1,0 +1,5 @@
+# PlatformIO build output and downloaded dependencies.
+# .pio/libdeps/ holds TFT_eSPI and XPT2046_Touchscreen; both are pinned in
+# platformio.ini, so `pio pkg install` reproduces them and committing a few MB
+# of vendored library would only rot.
+.pio/
