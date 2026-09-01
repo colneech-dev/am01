@@ -795,8 +795,14 @@ ili_window_off_mm = [0, 0];     // display IS centred on this module
 //   91 - 7 - 9 = 75mm of glass, spanning the full 50mm width.
 cyd_module_mm     = [50, 91];
 cyd_window_mm     = [50, 75];
-cyd_margin_lo_mm  = 7;          // low-Y end
-cyd_margin_hi_mm  = 9;          // high-Y end -- carries the light sensor
+// SWAPPED 2026-09-01 (was lo=7, hi=9). The 9mm end carries the light sensor,
+// so swapping these turns the module round in the pocket -- and the sensor
+// aperture MUST follow it. That is derived from these two values below rather
+// than written out separately, so the two cannot disagree: getting it wrong
+// puts the hole 91mm from the sensor and blinds it, which is a whole reprint
+// to discover.
+cyd_margin_lo_mm  = 9;          // low-Y end -- carries the light sensor
+cyd_margin_hi_mm  = 7;          // high-Y end
 // (9 - 7)/2, pushing the window toward the 7mm end.
 cyd_window_off_mm = [0, -(cyd_margin_hi_mm - cyd_margin_lo_mm)/2];
 // The PCB is what the ledges bear on, so the pocket is the PCB thickness and
@@ -824,16 +830,26 @@ cyd_center_mm     = [30, 45];
 // from the edge, with the sensor strip at the top beside R21 and the two
 // mounting holes. The aperture in the PCB is clearly visible there.
 //
-// BOTH ends are still cut, because which way round the module is FITTED in
-// this case is not fixed -- the mounting holes are symmetric, so it can go in
-// either way and a lid that only works one way is a lid that gets fitted
-// wrong once. Two small apertures beat one correctly-sized aperture in the
-// wrong place: a reprint costs hours, a second 8mm slot costs tidiness. Set
-// cyd_ldr_both_ends = false once the build orientation is pinned down.
+// ONE aperture now. It was briefly cut at both ends while the build
+// orientation was open; the second hole was insurance against fitting the
+// module the other way round, and insurance you no longer need is just a hole
+// in the lid.
+//
+// cyd_ldr_far_end picks WHICH of the two. The band is measured 8-14mm from a
+// short edge, so there are two candidate positions on the 50mm axis and they
+// are mirror images. `true` keeps the one FURTHER from the high-X edge, i.e.
+// 8-14mm from the low-X edge. The render echoes the resulting position in mm
+// from both edges -- check that against the board rather than against this
+// comment.
+//
+// WHICH END ALONG Y is NOT a setting -- it is derived from the margins above,
+// because the sensor lives on the 9mm side by construction. Swap the margins
+// and the aperture follows on its own.
 cyd_ldr_from_glass_mm = 4;
 cyd_ldr_band_mm       = [8, 14];   // measured, from the short edge
 cyd_ldr_clear_mm      = 1;         // each side, for print tolerance
-cyd_ldr_both_ends     = true;      // until the correct edge is confirmed
+cyd_ldr_both_ends     = false;     // one hole only
+cyd_ldr_far_end       = true;      // keep the one further from the high-X edge
 cyd_ldr_slot_mm       = [cyd_ldr_band_mm[1] - cyd_ldr_band_mm[0]
                          + 2*cyd_ldr_clear_mm, 5];   // X extent, Y extent
 
@@ -1332,13 +1348,31 @@ module lid_screen_cutout() {
     // is doing two jobs: the sensor needs light, and at 3mm tall it would
     // otherwise foul the 4mm ledge above it.
     if (screen_ldr_slot_mm[0] > 0) {
-        ldr_cy = wy + screen_window_mm[1]/2 + screen_ldr_from_glass_mm;
+        // WHICH SIDE the sensor is on, derived rather than declared: it sits
+        // on the wider margin (the 9mm end) by construction, so this tracks
+        // cyd_margin_lo/hi automatically. Hard-coding +1 here is what would
+        // let a margin swap leave the aperture 91mm from the sensor.
+        ldr_sy = (cyd_margin_hi_mm >= cyd_margin_lo_mm) ? 1 : -1;
+        ldr_cy = wy + ldr_sy * (screen_window_mm[1]/2
+                                + screen_ldr_from_glass_mm);
         // Centre of the measured band, referenced from each short edge of the
         // module rather than from the window centre -- the measurement was
         // taken from the board edge, so that is the frame it belongs in.
         ldr_dx = screen_module_mm[0]/2
                  - (cyd_ldr_band_mm[0] + cyd_ldr_band_mm[1])/2;
-        for (sx = cyd_ldr_both_ends ? [-1, 1] : [-1])
+        // -1 puts it at band[] from the LOW-X edge; +1 mirrors it.
+        ldr_sx = cyd_ldr_far_end ? -1 : 1;
+        // Stated in millimetres from BOTH edges, so the print can be checked
+        // against the board instead of against a comment.
+        echo(str("   CYD light-sensor aperture: ",
+                 cyd_ldr_band_mm[0] - cyd_ldr_clear_mm, "-",
+                 cyd_ldr_band_mm[1] + cyd_ldr_clear_mm,
+                 "mm from the low-X edge, ",
+                 screen_module_mm[0] - cyd_ldr_band_mm[1] - cyd_ldr_clear_mm,
+                 "-",
+                 screen_module_mm[0] - cyd_ldr_band_mm[0] + cyd_ldr_clear_mm,
+                 "mm from the high-X edge"));
+        for (sx = cyd_ldr_both_ends ? [-1, 1] : [ldr_sx])
             translate([wx + sx*ldr_dx - screen_ldr_slot_mm[0]/2,
                        ldr_cy - screen_ldr_slot_mm[1]/2, -1])
                 cube([screen_ldr_slot_mm[0], screen_ldr_slot_mm[1],
