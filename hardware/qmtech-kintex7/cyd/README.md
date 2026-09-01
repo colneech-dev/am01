@@ -132,10 +132,63 @@ on four wires instead of nine.
 | `firmware/cyd_ui.h` | screen model, ported from odo-ui |
 | `firmware/cyd_ui.c` | navigation + touch, 41/41 checks |
 | `firmware/cyd_fmt.c` | value formatters, 29/29 checks |
-| `firmware/board_probe.cpp` | **builds a real 317 KB image**; needs a board to flash |
+| `firmware/board_probe.cpp` | **FLASHED AND PASSING on real hardware, 2026-09-01** |
 | `firmware/main.cpp` | does NOT link -- cyd_link_uart_* and cyd_ui_draw unimplemented |
 | `hdl/uart_bridge.v` | 22/22, instantiated on JP5 15-18 |
 | bitstream | VERSION 0x0202 built; the 158 MHz build carries it at the current epoch |
+
+## Hardware bring-up result, 2026-09-01
+
+`board_probe` flashed and run on the real panel. **Display and touch both
+work**, which retires the biggest risk on this track.
+
+    === AM01 CYD board probe ===
+    tft: 240x320
+    bar: RED / GREEN / BLUE / WHITE
+    ready -- touch the panel
+    touch raw=(1967,2308) z=2042  mapped=(120,185)
+    touch raw=(2258,1584) z=1819  mapped=(140,120)
+
+**Touch reads correctly on its own VSPI bus.** That was the assumption most
+likely to be wrong -- the CYD's display-on-HSPI / touch-on-VSPI split is why
+so many sketches show a perfect display and a dead touchscreen. Leaving
+TOUCH_CS unset for TFT_eSPI and driving the XPT2046 on a separate SPIClass is
+confirmed correct.
+
+Chip: ESP32-D0WD-V3 rev v3.1, 4MB flash, dual core 240MHz,
+MAC c0:cd:d6:84:64:34.
+
+### Flashing this board needs the BOOT button held
+
+esptool CANNOT enter download mode on its own here. RTS -> EN is wired, so it
+can reset the chip, but DTR -> IO0 is NOT, so it cannot select the boot mode:
+every attempt reports "Wrong boot mode detected (0x13)". The sequence that
+works is hold BOOT, tap RST, KEEP HOLDING BOOT through the whole operation --
+each esptool invocation reopens the port and pulses RTS, and holding BOOT
+means every one of those resets lands back in download mode.
+
+This is the same missing-EN/IO0 problem the wired link has, seen over USB. It
+makes verifying the RTC_CNTL_FORCE_DOWNLOAD_BOOT software path a priority
+rather than a nicety: without it, flashing over JP5 would need the case open
+and a finger on a button, which defeats the point.
+
+### The factory demo is backed up
+
+    /c/tmp/cyd_backup/cyd_factory_4MB.bin   4,194,304 bytes
+
+Taken before flashing anything. It is the known-good reference: if our
+firmware misbehaves, restoring this re-establishes "the hardware is fine"
+independently of our code -- exactly the discriminator the ILI9341 debugging
+never had. MOVE IT SOMEWHERE PERMANENT; /c/tmp is not.
+
+    esptool --chip esp32 --port COM8 --baud 921600             write_flash 0x0 cyd_factory_4MB.bin
+
+### Touch calibration is NOT done
+
+The raw values above are real but only cover the middle of the panel. The
+RAW_X/Y_MIN/MAX constants in board_probe.cpp are the usual defaults, not
+measured for this unit. Touch the four corners and read off the extremes
+before the UI relies on them.
 
 ## Order of work
 
