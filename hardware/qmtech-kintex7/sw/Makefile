@@ -62,6 +62,23 @@ LIBS_MINER := $(LIBS_BASE) $(shell $(PKG_CONFIG) --libs libgpiod 2>/dev/null || 
 # ("Relocations in generic ELF (EM: 62)").
 #
 # Basenames across all source groups are unique, so flattening is safe.
+#
+# THE SAME TRAP CAUGHT ME AGAIN ON 2026-09-01, in the other direction: obj/
+# held aarch64 objects from a cross build, and a native `make` fed them to the
+# x86-64 linker ("EM: 183"). Pass OBJ_DIR explicitly for anything but a plain
+# native build, and rm -rf the directory if in doubt -- it is cheap.
+#
+# CROSS-BUILDING FOR THE BOARD. The CM4 image has no compiler, so odo-miner is
+# cross-built with the Buildroot toolchain that produced the rootfs:
+#
+#   BR=~/br-am01/buildroot/output/host
+#   make OBJ_DIR=obj-cross CC=$BR/bin/aarch64-buildroot-linux-gnu-gcc #        PKG_CONFIG=$BR/bin/pkg-config odo-miner
+#
+# It has to be that toolchain rather than a distro aarch64-linux-gnu-gcc:
+# am01_gpio_bus.c needs libgpiod, the board ships 1.6.5 (the v1 API), and a
+# current distro has 2.x -- which renamed most of the API, so it does not just
+# fail to link, it fails to compile. The sysroot at
+# $BR/aarch64-buildroot-linux-gnu/sysroot has the matching 1.6.5 headers.
 
 OBJ_DIR ?= obj
 
