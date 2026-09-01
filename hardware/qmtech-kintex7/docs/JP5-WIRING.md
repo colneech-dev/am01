@@ -204,6 +204,22 @@ at all.
 **Note the crossover.** TX goes to RX. Wiring TX–TX is the classic way to get a
 link where neither end hears anything and both look healthy.
 
+**At the CYD end this is connector P5**, a 4-pin JST carrying `VIN, TX, RX,
+GND` - power and the serial link together, so no soldering and no header work.
+Read off the board 2026-09-01 (silkscreen `ESP32-2432S028`). CONFIRM WHICH
+PHYSICAL PIN IS WHICH WITH A METER before plugging in: reversing VIN and GND
+destroys the panel, and that is not something to take off a photograph.
+
+The other two JSTs do NOT carry EN or IO0 - P3 is `GND, IO35, IO22, IO21`
+(IO35 is input-only, ESP32 34-39) and CN1 is `GND, IO22, IO27, 3.3V`. The plan
+had assumed those signals would be available; they are not. So `cyd_esp_en`
+and `cyd_esp_io0` on JP5 17/18 have nowhere to land, and the ESP32 is instead
+expected to enter its ROM bootloader in software
+(`RTC_CNTL_FORCE_DOWNLOAD_BOOT`, not yet verified on hardware). The two JP5
+pins stay constrained and driven to their inactive states; wire them to the
+RST/BOOT button pads only if you want to recover a bricked panel without
+opening the case. See `cyd/README.md`.
+
 ## Power, and two things that will bite
 
 **There is no 12 V on this board.** The rails are `VIN` (6 V in), `5V0`, `3V3`,
