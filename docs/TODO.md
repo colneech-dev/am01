@@ -192,10 +192,49 @@ in the same bitstream.
 
 ## 3. Epoch rollover — 2026-09-04 00:00 UTC
 
-After that the core mines rejects regardless of everything else.
-`tools/check-epoch.sh` now prints the correct regeneration command including
-the `--bram-out-reg` flag state, so follow what it says rather than the
-command in this file or in anyone's memory.
+**BUILT AND WAITING as of 2026-09-01 10:39. Nothing to do until the rollover
+except flash it.**
+
+    vivado/artifacts/am01_VER0x0202_epoch1788480000_DO-NOT-FLASH-BEFORE-2026-09-04.bit
+    md5 de2b2a6f387802f2e94fddb772ac9106
+
+DO NOT FLASH IT EARLY. Until 2026-09-04 00:00 UTC it mines rejects, exactly
+the way the current bitstream will start to after that instant. The board is
+on `am01_v0201_GOOD.bit` / epoch 1787616000 and should stay there until then.
+
+`tools/check-epoch.sh` reports this state directly (exit 3, "PREPARED, 1
+epoch(s) AHEAD") and prints the date it becomes flashable. It previously said
+"STALE by -1 epoch(s)" here and told you to regenerate backwards, which would
+have silently undone the preparation — fixed 2026-09-01.
+
+What is in it:
+
+  * `encrypt.v` regenerated for seed 1788480000, `ODO_SEED` matched. Before
+    regenerating, `./odo_gen 1787616000 4 encrypt_4` was verified to reproduce
+    the in-tree `encrypt.v` byte-for-byte, so the tool and flags are provably
+    the ones that built what is running and the seed was the only variable.
+  * VERSION 0x0202 — the CYD UART registers, riding along rather than costing
+    their own 1h35m build. Purely additive; major stays 2, so `rearm_on_find`
+    is unchanged and no host update is needed.
+
+Timing and utilisation, against the 0x0201 in service:
+
+    LUTs   73,711 -> 73,838   (+127)
+    FFs    54,606 -> 54,700   (+94)
+    BRAM      420 ->    420   (unchanged, 94.4%)
+    IOB        41 ->     45   (+4, the CYD pins)
+    WNS     1.468 ->  1.398 ns
+
+0 routing errors, 0 failing endpoints, hold met. The WNS movement is placement
+variance on the 133 MHz hash clock, not the UART — the UART's own worst path
+has 12.6 ns of slack in the 50 MHz domain.
+
+Note the sbox changed, so this is a genuinely different netlist from the
+0x0201 numbers and a like-for-like comparison only holds loosely.
+
+**After flashing, re-run `tools/check-epoch.sh`** — it should report CURRENT,
+and the daemon's staleness check compares ODO_SEED against the pool's job
+epoch, so a mismatch shows up as rejects rather than silence.
 
 ---
 
