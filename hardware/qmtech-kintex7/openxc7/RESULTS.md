@@ -347,6 +347,135 @@ session. Key facts that change confidence in tonight's approach:
   than a parameter sweep; flagged as the real next investment, not
   attempted tonight.
 
-**Next test launched:** `TILE_NETS=8 WIRE_DEMAND=1.0` (seed 9), no
-`CONGESTION_MAP` -- the one concretely-grounded correction from the above,
-replacing the blind `WIRE_DEMAND=5.0` guess.
+**`TILE_NETS=8 WIRE_DEMAND=1.0` (seed 9) result: also killed, also
+underperforming** -- iter=1: 349740 (vs wd=5.0's 301961 -- WORSE), iter=3:
+27125 (vs 7021). The 1-miner-screened "optimum" of 1.0 does not transfer to
+this regime either. Across every weight/map combination tried tonight
+(`WIRE_DEMAND` 1.0/5.0, `CONGESTION_W` 0.5/2, with and without
+`CONGESTION_MAP`), the plain `TILE_NETS=8 WIRE_DEMAND=5.0` configuration
+(seed 5, best combined overuse 61 at iter=324) remains the best result
+found. Killed at iter=3 to redirect effort toward Option A (below), which
+sidesteps the BRAM-occupancy wall directly instead of continuing to search
+this parameter space.
+
+---
+
+# Option A / Option B: escape the BRAM wall instead of fighting it (2026-09-01)
+
+Every 2-miner attempt above fights the same 94% BRAM occupancy wall through
+placement/routing tricks. Two alternatives instead **reduce the resource
+demand directly** -- sized and one of them (A) launched tonight; the other
+(B) is planned, not executed, for pickup later. Both build on the "known
+good" recipe throughout this project: `odo_gen --bram-out-reg`,
+`BRAM_OUTREG=0` (register in fabric), `BRAM_FP=1 BRAM_YBASE=40` (starting
+point -- see caveat below), `CRIT_DIST=1.0` (build.sh default).
+
+## THROUGHPUT is discretized, not a dial
+
+`odo_gen`'s `THROUGHPUT` argument is literally clocks-per-hash, an integer.
+Internally `unrolling = (ROUNDS-1)/throughput + 1` (`ROUNDS=84`), and the
+*real* measured throughput is `periods = (ROUNDS-1)/unrolling + 1` --
+integer division, so hashrate only changes at specific `unrolling`
+thresholds. Checked exhaustively: `unrolling=21..27` all give `periods=4`
+(today's baseline, 1.00x), `unrolling=28..41` all give `periods=3` (1.33x,
+no better with more area), `unrolling=42` gives `periods=2` (2.00x). There
+is no resource-efficient point between these -- "THROUGHPUT=3.5" is not
+buildable; 28 is already the minimum-area point for 1.33x.
+
+BRAM per unrolled round, measured from the existing 1-miner design: exactly
+**20** (420 BRAM / unrolling=21). Scales linearly with unrolling.
+
+| `THROUGHPUT` | unrolling | BRAM | occupancy | hashrate (same Fmax) |
+|---|---|---|---|---|
+| 4 (current 1-miner) | 21 | 420 | 47% | 1.00x |
+| 3 | 28 | 560 | 63% | 1.33x |
+| 2 | 42 | 840 | 94% | 2.00x -- **same wall as 2 miners** |
+| 1 | 84 | 1680 | 189% | doesn't fit |
+
+`THROUGHPUT=2` alone is not an escape from the wall -- it's the *same*
+840/890 occupancy as `NUM_MINERS=2`, reached via one 42-stage pipeline
+instead of two 21-stage ones. Not obviously better (arguably worse: one
+long serial chain instead of two chains that can each occupy their own half
+of the die), and not attempted for that reason.
+
+## LUTRAM conversion: the direct fix for BRAM occupancy
+
+LUT occupancy is nowhere near its ceiling at any config tried (~10-21%
+typical). Xilinx SLICEM LUTs can implement small RAMs (`ram_style =
+"distributed"`) instead of block RAM (`"block"`) -- a per-module synthesis
+attribute, no schedule/latency change. 10 distinct large-sbox module types
+exist (`STATE_SIZE = DIGEST_BITS/WORD_BITS = 640/64 = 10`), each
+instantiated once per unrolled round, so converting N of 10 gives almost
+exactly N/10 of BRAM demand moved to LUT fabric. Cost model (measured
+elsewhere, see `am01-hashrate-scaling-options` memory): ~420 LUTs per
+converted instance.
+
+## Option A (LAUNCHED 2026-09-01): `THROUGHPUT=2` + `--lutram=3`
+
+Converts 3 of 10 sbox types to LUTRAM, bringing `THROUGHPUT=2`'s BRAM
+demand from the 94% wall down to the same 63% that `THROUGHPUT=3` reaches
+unaided -- while keeping the full 2.00x hashrate:
+
+| | BRAM | LUT | hashrate |
+|---|---|---|---|
+| computed | 560 (63%) | ~208k (51%, **never tested on this design**) | 2.00x |
+
+**Implementation, done tonight:**
+* `odo_gen` gained `--lutram=N`: marks the first N of the 10 large-sbox
+  module types `ram_style="distributed"` instead of `"block"`.
+* `hdl/odocrypt/miner_t2.v`: `THROUGHPUT=2` variant of the pinned `miner.v`
+  (THROUGHPUT and the encrypt module name are compiled-in, not
+  parameterised -- a separate file was cheaper and safer than making
+  miner.v itself parametric). Must never be compiled alongside `miner.v`
+  (duplicate module names -- fails loudly, not silently).
+* `run_option_a.sh`: the known-good build recipe with `miner.v` swapped for
+  `miner_t2.v` and the wider `--lutram=3` core. Asserts key taps (**1 4 7**,
+  unchanged -- `RoundKeyTap` depends on `RoundCycles()`, i.e.
+  `--bram-out-reg`, not on throughput) and the lutram split (3
+  distributed / 7 block) before spending hours on synthesis.
+* Functional equivalence (`--lutram=3` vs `--lutram=0`, both `THROUGHPUT=2`,
+  same schedule/latency -- verified identical at 254 cycles by inspecting
+  the generated RTL) is running via `run_lutram_equiv.sh` /
+  `tb_lutram_equiv.v`, same queue-compare + negative-control methodology as
+  `run_sched_equiv.sh`. **Check its verdict (`sched_pos.out`/`sched_neg.out`
+  equivalent: `lutram_pos.out`/`lutram_neg.out` in `/tmp`) before trusting
+  any Option A result** -- a `--lutram` bug would produce a fast-looking
+  netlist with wrong digests, the exact failure mode `RoundKeyTap` already
+  demonstrated once this session.
+* Synthesis launched (`run_option_a.sh`, tag `optionA_t2_lutram3`, out dir
+  `out_option_a/`). Check `option_a.console` and `seed_ab_results.tsv` for
+  the outcome.
+
+**Real, unproven risk:** 51% LUT occupancy is a new regime for this design
+-- everything measured so far tops out around 21-25%. `BRAM_YBASE=40` is
+carried over from the 420-BRAM 1-miner layout; this design needs 560, so it
+may spill past Y139 and need retuning -- watch the floorplan report for
+spills before trusting the routed number.
+
+## Option B (PLANNED, NOT EXECUTED -- pick up after Option A): two `THROUGHPUT=3` miners
+
+Two independent `THROUGHPUT=3` wide miners (each 1.33x, 560 BRAM alone) for
+a higher hashrate ceiling than Option A:
+
+| target | BRAM | LUT | hashrate |
+|---|---|---|---|
+| BRAM held at Option A's 63% margin, `--lutram` on both | 560 (63%) | ~359k (**88%**, high risk) | **2.67x** |
+| BRAM allowed to fill the device, `--lutram` on both | 890 (100%, no margin) | ~214k (53%) | 2.67x |
+
+Higher ceiling than Option A (2.67x vs 2.00x) but trades BRAM congestion for
+LUT congestion of similar severity (88%) at the safe-BRAM setting, or
+leaves zero BRAM margin at the LUT-safe setting -- neither is as clean as
+Option A's 63%/51% split. **Do not build until Option A's real routed
+result is in** -- if Option A's 51% LUT occupancy turns out to already be
+hard to route, Option B's 88% (or 53% LUT + 100% BRAM) is almost certainly
+worse, and the sizing above should be treated as illustrative rather than a
+target to build toward blindly.
+
+**To pick this up:** it needs its own `run_option_b.sh` (two
+`am01_qmtech_top`-style top levels or a `NUM_MINERS(2)`-style top wired to
+two `THROUGHPUT=3 --lutram=N` cores -- N to be chosen once Option A's real
+LUT-occupancy routability is known, not before), its own floorplan (two
+560-BRAM regions, closer in spirit to tonight's `floorplan_brams.py`
+balanced-partition work than to Option A's single-region layout), and its
+own functional-equivalence run (same `tb_lutram_equiv.v` pattern, different
+`THROUGHPUT`/`--lutram` values). None of that exists yet.
