@@ -35,6 +35,28 @@ module found_path #(
     // One-cycle pulse: a complete job has been snapshotted for the cores.
     input  wire                      commit,
 
+    // FULL RESYNC, host-driven. Distinct from `commit`, which is a job change
+    // and deliberately preserves `busy` (see the handoff block).
+    //
+    // THIS EXISTS BECAUSE ITS ABSENCE TOOK THE MINER DOWN FOR AN HOUR on
+    // 2026-09-01. `busy` is set when a nonce is handed to the bus domain and
+    // was clearable ONLY by the host's ack. Kill the host between those two
+    // points -- a SIGTERM during a deploy will do it -- and `busy` latches
+    // with no ack ever coming. The handoff then stalls forever: no further
+    // nonce can be loaded, the FIFO fills, and every subsequent find
+    // increments `lost` until it saturates.
+    //
+    // Nothing could clear it. This module had no reset input at all, so
+    // `busy` took its initial value only at configuration; OP_SOFT_RESET
+    // could not reach it, and `commit` deliberately does not touch it. The
+    // observed symptom was a miner that reconnected, took jobs, dispatched
+    // them, and found nothing -- surviving process restarts, and recovered
+    // only by reloading the FPGA over JTAG.
+    //
+    // Safe to assert whenever the host has no read in flight, which is
+    // exactly what daemon startup is.
+    input  wire                      soft_reset,
+
     // One-cycle strobes and their nonces, straight from the cores.
     input  wire [NUM_MINERS-1:0]     found_in,
     input  wire [32*NUM_MINERS-1:0]  nonce_in_flat,
@@ -162,7 +184,21 @@ module found_path #(
     end
 
     always @(posedge clk) begin
-        if (commit) begin
+        if (soft_reset) begin
+            // Write side of the resync. Ordered first, same reasoning as the
+            // handoff block: a resync that the normal path can override in
+            // the same cycle is not one you can rely on.
+            //
+            // `lost` is cleared too. It is a congestion counter, and carrying
+            // a saturated 255 across a deliberate resync would mask the next
+            // real problem behind the last one. The host should READ it
+            // before resetting -- am01-uartd and the miner both do, and it is
+            // the single most useful number for spotting that finds are being
+            // dropped on the floor.
+            wr_ptr     <= 0;
+            pend_valid <= 1'b0;
+            lost       <= 8'h0;
+        end else if (commit) begin
             // FLUSH ON COMMIT. Anything queued was found against the PREVIOUS
             // header and cannot be a solution for the new one, so handing it
             // to the host would only produce a nonce it must reject. Dropping
@@ -188,7 +224,7 @@ module found_path #(
             pend_nonce <= stash_nxt_dat;
         end
 
-        if (lost_inc != 3'd0 && !commit) begin
+        if (lost_inc != 3'd0 && !commit && !soft_reset) begin
             // Saturating. A loss counter that wraps reads as "no losses" once
             // every 256 of them, which is worse than not having one.
             if ({1'b0, lost} + {6'd0, lost_inc} >= 9'd255) lost <= 8'hFF;
@@ -214,7 +250,21 @@ module found_path #(
         ack_s2 <= ack_s1;
         ack_s3 <= ack_s2;
 
-        if (ack_pulse)
+        if (soft_reset) begin
+            // The whole handoff, back to its configuration state. Ordered
+            // FIRST so it wins over every case below -- a resync that could
+            // be overridden by the same cycle's normal path would be a
+            // resync you cannot rely on.
+            busy         <= 1'b0;
+            rd_ptr       <= 0;
+            nonce_latch  <= 32'h0;
+            // nonce_toggle is deliberately LEFT ALONE. It is a two-phase
+            // handshake: forcing its level would either look like a spurious
+            // new nonce to the bus domain or desynchronise the two sides.
+            // Clearing `busy` is what unblocks this; the toggle takes care of
+            // itself on the next real find.
+        end
+        else if (ack_pulse)
             busy <= 1'b0;
 
         // Flush side owned by this block -- see the commit handling above.
@@ -223,7 +273,10 @@ module found_path #(
         // torn-read this design just fixed. That one nonce belongs to the old
         // job and the host will reject it; one stale nonce per job change is
         // the price of not racing the bus.
-        if (commit)
+        if (soft_reset) begin
+            /* handled above */
+        end
+        else if (commit)
             rd_ptr <= 0;
         else if (!busy && !empty) begin
             nonce_latch  <= fifo_mem[rd_ptr[FIFO_AW-1:0]];

@@ -29,6 +29,8 @@ module tb_found_path;
     reg  [NM-1:0]    found_in = {NM{1'b0}};
     reg  [32*NM-1:0] nonce_in = {(32*NM){1'b0}};
     reg              ack      = 1'b0;
+    reg              soft_rst = 1'b0;
+    reg              wedge_tog = 1'b0;   // T9's own; prev_toggle belongs to the drain monitor
 
     wire        nonce_toggle;
     wire [31:0] nonce_latch;
@@ -39,6 +41,7 @@ module tb_found_path;
     found_path #(.NUM_MINERS(NM), .SETTLE_CYCLES(SETTLE), .FIFO_AW(3)) dut (
         .clk          (clk),
         .commit       (commit),
+        .soft_reset   (soft_rst),
         .found_in     (found_in),
         .nonce_in_flat(nonce_in),
         .ack_toggle   (ack),
@@ -231,6 +234,97 @@ module tb_found_path;
         check(ng_reported === 1'b1,
               "NEGATIVE CONTROL: with SETTLE=0 the same find IS reported");
 
+        // ================================================================
+        // T9: THE WEDGE. This is a regression test for a real outage.
+        //
+        // On 2026-09-01 the miner was restarted to deploy a binary. It came
+        // back, connected, took jobs, dispatched them -- and found nothing,
+        // indefinitely. It stayed dead when the previous binary was restored,
+        // which is what ruled the software out. The registers read
+        // FIFO_STAT=0xff00: lost saturated at 255 with hash_active still 1.
+        //
+        // Cause: `busy` is set when a nonce is handed to the bus domain and
+        // was clearable ONLY by the host's ack. A SIGTERM landing between
+        // those two points latches it with no ack ever coming, and this
+        // module had no reset input, so nothing could clear it -- not
+        // OP_SOFT_RESET, not `commit`, not restarting the host. Recovery took
+        // a JTAG reload of the FPGA.
+        //
+        // The test reproduces exactly that: take a find, never ack it, and
+        // confirm the path is stuck. Then assert soft_reset and confirm it
+        // recovers. Without the fix the second half fails.
+        // ================================================================
+        $display("");
+        $display("-- T9: host dies mid-read; only a resync recovers it --");
+
+        // The drain monitor above auto-acks every handover. T9 is ABOUT a
+        // missing ack, so it must be off or the wedge cannot be reproduced.
+        draining = 1'b0;
+        soft_rst = 1'b0;
+        commit   = 1'b0;
+        @(negedge clk);
+
+        // Settle, then produce a find and DO NOT ack it -- the host is gone.
+        commit = 1'b1; @(negedge clk); commit = 1'b0;
+        repeat (SETTLE + 4) @(negedge clk);
+
+        wedge_tog = nonce_toggle;
+        found_in = 3'b001; nonce_in = {32'h0, 32'h0, 32'hDEAD0001};
+        @(negedge clk);
+        found_in = 3'b000;
+        repeat (4) @(negedge clk);
+        check(nonce_toggle !== wedge_tog,
+              "a find is handed over (host is about to die here)");
+
+        // Host is dead: no ack. Now generate plenty more finds.
+        wedge_tog = nonce_toggle;
+        for (i = 0; i < 40; i = i + 1) begin
+            found_in = 3'b001;
+            nonce_in = {32'h0, 32'h0, 32'hBEEF0000 + i[31:0]};
+            @(negedge clk);
+            found_in = 3'b000;
+            @(negedge clk);
+        end
+
+        check(nonce_toggle === wedge_tog,
+              "STUCK: with no ack, no further nonce is handed over");
+        // 40 finds into an 8-deep FIFO loses about 32. SATURATION needs 255+,
+        // which is what the field failure showed after running wedged for a
+        // while -- not something 40 finds can reach. Asserting 0xFF here was
+        // my error, and it is worth leaving the arithmetic written down.
+        check(lost_count >= 8'd30 && lost_count < 8'hFF,
+              "and finds pile up in the lost counter (~32 of 40)");
+
+        // A job change does NOT rescue it -- commit deliberately preserves
+        // busy, which is exactly why the outage survived a host restart.
+        commit = 1'b1; @(negedge clk); commit = 1'b0;
+        repeat (SETTLE + 4) @(negedge clk);
+        wedge_tog = nonce_toggle;
+        found_in = 3'b001; nonce_in = {32'h0, 32'h0, 32'hCAFE0001};
+        @(negedge clk);
+        found_in = 3'b000;
+        repeat (6) @(negedge clk);
+        check(nonce_toggle === wedge_tog,
+              "a NEW JOB does not clear it either (why a restart did not help)");
+
+        // The fix.
+        soft_rst = 1'b1; @(negedge clk); soft_rst = 1'b0;
+        repeat (2) @(negedge clk);
+        check(lost_count === 8'h0,
+              "soft_reset clears the lost counter for the next real congestion");
+
+        commit = 1'b1; @(negedge clk); commit = 1'b0;
+        repeat (SETTLE + 4) @(negedge clk);
+        wedge_tog = nonce_toggle;
+        found_in = 3'b001; nonce_in = {32'h0, 32'h0, 32'h5A5A0001};
+        @(negedge clk);
+        found_in = 3'b000;
+        repeat (6) @(negedge clk);
+        check(nonce_toggle !== wedge_tog,
+              "RECOVERED: after soft_reset, finds are handed over again");
+        check(nonce_latch === 32'h5A5A0001,
+              "and it is the new nonce, not a stale one from before");
+
         $display("");
         if (errors == 0) $display("=== ALL CHECKS PASSED ===");
         else             $display("=== %0d CHECK(S) FAILED ===", errors);
@@ -249,6 +343,7 @@ module tb_found_path;
     found_path #(.NUM_MINERS(NM), .SETTLE_CYCLES(0), .FIFO_AW(3)) ng_dut (
         .clk          (clk),
         .commit       (commit),
+        .soft_reset   (1'b0),        // never resynced: one offer is all it needs
         .found_in     (found_in),
         .nonce_in_flat(nonce_in),
         .ack_toggle   (1'b0),        // never acked: one offer is all we need

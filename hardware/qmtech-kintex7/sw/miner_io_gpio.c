@@ -70,6 +70,37 @@ int miner_io_pipe_init(void)
         g_version = 0;
     }
 
+    /* RESYNC THE FOUND PATH BEFORE MINING, and report what we are clearing.
+     *
+     * On 2026-09-01 a deploy left the FPGA wedged: the previous process was
+     * killed between a nonce handover and its ack, which latched found_path's
+     * `busy` with no ack ever coming. Every subsequent find was then dropped.
+     * It survived restarts -- nothing host-side could clear it -- and needed a
+     * JTAG reload, costing an hour of mining.
+     *
+     * A saturated lost counter here is the fingerprint of exactly that, so it
+     * is READ FIRST and reported loudly. Reading before resetting matters:
+     * the reset clears it, and a number nobody saw is a number that may as
+     * well not exist -- which is how the outage went undiagnosed for as long
+     * as it did.
+     *
+     * Needs VERSION >= 0x0203 to actually reach found_path; older bitstreams
+     * accept the write and simply do less, which is harmless. */
+    uint8_t lost0 = 0, depth0 = 0;
+    if (am01_bus_read_fifo_stat(g_bus, &lost0, &depth0) == 0 && lost0 > 0) {
+        fprintf(stderr,
+                "miner_io_pipe_init: found-FIFO reports %u lost find(s)%s, "
+                "depth %u -- the previous run left finds undrained\n",
+                lost0, lost0 == 0xFF ? " (SATURATED)" : "", depth0);
+        if (lost0 == 0xFF)
+            fprintf(stderr,
+                    "miner_io_pipe_init: a saturated counter means the found "
+                    "path was STALLED, not merely busy\n");
+    }
+    if (am01_bus_write_ctrl(g_bus, 0x0001) < 0)   /* CTRL[0] = OP_SOFT_RESET */
+        fprintf(stderr, "miner_io_pipe_init: soft reset failed: %s\n",
+                strerror(errno));
+
     if (am01_bus_read_seed(g_bus, &g_seed) < 0) {
         g_seed = MINER_IO_SEED_UNKNOWN;
         if (errno == ENOTSUP)

@@ -134,6 +134,17 @@ int am01_bus_wait_irq(am01_bus_t *bus, int timeout_ms);
  *
  * CAUTION: reading ADDR_NONCE_HI (0x04) has the side effect of clearing
  * NONCE_VALID, and on v2.0+ of acknowledging the found-FIFO handoff. */
+/* Found-FIFO telemetry: how many finds were DROPPED, and the current queue
+ * depth. Needs VERSION >= 0x0200 (ADDR_FIFO_STAT); -1/ENOTSUP otherwise.
+ *
+ * `lost` is the single most useful number on this bus for spotting that the
+ * miner is silently losing work. It saturates at 255 rather than wrapping,
+ * and a SATURATED value with the core still hashing means the found path is
+ * stalled rather than merely behind -- the signature of the 2026-09-01
+ * outage. Read it before issuing a soft reset, which clears it. */
+int am01_bus_read_fifo_stat(am01_bus_t *bus, uint8_t *lost_out,
+                            uint8_t *depth_out);
+
 int am01_bus_read_reg(am01_bus_t *bus, uint8_t addr, uint16_t *value_out);
 int am01_bus_write_reg(am01_bus_t *bus, uint8_t addr, uint16_t value);
 

@@ -70,7 +70,7 @@ module odocrypt_gpio_wrapper #(
     // either build flow having to pass a generic. It MUST match the seed
     // stamped in encrypt.v's header -- tools/check-epoch.sh enforces that and
     // flags staleness against the current date. Update both together.
-    parameter [31:0] ODO_SEED = 32'd1788480000
+    parameter [31:0] ODO_SEED = 32'd1787616000
 ) (
     // ---------------------------------------------------------------
     // Bus clock domain -- the board's onboard 50MHz crystal
@@ -1210,6 +1210,8 @@ module odocrypt_gpio_wrapper #(
     reg        get_block_pulse_h;
     reg        get_target_pulse_h;
     reg        host_break_pulse_h;
+    // One-cycle resync pulse for found_path, from OP_SOFT_RESET.
+    reg found_soft_reset_h = 1'b0;
 
     reg [4:0]  header_word_cnt_h; // 0..18, 19 words total
     // THREE bits, not four. MEASURED ON HARDWARE 2026-08-30.
@@ -1256,6 +1258,7 @@ module odocrypt_gpio_wrapper #(
         get_block_pulse_h  <= 1'b0;
         get_target_pulse_h <= 1'b0;
         host_break_pulse_h <= 1'b0;
+        found_soft_reset_h <= 1'b0;   // one cycle only, like the pulses above
         commit_arm_h       <= 1'b0;
         commit_pulse_h     <= commit_arm_h;
 
@@ -1283,6 +1286,14 @@ module odocrypt_gpio_wrapper #(
                 OP_SOFT_RESET: begin
                     header_word_cnt_h <= 5'h0;
                     target_word_cnt_h <= 3'h0;
+                    // Also resync the found path. Before 2026-09-01 this
+                    // opcode could not reach it, and found_path had no reset
+                    // at all -- so a host killed between a nonce handover and
+                    // its ack latched `busy` forever, stalling every
+                    // subsequent find. Nothing short of reconfiguring the
+                    // FPGA cleared it, which cost an hour of mining. See the
+                    // soft_reset comment in found_path.v and TODO item 8.
+                    found_soft_reset_h <= 1'b1;
                 end
             endcase
         end
@@ -1423,6 +1434,7 @@ module odocrypt_gpio_wrapper #(
     ) found_path_inst (
         .clk          (clk_h),
         .commit       (commit_pulse_h),
+        .soft_reset   (found_soft_reset_h),
         .found_in     (found_arr),
         .nonce_in_flat(nonce_flat_h),
         .ack_toggle   (nonce_ack_toggle_bus),

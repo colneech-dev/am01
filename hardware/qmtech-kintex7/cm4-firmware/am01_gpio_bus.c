@@ -80,6 +80,8 @@ enum {
     /* 8-bit, DC=1. RTL 5'h17 = 23. Present since v0x0104, unused until
      * 2026-08-30 -- see am01_bus_lcd_data8(). */
     ADDR_LCD_DATA8 = 23,
+    /* {lost[7:0], 4'h0, depth[3:0]}. RTL 5'h18 = 24, since VERSION 0x0200. */
+    ADDR_FIFO_STAT = 24,
     ADDR_TOUCH_X   = 20,
     ADDR_TOUCH_Y   = 21,
     ADDR_TOUCH_STAT= 22,
@@ -637,6 +639,20 @@ int am01_bus_fan(am01_bus_t *bus, int set_floor, uint8_t floor,
         return -1;
     if (duty_out)    *duty_out    = (uint8_t)(v & 0xFF);
     if (tach_hz_out) *tach_hz_out = (uint8_t)(v >> 8);
+    return 0;
+}
+
+int am01_bus_read_fifo_stat(am01_bus_t *bus, uint8_t *lost_out,
+                            uint8_t *depth_out)
+{
+    /* ADDR_FIFO_STAT arrived at 0x0200: {lost[7:0], 4'h0, depth[3:0]}. */
+    if (need_version(bus, 0x0200) < 0)
+        return -1;
+    uint16_t v;
+    if (reg_read16(bus, ADDR_FIFO_STAT, &v) < 0)
+        return -1;
+    if (lost_out)  *lost_out  = (uint8_t)(v >> 8);
+    if (depth_out) *depth_out = (uint8_t)(v & 0x0F);
     return 0;
 }
 
