@@ -47,9 +47,9 @@ happens to free exactly the pins needed, because the ILI9341 vacates JP5 5-13.
 | JP5 | Signal | Direction |
 |---:|---|---|
 | 5 | UART TX | FPGA -> CYD RX |
-| 6 | UART RX | CYD TX -> FPGA |
-| 7 | ESP_EN | FPGA -> CYD reset |
-| 8 | ESP_IO0 | FPGA -> CYD boot select |
+| 7 | UART RX | CYD TX -> FPGA |
+| 8 | ESP_EN | FPGA -> CYD reset |
+| 9 | ESP_IO0 | FPGA -> CYD boot select |
 | 47/48 | GND | |
 | 49/50 | +5V | supply |
 

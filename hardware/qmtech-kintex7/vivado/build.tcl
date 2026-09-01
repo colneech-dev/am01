@@ -47,6 +47,7 @@ add_files -norecurse [list \
     [file join $odocrypt_hdl atomminer_misc.v] \
     [file join $this_hdl clk_gen_hash.v] \
     [file join $this_hdl found_path.v] \
+    [file join $this_hdl uart_bridge.v] \
     [file join $this_hdl odocrypt_gpio_wrapper.v] \
     [file join $this_hdl am01_qmtech_top.v] \
 ]

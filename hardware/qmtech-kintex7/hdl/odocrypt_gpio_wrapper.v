@@ -63,6 +63,19 @@ module odocrypt_gpio_wrapper #(
     // testbench drives it to 0 as a negative control.
     parameter integer SETTLE_CYCLES_P = 4096,
 
+    // WHICH FRONT PANEL the JP5 display pins carry.
+    //
+    //   "ili9341"  the SPI panel wired directly to JP5 -- the current design,
+    //              and the DEFAULT, so this parameter changes nothing unless
+    //              it is set deliberately
+    //   "cyd"      an ESP32 Cheap Yellow Display on a UART; the ESP32 drives
+    //              its own panel, so these pins carry a serial link instead
+    //
+    // The two cannot coexist: they need the same balls. This is a build-time
+    // choice, which is honest about that -- and it is exactly the situation
+    // the case files already model with VARIANT_SCREEN.
+    parameter PANEL_IF = "ili9341",
+
     // OdoCrypt epoch seed that hdl/odocrypt/encrypt.v was generated for,
     // read back by the host at SEED_LO/SEED_HI as bitstream_epoch.
     //
@@ -190,6 +203,13 @@ module odocrypt_gpio_wrapper #(
     // a second find would overwrite silently, and the only symptom was a
     // share that never arrived -- indistinguishable from bad luck.
     localparam [4:0] ADDR_FIFO_STAT   = 5'h18;  // read: {lost[7:0], 4'h0, depth[3:0]}
+
+    // CYD front panel (PANEL_IF="cyd"). Inert otherwise: the reads return 0
+    // and the writes go nowhere, so their presence cannot affect an ILI9341
+    // build. See hdl/uart_bridge.v and docs/PLAN-cyd-display.md.
+    localparam [4:0] ADDR_UART_DATA   = 5'h19;  // w: push TX byte  r: pop RX byte
+    localparam [4:0] ADDR_UART_STAT   = 5'h1A;  // r: {err, rx_cnt, tx_cnt, flags}
+    localparam [4:0] ADDR_ESP_CTRL    = 5'h1B;  // w: [0] EN  [1] IO0
 
     // v1.1 adds SEED_LO/SEED_HI. The daemon treats a VERSION below this as
     // "seed unreadable" rather than misreading 0 as a real epoch.
@@ -575,13 +595,94 @@ module odocrypt_gpio_wrapper #(
     reg         lcd_ctrl_wr;
     reg  [15:0] lcd_ctrl_data;
 
-    assign lcd_sclk   = spi_sclk;
-    assign lcd_mosi   = spi_mosi;
-    assign lcd_cs_n   = spi_cs_lcd_n;
-    assign lcd_dc     = spi_dc;
-    assign lcd_rst_n  = lcd_rst_n_r;
-    assign lcd_bl     = lcd_bl_r;
-    assign touch_cs_n = spi_cs_touch_n;
+    localparam PANEL_IS_CYD = (PANEL_IF == "cyd");
+
+    // ---- JP5 pin muxing -------------------------------------------------
+    //
+    // RX HAS TO BE lcd_miso. Only two JP5 ports on this module are inputs --
+    // lcd_miso and touch_irq -- and a UART needs one. docs/PLAN-cyd-display.md
+    // originally put RX on JP5 pin 6, which is lcd_mosi: an OUTPUT, and so a
+    // pin that could never have received anything. Corrected here and there.
+    //
+    //   JP5 5  (AD21, lcd_sclk) -> UART TX
+    //   JP5 7  (AE22, lcd_miso) <- UART RX
+    //   JP5 8  (AF22, lcd_cs_n) -> ESP_EN
+    //   JP5 9  (AE23, lcd_dc)   -> ESP_IO0
+    //
+    // Unused outputs are parked at their INACTIVE levels, not at zero: a
+    // floating or wrongly-driven RST_N would hold a panel in reset, and
+    // lcd_bl low is simply a dark backlight. Getting this wrong is invisible
+    // until someone wires a panel to a CYD bitstream and blames the panel.
+    wire uart_tx_pin, uart_rx_pin;
+    wire esp_en_pin, esp_io0_pin;
+
+    generate
+    if (PANEL_IS_CYD) begin : g_panel_cyd
+        assign lcd_sclk   = uart_tx_pin;
+        assign lcd_mosi   = 1'b0;
+        assign lcd_cs_n   = esp_en_pin;
+        assign lcd_dc     = esp_io0_pin;
+        assign lcd_rst_n  = 1'b1;      // inactive: nothing held in reset
+        assign lcd_bl     = 1'b0;
+        assign touch_cs_n = 1'b1;      // inactive: chip select is active-low
+    end else begin : g_panel_ili
+        // Byte-for-byte what this file did before PANEL_IF existed.
+        assign lcd_sclk   = spi_sclk;
+        assign lcd_mosi   = spi_mosi;
+        assign lcd_cs_n   = spi_cs_lcd_n;
+        assign lcd_dc     = spi_dc;
+        assign lcd_rst_n  = lcd_rst_n_r;
+        assign lcd_bl     = lcd_bl_r;
+        assign touch_cs_n = spi_cs_touch_n;
+    end
+    endgenerate
+
+    assign uart_rx_pin = PANEL_IS_CYD ? lcd_miso : 1'b1;
+
+    // ---- CYD serial link -------------------------------------------------
+    // Instantiated only for PANEL_IF="cyd", so an ILI9341 build carries none
+    // of it and its netlist is unchanged.
+    wire [7:0] uart_rx_data;
+    wire       uart_tx_full, uart_rx_empty;
+    wire [4:0] uart_tx_cnt, uart_rx_cnt;
+    wire [7:0] uart_rx_err;
+    reg        uart_tx_wr, uart_rx_rd;
+    reg  [1:0] esp_ctrl_r = 2'b01;   // EN high = ESP32 running, IO0 low
+
+    assign esp_en_pin  = esp_ctrl_r[0];
+    assign esp_io0_pin = esp_ctrl_r[1];
+
+    generate
+    if (PANEL_IS_CYD) begin : g_uart
+        uart_bridge #(
+            .CLK_HZ (50_000_000),   // bus_clk, sys_clk_50m straight through
+            .BAUD   (115200),
+            .FIFO_AW(4)
+        ) uart_i (
+            .clk     (bus_clk),
+            .rst_n   (bus_rst_n),
+            .tx_wr   (uart_tx_wr),
+            .tx_data (wdata_latched[7:0]),
+            .tx_full (uart_tx_full),
+            .rx_rd   (uart_rx_rd),
+            .rx_data (uart_rx_data),
+            .rx_empty(uart_rx_empty),
+            .tx_count(uart_tx_cnt),
+            .rx_count(uart_rx_cnt),
+            .rx_err  (uart_rx_err),
+            .uart_tx (uart_tx_pin),
+            .uart_rx (uart_rx_pin)
+        );
+    end else begin : g_no_uart
+        assign uart_tx_pin  = 1'b1;   // a UART line idles high
+        assign uart_rx_data = 8'h0;
+        assign uart_tx_full = 1'b0;
+        assign uart_rx_empty= 1'b1;
+        assign uart_tx_cnt  = 5'h0;
+        assign uart_rx_cnt  = 5'h0;
+        assign uart_rx_err  = 8'h0;
+    end
+    endgenerate
 
     always @(posedge bus_clk or negedge bus_rst_n) begin
         if (!bus_rst_n) begin
@@ -884,6 +985,13 @@ module odocrypt_gpio_wrapper #(
             fan_floor       <= 8'd0;
         end else begin
             nonce_valid_clear_pulse <= 1'b0;
+            // One-shots, same discipline as the pulses above: default low
+            // every cycle so a multi-cycle S_WRITE/S_READ cannot push or pop
+            // the FIFO more than once. nonce_valid_clear_pulse is NOT a
+            // one-shot despite its name -- see the note where it is consumed
+            // -- and that difference cost a torn nonce read in 0x0200.
+            uart_tx_wr <= 1'b0;
+            uart_rx_rd <= 1'b0;
 
             case (bus_state)
                 S_IDLE: begin
@@ -942,6 +1050,18 @@ module odocrypt_gpio_wrapper #(
                                 lcd_start_16   <= 1'b0;
                                 lcd_req_toggle <= ~lcd_req_toggle;
                             end
+                            gpio_ready <= 1'b1;
+                        end
+                        ADDR_UART_DATA: begin
+                            if (!uart_tx_full) uart_tx_wr <= 1'b1;
+                            // A write into a full FIFO is dropped. The host
+                            // can read UART_STAT first; blocking the bus here
+                            // would stall the miner's register traffic for a
+                            // panel, which is the wrong thing to prioritise.
+                            gpio_ready <= 1'b1;
+                        end
+                        ADDR_ESP_CTRL: begin
+                            esp_ctrl_r <= wdata_latched[1:0];
                             gpio_ready <= 1'b1;
                         end
                         ADDR_LCD_CTRL: begin
@@ -1024,6 +1144,17 @@ module odocrypt_gpio_wrapper #(
                         ADDR_TOUCH_STAT: rdata_reg <= {15'h0, touch_pressed};
                         // 8 + 4 + 4 = 16. The depth field is 4 bits, which
                         // is exactly enough for an 8-deep FIFO's 0..8.
+                        ADDR_UART_DATA: begin
+                            rdata_reg <= {8'h0, uart_rx_data};
+                            // Popped at the END of the transaction, below --
+                            // NOT here. S_READ lasts as long as the CM4 holds
+                            // RD_N, and popping on every cycle of it would
+                            // discard most of the FIFO. Exactly the bug that
+                            // ADDR_NONCE_HI had in 0x0200.
+                        end
+                        ADDR_UART_STAT: rdata_reg <=
+                            {uart_rx_err, uart_rx_cnt[3:0],
+                             uart_tx_cnt[2:0], uart_rx_empty};
                         ADDR_FIFO_STAT: rdata_reg <=
                             {lost_sync2_bus, 4'h0, fifocnt_sync2_bus};
                         default: rdata_reg <= 16'h0;
@@ -1073,6 +1204,10 @@ module odocrypt_gpio_wrapper #(
                         // across a 16-bit bus.
                         if (addr_latched == ADDR_NONCE_HI)
                             nonce_valid_clear_pulse <= 1'b1;
+                        // Same reasoning, same place: consume once, when the
+                        // host has actually taken the byte.
+                        if (addr_latched == ADDR_UART_DATA && !uart_rx_empty)
+                            uart_rx_rd <= 1'b1;
                     end
                 end
 

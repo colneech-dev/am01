@@ -59,11 +59,17 @@ uses.
 | JP5 pin | Signal | Direction |
 |---:|---|---|
 | 5 | UART TX | FPGA -> CYD RX |
-| 6 | UART RX | CYD TX -> FPGA |
-| 7 | ESP_EN | FPGA -> CYD reset |
-| 8 | ESP_IO0 | FPGA -> CYD boot select |
+| 7 | UART RX | CYD TX -> FPGA |
+| 8 | ESP_EN | FPGA -> CYD reset |
+| 9 | ESP_IO0 | FPGA -> CYD boot select |
 | 47/48 | GND | |
 | 49/50 | +5V | supply |
+
+RX IS ON PIN 7, NOT PIN 6. Corrected 2026-09-01 while wiring the mux: only
+two of the wrapper's JP5 ports are inputs (lcd_miso and touch_irq), and pin 6
+is lcd_mosi -- an OUTPUT. A UART receiver there could never have received
+anything, and the mistake would have surfaced as a panel that transmits fine
+and hears nothing.
 
 Four signals. Both sides are 3.3V logic (BANK12 is LVCMOS33, ESP32 is 3.3V), so
 no level shifting.
