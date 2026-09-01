@@ -76,16 +76,21 @@
 
 static am01_bus_t *g_bus;
 
-/* UART_STAT field layout, from odocrypt_gpio_wrapper.v:
- *   {uart_rx_err[7:0], uart_rx_cnt[3:0], uart_tx_cnt[2:0], uart_rx_empty} */
+/* UART_STAT layout at VERSION >= 0x0203, from odocrypt_gpio_wrapper.v:
+ *   {rx_err[3:0], tx_cnt[4:0], rx_cnt[4:0], tx_full, rx_empty}
+ *
+ * The 0x0202 layout could not report a full TX FIFO -- see the banner. Both
+ * counts are now exact and there is a real tx_full, so uart_tx() fills the
+ * available room in one go instead of creeping along in 7-byte bursts with a
+ * full drain between each. */
 #define ST_RX_EMPTY(v)  ((v) & 0x1u)
-#define ST_TX_CNT(v)    (((v) >> 1) & 0x7u)
-#define ST_RX_CNT(v)    (((v) >> 4) & 0xFu)
-#define ST_RX_ERR(v)    (((v) >> 8) & 0xFFu)
+#define ST_TX_FULL(v)   (((v) >> 1) & 0x1u)
+#define ST_RX_CNT(v)    (((v) >> 2) & 0x1Fu)
+#define ST_TX_CNT(v)    (((v) >> 7) & 0x1Fu)
+#define ST_RX_ERR(v)    (((v) >> 12) & 0xFu)
 
-/* Keep TX in flight below 8 so ST_TX_CNT()==0 means EMPTY and not
- * "8 or 16, indistinguishable". See the note in the banner. */
-#define TX_BURST 7
+/* uart_bridge.v is instantiated with FIFO_AW=4. */
+#define TX_FIFO_DEPTH 16
 
 int uart_open_bus(void)
 {
@@ -106,9 +111,14 @@ int uart_open_bus(void)
     }
     /* REFUSE rather than read zeros back from unmapped addresses and report a
      * dead panel. That distinction is the whole reason 0x0202 exists. */
-    if (ver < 0x0202) {
-        fprintf(stderr, "am01-uartd: bitstream is v%u.%u -- it has no UART. "
-                        "Needs >= v2.2.\n", ver >> 8, ver & 0xFF);
+    /* 0x0203, not 0x0202. A 0x0202 bitstream HAS a UART, but UART_STAT's
+     * fields sit in different places and it cannot report a full TX FIFO,
+     * so this would misread every field and silently drop bytes. Refusing
+     * is the only safe answer; 0x0202 never reached a board anyway. */
+    if (ver < 0x0203) {
+        fprintf(stderr, "am01-uartd: bitstream is v%u.%u -- needs >= v2.3 "
+                        "(v2.2's UART_STAT cannot report a full TX FIFO).\n",
+                ver >> 8, ver & 0xFF);
         am01_bus_close(g_bus); g_bus = NULL;
         return -1;
     }
@@ -149,16 +159,21 @@ static int uart_tx(const uint8_t *buf, size_t len)
 
     size_t n = 0;
     while (n < len) {
-        /* Wait for the TX FIFO to drain fully before queueing the next burst.
-         * Bounded so a dead link cannot wedge the daemon: at 115200 a 7-byte
-         * burst is 608us, so 200 polls is orders of magnitude of headroom. */
+        /* Ask how much room there is, and fill it. Bounded so a dead link
+         * cannot wedge the daemon: at 115200 a full 16-byte FIFO drains in
+         * 1.4ms, so 200 polls at 100us is orders of magnitude of headroom. */
+        uint16_t st = 0;
+        unsigned room = 0;
         int spins = 0;
         for (;;) {
-            uint16_t st;
             if (am01_bus_read_reg(g_bus, CYD_REG_UART_STAT, &st) < 0)
                 return n ? (int)n : -1;
-            if (ST_TX_CNT(st) == 0)
-                break;
+            if (!ST_TX_FULL(st)) {
+                unsigned cnt = ST_TX_CNT(st);
+                room = (cnt < TX_FIFO_DEPTH) ? (TX_FIFO_DEPTH - cnt) : 0;
+                if (room)
+                    break;
+            }
             if (++spins > 200) {
                 errno = ETIMEDOUT;
                 return n ? (int)n : -1;
@@ -167,8 +182,8 @@ static int uart_tx(const uint8_t *buf, size_t len)
         }
 
         size_t burst = len - n;
-        if (burst > TX_BURST)
-            burst = TX_BURST;
+        if (burst > room)
+            burst = room;
 
         for (size_t i = 0; i < burst; i++) {
             if (am01_bus_write_reg(g_bus, CYD_REG_UART_DATA, buf[n]) < 0)
@@ -326,8 +341,10 @@ int main(int argc, char **argv)
 
         uint16_t st = 0;
         am01_bus_read_reg(g_bus, CYD_REG_UART_STAT, &st);
-        printf("UART_STAT 0x%04x  rx_err=%u rx_cnt=%u tx_cnt=%u rx_empty=%u\n",
-               st, ST_RX_ERR(st), ST_RX_CNT(st), ST_TX_CNT(st), ST_RX_EMPTY(st));
+        printf("UART_STAT 0x%04x  rx_err=%u rx_cnt=%u tx_cnt=%u "
+               "tx_full=%u rx_empty=%u\n",
+               st, ST_RX_ERR(st), ST_RX_CNT(st), ST_TX_CNT(st),
+               ST_TX_FULL(st), ST_RX_EMPTY(st));
 
         int ok = (w == (int)n) && (r == (int)n) && memcmp(pat, got, n) == 0;
         printf("%s\n", ok ? "LOOPBACK OK" : "LOOPBACK FAILED "

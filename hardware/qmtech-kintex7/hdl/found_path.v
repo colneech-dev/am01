@@ -40,11 +40,18 @@ module found_path #(
     //
     // THIS EXISTS BECAUSE ITS ABSENCE TOOK THE MINER DOWN FOR AN HOUR on
     // 2026-09-01. `busy` is set when a nonce is handed to the bus domain and
-    // was clearable ONLY by the host's ack. Kill the host between those two
-    // points -- a SIGTERM during a deploy will do it -- and `busy` latches
-    // with no ack ever coming. The handoff then stalls forever: no further
-    // nonce can be loaded, the FIFO fills, and every subsequent find
-    // increments `lost` until it saturates.
+    // was clearable ONLY by the host's ack. If the host stops polling while a
+    // nonce is still outstanding, `busy` latches with no ack ever coming, and
+    // the handoff stalls forever: no further nonce can be loaded, the FIFO
+    // fills, and every subsequent find increments `lost` until it saturates.
+    //
+    // NOTE THE TRIGGER IS MUNDANE. I first wrote this up as a SIGTERM landing
+    // mid-transaction; that was wrong. The daemon's signal handling is
+    // cooperative -- it sets a flag and the loops exit between iterations --
+    // and the failing shutdown logged a clean exit. All it takes is a find
+    // handed over after the host's last poll, which at ~15 finds/sec is a
+    // window that is open essentially all the time. Any orderly shutdown can
+    // do it.
     //
     // Nothing could clear it. This module had no reset input at all, so
     // `busy` took its initial value only at configuration; OP_SOFT_RESET

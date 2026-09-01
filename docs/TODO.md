@@ -290,12 +290,26 @@ consumed them: the found-FIFO overflowed until its lost counter saturated, and
 the main thread sat in `do_sys_poll` -- waiting on an IRQ edge that was never
 going to arrive.
 
-The likely mechanism is a SIGTERM landing mid-transaction, leaving the 4-phase
-handshake half-completed: the host dies between asserting RD_N/WR_N and
-releasing it, the wrapper stays in S_READ/S_WRITE waiting for a deassert that
-never comes, and the IRQ path never fires again. That is consistent with the
-symptom surviving a process restart -- nothing on the host side resets the
-FPGA's state machine.
+**Root cause found, and it is not what this note first said.** I wrote it up
+as a SIGTERM landing mid-transaction, leaving the 4-phase handshake
+half-completed. That was wrong: the daemon's signal handling is cooperative
+(`on_sig` sets a flag, the loops exit between iterations) and the failing
+shutdown logged a clean `[pipe] exit: found=3417 shares=3408 stale=9`.
+
+The actual cause is in `found_path.v`. Its `busy` flag is set when a nonce is
+handed to the bus domain and was clearable ONLY by the host's ack -- and the
+module had NO RESET INPUT AT ALL, so `busy` took its initial value only at
+configuration. If the host stops polling while a nonce is outstanding, `busy`
+latches with no ack ever coming and the handoff stalls permanently. At ~15
+finds/sec that window is open essentially all the time, so any orderly
+shutdown can do it. Nothing host-side could clear it: OP_SOFT_RESET did not
+reach the module, `commit` deliberately preserves `busy`, and the daemon never
+issued a soft reset anyway.
+
+FIXED in 9e6c6df -- found_path gains a `soft_reset`, OP_SOFT_RESET drives it,
+and the daemon issues one at startup after reading and reporting FIFO_STAT.
+tb_found_path's T9 reproduces the wedge and proves the recovery. NEEDS A
+BITSTREAM to take effect.
 
 **Recovery, which works and takes seconds:**
 

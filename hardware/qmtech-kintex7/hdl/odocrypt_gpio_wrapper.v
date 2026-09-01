@@ -216,7 +216,9 @@ module odocrypt_gpio_wrapper #(
     // harmless with no CYD attached: an unread RX FIFO simply stays empty.
     // See hdl/uart_bridge.v and docs/PLAN-cyd-display.md.
     localparam [4:0] ADDR_UART_DATA   = 5'h19;  // w: push TX byte  r: pop RX byte
-    localparam [4:0] ADDR_UART_STAT   = 5'h1A;  // r: {err, rx_cnt, tx_cnt, flags}
+    localparam [4:0] ADDR_UART_STAT   = 5'h1A;  // r: {rx_err[3:0], tx_cnt[4:0],
+                                                //     rx_cnt[4:0], tx_full,
+                                                //     rx_empty}
     localparam [4:0] ADDR_ESP_CTRL    = 5'h1B;  // w: [0] EN  [1] IO0
 
     // v1.1 adds SEED_LO/SEED_HI. The daemon treats a VERSION below this as
@@ -274,7 +276,19 @@ module odocrypt_gpio_wrapper #(
     // this apart from 0x0201. The version bump exists so am01-uartd can
     // REFUSE to run against a bitstream with no UART in it, rather than
     // reading back zeros from unmapped addresses and reporting a dead panel.
-    localparam [15:0] VERSION = 16'h0202;
+    // 0x0203: UART_STAT's layout changed, and found_path gained a reset.
+    //
+    // NOT backward compatible for UART_STAT readers -- the fields moved. That
+    // is acceptable only because 0x0202 never reached a board: the sole
+    // consumer is am01-uartd, which gates on VERSION and is updated with it.
+    //
+    // The found_path change is the important one. Its `busy` flag was
+    // clearable only by a host ack and the module had no reset, so a host
+    // killed between a nonce handover and its ack stalled the found path
+    // permanently -- surviving restarts, recoverable only by reconfiguring
+    // the FPGA. It cost an hour of mining on 2026-09-01. OP_SOFT_RESET now
+    // reaches it and the daemon issues one at startup.
+    localparam [15:0] VERSION = 16'h0203;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;
@@ -1130,9 +1144,30 @@ module odocrypt_gpio_wrapper #(
                             // discard most of the FIFO. Exactly the bug that
                             // ADDR_NONCE_HI had in 0x0200.
                         end
+                        // {rx_err[3:0], tx_cnt[4:0], rx_cnt[4:0],
+                        //  tx_full, rx_empty}  -- 4+5+5+1+1 = 16.
+                        //
+                        // CHANGED AT 0x0203, because the previous layout
+                        // could not answer the one question the host has to
+                        // ask before writing. It was
+                        //   {rx_err[7:0], rx_cnt[3:0], tx_cnt[2:0], rx_empty}
+                        // with a 16-deep TX FIFO -- so a 5-bit count was
+                        // truncated to 3 bits and depths 0, 8 and 16 read
+                        // identically, and there was NO tx_full bit at all.
+                        // The write path drops into a full FIFO silently, and
+                        // the comment there told the host to "read UART_STAT
+                        // first", which UART_STAT could not actually answer.
+                        // For esptool that is fatal: a dropped byte corrupts
+                        // the protocol with no indication.
+                        //
+                        // Both counts are now exact, so the host can write
+                        // (16 - tx_cnt) bytes in one go instead of creeping
+                        // along one at a time. rx_err drops to 4 bits and
+                        // still saturates -- it is a "framing errors are
+                        // happening" flag, and 15 says that as well as 255.
                         ADDR_UART_STAT: rdata_reg <=
-                            {uart_rx_err, uart_rx_cnt[3:0],
-                             uart_tx_cnt[2:0], uart_rx_empty};
+                            {uart_rx_err[3:0], uart_tx_cnt, uart_rx_cnt,
+                             uart_tx_full, uart_rx_empty};
                         ADDR_FIFO_STAT: rdata_reg <=
                             {lost_sync2_bus, 4'h0, fifocnt_sync2_bus};
                         default: rdata_reg <= 16'h0;
