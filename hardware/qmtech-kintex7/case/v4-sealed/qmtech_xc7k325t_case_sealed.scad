@@ -811,11 +811,31 @@ cyd_center_mm     = [30, 45];
 //   - at 3mm it fouls the 4mm-thick ledge it sits under
 // A through-slot in the ledge solves both.
 //
-// A SLOT, not a hole, because its position ACROSS the width was not measured.
-// A slot spanning most of the width catches it wherever it sits; narrow this
-// to a neat hole once the position is known.
+// MEASURED 2026-09-01: the sensor sits 8-14mm in from a short edge.
+//
+// THE OLD 26mm SLOT WOULD HAVE MISSED IT. Centred on a 50mm module it spanned
+// 12-38mm from either edge, so a sensor at 8-14mm fell almost entirely
+// outside it -- the lid would have blinded the very thing the slot was cut
+// for. It was written as "a slot spanning most of the width catches it
+// wherever it sits", which was simply wrong about how much of the width 26mm
+// covers.
+//
+// Confirmed from a photo of the board: measured along the 50mm SHORT axis,
+// from the edge, with the sensor strip at the top beside R21 and the two
+// mounting holes. The aperture in the PCB is clearly visible there.
+//
+// BOTH ends are still cut, because which way round the module is FITTED in
+// this case is not fixed -- the mounting holes are symmetric, so it can go in
+// either way and a lid that only works one way is a lid that gets fitted
+// wrong once. Two small apertures beat one correctly-sized aperture in the
+// wrong place: a reprint costs hours, a second 8mm slot costs tidiness. Set
+// cyd_ldr_both_ends = false once the build orientation is pinned down.
 cyd_ldr_from_glass_mm = 4;
-cyd_ldr_slot_mm       = [26, 5];   // X extent, Y extent
+cyd_ldr_band_mm       = [8, 14];   // measured, from the short edge
+cyd_ldr_clear_mm      = 1;         // each side, for print tolerance
+cyd_ldr_both_ends     = true;      // until the correct edge is confirmed
+cyd_ldr_slot_mm       = [cyd_ldr_band_mm[1] - cyd_ldr_band_mm[0]
+                         + 2*cyd_ldr_clear_mm, 5];   // X extent, Y extent
 
 // ---- selected by VARIANT_SCREEN --------------------------------------
 is_cyd            = (VARIANT_SCREEN == "cyd");
@@ -1313,10 +1333,16 @@ module lid_screen_cutout() {
     // otherwise foul the 4mm ledge above it.
     if (screen_ldr_slot_mm[0] > 0) {
         ldr_cy = wy + screen_window_mm[1]/2 + screen_ldr_from_glass_mm;
-        translate([wx - screen_ldr_slot_mm[0]/2,
-                   ldr_cy - screen_ldr_slot_mm[1]/2, -1])
-            cube([screen_ldr_slot_mm[0], screen_ldr_slot_mm[1],
-                  lid_thickness + 2]);
+        // Centre of the measured band, referenced from each short edge of the
+        // module rather than from the window centre -- the measurement was
+        // taken from the board edge, so that is the frame it belongs in.
+        ldr_dx = screen_module_mm[0]/2
+                 - (cyd_ldr_band_mm[0] + cyd_ldr_band_mm[1])/2;
+        for (sx = cyd_ldr_both_ends ? [-1, 1] : [-1])
+            translate([wx + sx*ldr_dx - screen_ldr_slot_mm[0]/2,
+                       ldr_cy - screen_ldr_slot_mm[1]/2, -1])
+                cube([screen_ldr_slot_mm[0], screen_ldr_slot_mm[1],
+                      lid_thickness + 2]);
     }
 }
 
