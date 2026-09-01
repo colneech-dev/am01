@@ -229,8 +229,16 @@ Roughly **3–4 days**, and it wants doing in this order:
 
 1. Phase 1 RTL + testbench (can ride the next bitstream that is needed anyway)
 2. Phase 2 `am01-uartd` + PTY — provable with a loopback before a CYD exists
-3. Phase 4 firmware against WiFi first, so the UI can be developed while the
-   RTL is still in flight, then switched to the UART
+3. Phase 4 firmware against the UART directly.
+
+   THIS STEP USED TO SAY "against WiFi first, so the UI can be developed while
+   the RTL is still in flight, then switched to the UART". Dropped 2026-09-01,
+   never implemented. The RTL landed (uart_bridge.v, 22/22, registers live in
+   a 0x0202 bitstream), so the reason to defer was gone -- and a WiFi
+   transport contradicted this document's own opening line, "over wires (not
+   USB, not WiFi)". It was also the DEFAULT in main.cpp, so a build would have
+   quietly used it, and it would have meant storing the network credentials a
+   second time in the firmware.
 4. Phase 3 commands last, once the display half is trusted
 
 **Do not start Phase 1 before the 0x0201 core work is confirmed earning.** That

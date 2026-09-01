@@ -77,25 +77,34 @@ on four wires instead of nine.
 |---|---|
 | `docs/PLAN-cyd-display.md` | written |
 | `case/v4-cyd` lid | rendered, printable |
-| `host/am01-uartd` | skeleton, compiles, accessors stubbed |
-| `host/cyd_proto.h` | protocol defined, shared by both halves |
-| `firmware/cyd_link.h` | link interface, transport-agnostic |
+| `host/am01-uartd` | register accessors done, cross-builds; `selftest` usable. PTY layer not started |
+| `host/cyd_proto.h` | protocol defined, compiled by BOTH halves |
+| `firmware/cyd_link.h` | link interface; UART only, WiFi removed |
 | `firmware/cyd_ui.h` | screen model, ported from odo-ui |
-| `firmware/main.cpp` | entry point, no board support yet |
-| `hdl/uart_bridge.v` | written, 22/22 checks pass, instantiated on JP5 15-18 |
-| bitstream | not yet built with it |
+| `firmware/cyd_ui.c` | navigation + touch, 41/41 checks |
+| `firmware/cyd_fmt.c` | value formatters, 29/29 checks |
+| `firmware/board_probe.cpp` | **builds a real 317 KB image**; needs a board to flash |
+| `firmware/main.cpp` | does NOT link -- cyd_link_uart_* and cyd_ui_draw unimplemented |
+| `hdl/uart_bridge.v` | 22/22, instantiated on JP5 15-18 |
+| bitstream | VERSION 0x0202 built; the 158 MHz build carries it at the current epoch |
 
 ## Order of work
 
 Per the plan, and deliberately not in the order that feels most fun:
 
-1. `hdl/uart_bridge.v` + `sim/tb_uart_bridge.v` — testbench first, as with
-   `found_path.v`. That approach caught two real bugs before they reached a
-   bitstream.
-2. `host/am01-uartd` — provable against a loopback before any CYD exists.
-3. Firmware, developed against WiFi so the UI can progress while the RTL is in
-   flight, then switched to the UART.
+1. ~~`hdl/uart_bridge.v` + `sim/tb_uart_bridge.v`~~ **done** — testbench
+   first, as with `found_path.v`. 22/22.
+2. `host/am01-uartd` — accessors **done**, provable against a loopback before
+   any CYD exists (`am01-uartd selftest`, wire JP5 15 to 16). PTY layer next.
+3. Firmware against the UART.
 4. Commands last, once the display half is trusted.
+
+There is no WiFi step. One was planned here — develop the UI over WiFi while
+the RTL was in flight — and dropped on 2026-09-01, unimplemented: the RTL
+landed, so the reason to defer was gone; it contradicted the requirement this
+panel exists to meet (over wires, not USB, not WiFi); it was the *default* in
+`main.cpp`, so a build would quietly have used it; and it would have meant
+storing the network credentials a second time, in the firmware.
 
 **Do not start before the 0x0201 core work is confirmed earning.** Same gate
 `PLAN-adopt-cyclonev-core.md` sets, for the same reason: one unproven thing in

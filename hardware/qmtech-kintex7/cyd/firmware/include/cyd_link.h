@@ -3,11 +3,22 @@
  *
  * SCAFFOLDING. Not compiled into anything yet.
  *
- * Deliberately transport-agnostic. The plan develops the UI over WiFi first,
- * so the panel can be worked on while hdl/uart_bridge.v is still being
- * written, then switches to the UART by swapping ONE implementation behind
- * this interface. If the UI ever reaches into a Serial object directly, that
- * switch stops being a swap and becomes a rewrite.
+ * Transport-agnostic, so the UI never reaches into a Serial object directly.
+ * That still matters even with one transport: it is what lets the screen
+ * logic be exercised off-hardware.
+ *
+ * THERE IS ONLY ONE TRANSPORT, AND IT IS THE UART. A WiFi implementation was
+ * declared here as scaffolding, to let the UI progress while uart_bridge.v
+ * was still being written. It was removed on 2026-09-01, unimplemented:
+ *
+ *   - the requirement was always "over wires, not USB, not WiFi", which
+ *     docs/PLAN-cyd-display.md states in its own opening line
+ *   - uart_bridge.v now exists, passes 22/22, and its registers are in the
+ *     bitstream, so the reason to defer the real link is gone
+ *   - it was the DEFAULT (CYD_USE_UART defaulted to 0), so a build of
+ *     main.cpp would have quietly used the transport that was ruled out
+ *   - a WiFi panel would need the network credentials stored a second time,
+ *     in the firmware, when they already live on the Pi
  *
  * The protocol constants live in ../host/cyd_proto.h and are shared with the
  * daemon on the CM4. One definition for both halves, so they cannot drift --
@@ -88,12 +99,10 @@ typedef struct {
 
 typedef struct cyd_link cyd_link_t;
 
-/* Transport implementations. Exactly one is linked in.
- *   cyd_link_uart_*   the real thing: FPGA-hosted UART over JP5
- *   cyd_link_wifi_*   development only: polls odo-webd's /status.json
- */
+/* The link: an FPGA-hosted UART on JP5 15-18, reached by the CM4 over the
+ * register bus it already uses. See docs/PLAN-cyd-display.md for why that is
+ * the only topology this hardware allows. */
 cyd_link_t *cyd_link_uart_open(int baud);
-cyd_link_t *cyd_link_wifi_open(const char *host, int port);
 
 /* Pump the link. Call often; never blocks. Returns true if `out` was updated
  * by a fresh STATUS this call. */

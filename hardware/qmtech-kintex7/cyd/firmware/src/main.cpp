@@ -19,17 +19,6 @@
 #include "cyd_link.h"
 #include "cyd_ui.h"
 
-/* Development transport vs the real one.
- *
- * WiFi first, on purpose: it lets the whole UI be built and looked at while
- * hdl/uart_bridge.v is still being written, instead of the firmware being
- * blocked behind a 1h35m bitstream turnaround. The switch to the UART then
- * replaces one function call, because nothing above this line knows which
- * transport it is talking to. */
-#ifndef CYD_USE_UART
-#define CYD_USE_UART 0
-#endif
-
 static cyd_link_t  *g_link;
 static cyd_ui_t     g_ui;
 static cyd_status_t g_status;
@@ -38,16 +27,14 @@ void setup(void)
 {
     cyd_ui_init(&g_ui);
 
-#if CYD_USE_UART
-    /* The real link: FPGA-hosted UART on JP5 pins 15/16. 115200 because the
-     * payload is one status line a second and the entire point of leaving SPI
-     * behind was to stop spending signal-integrity margin we do not need. */
+    /* The link: FPGA-hosted UART on JP5 15/16. 115200 because the payload is
+     * one status line a second, and the entire point of leaving SPI behind
+     * was to stop spending signal-integrity margin we do not need.
+     *
+     * The only transport. A WiFi one used to sit behind a CYD_USE_UART ifdef
+     * here -- and was the default -- which contradicted the requirement this
+     * panel exists to meet. Removed 2026-09-01, unimplemented. */
     g_link = cyd_link_uart_open(CYD_BAUD_DEFAULT);
-#else
-    /* Development only. Polls odo-webd, which already serves the same status
-     * object on port 8080. */
-    g_link = cyd_link_wifi_open("192.168.1.26", 8080);
-#endif
 }
 
 void loop(void)
