@@ -192,68 +192,60 @@ in the same bitstream.
 
 ## 3. Epoch rollover — 2026-09-04 00:00 UTC
 
-**BUILT AND WAITING as of 2026-09-01 19:52. Nothing to do until the rollover
-except flash it.**
+**IN SERVICE (current epoch) + BUILT AND WAITING (rollover).** Two bitstreams
+now, both VERSION 0x0203 and identical apart from the sbox.
 
-    vivado/artifacts/am01_VER0x0203_158MHz_epoch1788480000_DO-NOT-FLASH-BEFORE-2026-09-04.bit
-    md5 ee213419349035d8d8030b67a7522db6      built from e176f81
+    FLASHED 2026-09-02 00:45, running now, survives a power cycle:
+      artifacts/am01_VER0x0203_158MHz_epoch1787616000_FLASHABLE-NOW.bit
+      md5 283120269ff71660691ee4319b616d7c
 
-Supersedes the earlier 0x0202 artifact (md5 de2b2a6f...), which had the epoch
-but not the 158 MHz clock, the found_path reset or the UART_STAT fix. Keep it
-only as a fallback if 0x0203 misbehaves on the bench.
+    FOR THE ROLLOVER -- do not flash before 2026-09-04 00:00 UTC:
+      artifacts/am01_VER0x0203fix_158MHz_epoch1788480000_DO-NOT-FLASH-BEFORE-2026-09-04.bit
+      md5 3b9ee9e2a74e4af95f7a623937b032cd
 
-DO NOT FLASH IT EARLY. Until 2026-09-04 00:00 UTC it mines rejects, exactly
-the way the current bitstream will start to after that instant. The board is
-on `am01_v0201_GOOD.bit` / epoch 1787616000 and should stay there until then.
+Built at the current epoch FIRST, deliberately, so the speed change could be
+flashed and MEASURED rather than taken on trust until Thursday. Two builds
+instead of one, and worth it: a clock bump that cannot be verified until the
+deadline is a clock bump nobody should rely on.
 
-`tools/check-epoch.sh` reports this state directly (exit 3, "PREPARED, 1
-epoch(s) AHEAD") and prints the date it becomes flashable. It previously said
-"STALE by -1 epoch(s)" here and told you to regenerate backwards, which would
-have silently undone the preparation - fixed 2026-09-01.
+MEASURED, 85 minutes of uptime (this estimator is statistical -- work_acc over
+uptime -- so short samples swing wildly and a few read above the design's
+theoretical ceiling):
 
-FOUR changes, deliberately batched onto the one compulsory rebuild rather than
-costing four separate ones:
+    hashrate      66.12 -> 79.63 MH/s   (+20.4%)
+    shares        2143 found, 2143 accepted, 0 REJECTED
+    FIFO_STAT     0x0000 -- not one find dropped at the higher rate
+    temperature   stable at 62 C, fan 55% / 3000 rpm
 
-  * `encrypt.v` regenerated for seed 1788480000, `ODO_SEED` matched. Before
-    regenerating, `./odo_gen 1787616000 4 encrypt_4` was verified to reproduce
-    the in-tree `encrypt.v` byte-for-byte, so the tool and flags are provably
-    the ones that built what is running and the seed was the only variable.
-  * clk_h 133.33 -> 158.33 MHz (MMCM MULT 16 -> 19). Applies to BOTH miner
-    instances; NUM_MINERS is still 2 and BRAM is still the binding constraint
-    at 94.4%.
-  * found_path's `soft_reset`, with OP_SOFT_RESET wired to it and the daemon
-    issuing one at startup - the fix for the wedge in item 8.
-  * UART_STAT's layout corrected so it can report a full TX FIFO, plus the CYD
-    UART registers. VERSION 0x0203.
+Both builds scale at ~0.50 x clk_h, so the scaling is linear and the 158 MHz
+figure was not optimistic. The thermal result is the one that mattered for
+committing to flash: 20% more work settled at 62 C, inside the fabric curve's
+55-70 C band with room before it steps to 75%.
 
-Timing and utilisation:
+FOUR CHANGES in each, batched onto the compulsory epoch rebuild:
 
-                        0x0201 (in service)   0x0203 (this)
-    clk_h                      133.33 MHz       158.33 MHz
-    Slice LUTs                     73,711           73,864
-    Slice Registers                54,606           54,701
-    Block RAM tiles             420 (94.4%)      420 (94.4%)
-    WNS                           1.468 ns         0.548 ns
+  * `encrypt.v` at seed 1788480000 with `ODO_SEED` matched (rollover build).
+    Before regenerating, ./odo_gen 1787616000 4 encrypt_4 was verified to
+    reproduce the in-tree encrypt.v byte-for-byte, so the tool and flags were
+    provably the ones that built what was running.
+  * clk_h 133.33 -> 158.33 MHz (MMCM MULT 16 -> 19), both miner instances.
+  * found_path's `soft_reset` with OP_SOFT_RESET driving it and the daemon
+    issuing one at startup -- the fix for the wedge in item 8.
+  * UART_STAT able to report a full TX FIFO, plus the ESP32 IO0 polarity fix.
 
-0 routing errors, 0 failing endpoints, hold met (WHS +0.026 ns).
+Timing, both builds: 158.333 MHz, 0 routing errors, 0 failing endpoints, hold
+met. WNS +0.449 ns (current epoch) and +0.548 ns (rollover). Those are not
+comparable with 0x0201's 1.468 ns -- that was slack against a 7.500 ns period,
+these are against 6.316 ns. The design got faster, not slower.
 
-TWO THINGS TO READ CAREFULLY. WNS is NOT comparable across these columns:
-0x0201's is slack against a 7.500 ns period, 0x0203's against 6.316 ns. The
-design got faster, not slower. And 0x0203's +0.548 ns beats the 158 MHz-only
-test build's +0.228 ns despite carrying more logic - that is router variance,
-not evidence the extra logic helped, and it must not be read as headroom for
-166 MHz. The sbox changed with the epoch too, so this is a different netlist
-from the 0x0201 numbers in any case.
+A SUPERSEDED_ artifact carries an earlier 0x0203 with the IO0 polarity bug;
+its md5 differs from the fixed one, confirming the fix is really in. It is
+kept only so the two cannot be confused.
 
-EXPECTED ~79 MH/s, from ~67 measured. That is arithmetic (0.5 x Fmax x 2
-miners), NOT a measurement: timing closure proves the silicon clocks there,
-not that the hashrate scales with it. Measure after flashing, and watch
-FIFO_STAT's lost counter as well as the hashrate - 19% more finds per second
-is 19% more pressure on the host's drain loop.
-
-**After flashing, re-run `tools/check-epoch.sh`** - it should report CURRENT,
-and the daemon's staleness check compares ODO_SEED against the pool's job
-epoch, so a mismatch shows up as rejects rather than silence.
+**After flashing the rollover build, re-run `tools/check-epoch.sh`** - it
+should report CURRENT, and the daemon's staleness check compares ODO_SEED
+against the pool's job epoch, so a mismatch shows up as rejects rather than
+silence.
 
 ---
 
