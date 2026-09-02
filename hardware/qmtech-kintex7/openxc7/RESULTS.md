@@ -452,6 +452,61 @@ carried over from the 420-BRAM 1-miner layout; this design needs 560, so it
 may spill past Y139 and need retuning -- watch the floorplan report for
 spills before trusting the routed number.
 
+## Option A synthesis FAILED -- `ram_style="distributed"` cannot map a pure ROM on this yosys (2026-09-02)
+
+**The build ran for ~12 hours** (started 22:16, crashed 05:35) under severe
+memory pressure -- yosys peaked at ~11.3 GB RSS / 20+ GB VSZ on a WSL box
+with an 11 GB RAM allocation, driving swap to ~13 GB and stalling the whole
+WSL VM unresponsive to new commands at least twice. It eventually failed at
+`MEMORY_LIBMAP`, not from resource exhaustion:
+
+    found attribute 'ram_style = distributed' on memory
+    ...round40.sboxes.sbox17inst.mem, forced mapping to distributed RAM
+    ERROR: no valid mapping found for memory
+    ...round40.sboxes.sbox17inst.mem
+
+**Root cause, confirmed with isolated <1-minute tests** (not the 12h full
+build) once the failure was understood:
+`techlibs/xilinx/lutrams_xcv.txt` -- the LUTRAM mapping rules this yosys
+build uses for `xc7` -- require every candidate memory to have **at least
+one write-capable port** (`port arsw "RW"`). The large-sbox tables are
+genuine ROMs: written only in an `initial` block, never at runtime, zero
+write ports by construction. Four workarounds tried, all fail the same way
+or worse:
+
+| approach | result |
+|---|---|
+| `ram_style="distributed"` (what Option A shipped) | `ERROR: no valid mapping found` -- reproduces the 12h crash in <15s isolated |
+| + a dummy write port, permanently disabled | Same error -- likely const-folded away before `memory_libmap` runs |
+| `ram_style="logic"` | **Silently drops the memory's read logic entirely** (only FDRE/IO cells in `stat`, no LUTs, no BRAM) -- a correctness bug, not a fix; never trust this value |
+| `case`-statement ROM, no array, clocked or purely combinational + separate register | Yosys's own `proc`/memory-inference still recognises the pattern and reinstates `RAMB18E1` regardless of coding style |
+
+**What survives:** the RTL mechanism itself is confirmed correct at the
+simulation level -- `run_lutram_equiv.sh` finished with the ideal verdict
+(`positive: PASS -- 32 results identical`, `negative: FAIL -- 30 of 32
+differ`, `=> SOUND`). `--lutram=N`'s Verilog output is byte-for-byte
+behaviour-neutral; the failure is purely a synthesis-tool limitation
+(`memory_libmap`'s LUTRAM rules), not a bug in `odo_gen` or in the
+generated RTL. If a working LUT-ROM technique is found later, the
+`--lutram=N` flag and `miner_t2.v` do not need to change.
+
+**What a real fix would need:** bypassing `memory_libmap` entirely for
+these tables -- most likely hand-building the address-decode mux tree from
+explicit LUT6 primitives via a `generate` block (the technique Vivado's
+`phys_opt_design`/XST use for ROM-shaped LUTRAM, and reportedly what some
+open designs do with an explicit `\$lut` instantiation per output bit
+group), rather than relying on any `ram_style` value. Substantially bigger
+and riskier than the attribute change tried here. **Not attempted --
+flagged for whoever picks this up next.**
+
+**Process/infrastructure lesson, independent of the RTL/synthesis
+question:** this WSL box needs either a larger memory allocation
+(`.wslconfig` `memory=` setting) or a smaller synthesis job before
+attempting a design this size again -- 11 GB was not enough headroom even
+for a build that would have succeeded on the RTL/logic side, and the
+resulting swap-thrash made WSL itself unresponsive for extended stretches,
+independent of whether the LUTRAM mapping issue existed.
+
 ## Option B (PLANNED, NOT EXECUTED -- pick up after Option A): two `THROUGHPUT=3` miners
 
 Two independent `THROUGHPUT=3` wide miners (each 1.33x, 560 BRAM alone) for
