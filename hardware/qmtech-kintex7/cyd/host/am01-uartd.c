@@ -574,6 +574,130 @@ int main(int argc, char **argv)
         return ok ? 0 : 1;
     }
 
+    /* `cap <boot|run> [secs]` -- reset, then capture SILENTLY and dump after.
+     *
+     * `listen` formats and fflushes every byte as it arrives, and down an
+     * ssh pipe that costs far more than the 1.4ms it takes a 115200 stream
+     * to fill a 16-byte FIFO. So the diagnostic itself was losing the boot
+     * log in chunks -- visibly, "=== AM01 CYD boar" then "==", with the
+     * eight bytes of "d probe " dropped in between.
+     *
+     * That is NOT a bus limit, which busbench measures at ~116k ops/s, i.e.
+     * an RX ceiling near 58k B/s against a line rate of 11520. It was the
+     * printing. I had blamed the bus in a commit message; this is the
+     * command that shows the difference.
+     *
+     * Matters because the mode is in the boot: field, which lands right
+     * after the "ets Jul 29 2019" banner and so was always in the part
+     * being dropped:
+     *   boot:0x13 (SPI_FAST_FLASH_BOOT)  -- running the app
+     *   boot:0x03 / 0x07 (DOWNLOAD_BOOT) -- in the ROM bootloader */
+    if (argc > 1 && strcmp(argv[1], "cap") == 0) {
+        if (uart_open_bus() < 0)
+            return 1;
+        int want_boot = (argc > 2 && strcmp(argv[2], "boot") == 0);
+        int secs = (argc > 3) ? atoi(argv[3]) : 6;
+
+        static uint8_t cap[65536];
+        size_t got = 0;
+
+        /* IO0 IS RELEASED FROM INSIDE THE CAPTURE LOOP, and that is the
+         * whole point of doing this by hand rather than calling
+         * esp_enter_bootloader().
+         *
+         * That helper holds IO0 low for 50ms AFTER releasing EN and only
+         * then returns -- but the ROM starts talking about 40ms after EN
+         * rises, so its entire banner lands inside the window before any
+         * capture begins. What comes back is the 16 bytes the FIFO happened
+         * to hold, which is exactly the FIFO depth and exactly what was
+         * observed. Reading that as "silence, therefore download mode" was
+         * wrong twice over: it is not silence, and it proves nothing. */
+        if (want_boot) {
+            if (esp_ctrl(0, 0) < 0) goto cap_fail;   /* reset, ROM selected */
+            usleep(100000);
+            if (esp_ctrl(1, 0) < 0) goto cap_fail;   /* EN up, IO0 STILL low */
+        } else {
+            if (esp_reset_run() < 0) goto cap_fail;
+        }
+
+        /* Nothing but bus reads in here. No printf, no fflush. */
+        {
+        struct timespec t0, tn;
+        int io0_up = !want_boot;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        time_t end = time(NULL) + secs;
+        while (time(NULL) < end && got < sizeof cap) {
+            int n = uart_rx(cap + got, sizeof cap - got);
+            if (n > 0) got += (size_t)n;
+            if (!io0_up) {
+                clock_gettime(CLOCK_MONOTONIC, &tn);
+                double ms = (double)(tn.tv_sec - t0.tv_sec) * 1000.0
+                          + (double)(tn.tv_nsec - t0.tv_nsec) / 1e6;
+                /* Long enough for the ROM to have latched the strap. */
+                if (ms >= 50.0) { esp_ctrl(1, 1); io0_up = 1; }
+            }
+        }
+        }
+
+        printf("--- %s: %lu byte(s) ---\n",
+               want_boot ? "IO0 LOW (expect DOWNLOAD_BOOT)"
+                         : "IO0 HIGH (expect SPI_FAST_FLASH_BOOT)",
+               (unsigned long)got);
+        for (size_t i = 0; i < got; i++) {
+            uint8_t c = cap[i];
+            if (c == 10) putchar(10);
+            else if (c >= 32 && c < 127) putchar(c);
+            else if (c != 13) putchar(46);
+        }
+        putchar(10);
+        uart_close_bus();
+        return got ? 0 : 1;
+cap_fail:
+        fprintf(stderr, "ESP_CTRL write failed: %s\n", strerror(errno));
+        uart_close_bus();
+        return 1;
+    }
+
+    /* `busbench` -- how many register ops per second does the GPIO bus do?
+     *
+     * Needed to turn a plausible story into a measured one. The claim that
+     * the RX path cannot keep up with a continuous 115200 burst rests on
+     * arithmetic: draining costs TWO ops per byte (STAT then DATA), so the
+     * ceiling is opsPerSec/2, and 115200 8N1 delivers 11520 B/s. If the
+     * ceiling is below that the 16-byte FIFO must overflow mid-burst, which
+     * is what the truncated ROM banner and the saturated rx_err show.
+     *
+     * Uses clock_gettime, not time(): a 1-second-granularity timer over a
+     * short run gives an answer with far fewer significant figures than it
+     * appears to have. */
+    if (argc > 1 && strcmp(argv[1], "busbench") == 0) {
+        if (uart_open_bus() < 0)
+            return 1;
+        int iters = (argc > 2) ? atoi(argv[2]) : 20000;
+        struct timespec t0, t1;
+        uint16_t v = 0;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int i = 0; i < iters; i++) {
+            if (am01_bus_read_reg(g_bus, CYD_REG_UART_STAT, &v) < 0) {
+                fprintf(stderr, "read failed at %d\n", i);
+                uart_close_bus();
+                return 1;
+            }
+        }
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        double el = (double)(t1.tv_sec - t0.tv_sec)
+                  + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+        double ops = iters / el;
+        printf("%d reads in %.3fs = %.0f ops/s (%.1fus each)\n",
+               iters, el, ops, 1e6 / ops);
+        printf("RX ceiling = %.0f B/s (2 ops per byte)\n", ops / 2.0);
+        printf("115200 8N1 delivers 11520 B/s -> %s\n",
+               (ops / 2.0) < 11520.0 ? "CANNOT KEEP UP; the FIFO must overflow"
+                                     : "keeps up; overflow needs another cause");
+        uart_close_bus();
+        return 0;
+    }
+
     /* `txstream [secs]` -- transmit continuously so the TX line can be
      * METERED. A UART idles high, so an idle line and a dead line both
      * read 3.3V; only sustained traffic tells them apart. Sending 0x55
