@@ -26,6 +26,7 @@ static cyd_status_t g_status;
 void setup(void)
 {
     cyd_ui_init(&g_ui);
+    cyd_ui_backend_init();     /* TFT, rotation, backlight */
 
     /* The link: FPGA-hosted UART on JP5 15/16. 115200 because the payload is
      * one status line a second, and the entire point of leaving SPI behind
@@ -55,7 +56,7 @@ void loop(void)
     }
 
     int tx, ty;
-    if (/* touch_read(&tx, &ty) */ false) {
+    if (cyd_ui_touch_read(&tx, &ty)) {
         cyd_action_t act = cyd_ui_touch(&g_ui, tx, ty);
 
         /* The UI decides WHAT was asked for; this decides whether it happens.

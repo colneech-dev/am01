@@ -73,6 +73,14 @@ void cyd_ui_backend_init(void);
  * and the screen model has no clock. */
 void cyd_ui_set_backlight(uint8_t pct);
 
+/* Read a touch, mapped into the 320x240 LAYOUT coordinates cyd_ui_touch()
+ * expects. Returns false when the panel is not being touched.
+ *
+ * NOT CALIBRATED YET -- the raw-to-screen constants are generic defaults.
+ * Touch the four corners with board_probe and set them from what it prints,
+ * or the buttons will not be where they are drawn. */
+bool cyd_ui_touch_read(int *x, int *y);
+
 /* Draw. Called on a fresh status or a touch, not free-running: a full repaint
  * every frame is wasted power on a panel that changes once a second, and this
  * is sitting on top of a miner where the power budget is not free. */

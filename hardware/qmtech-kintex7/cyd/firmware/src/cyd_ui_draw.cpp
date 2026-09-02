@@ -24,7 +24,9 @@
  */
 
 #include <Arduino.h>
+#include <SPI.h>
 #include <TFT_eSPI.h>
+#include <XPT2046_Touchscreen.h>
 
 #include "cyd_ui.h"
 #include "cyd_ui_layout.h"
@@ -45,6 +47,39 @@ static inline uint16_t rgb(uint8_t r, uint8_t g, uint8_t b)
 
 static TFT_eSPI tft;
 
+/* Touch on VSPI -- its own bus, separate from the display's HSPI. Fixed by
+ * the ESP32-2432S028R's PCB, and PROVEN on this board by board_probe: leaving
+ * TOUCH_CS unset for TFT_eSPI and driving the XPT2046 on a separate SPIClass
+ * is what makes touch work at all here. */
+#define TOUCH_SCLK   25
+#define TOUCH_MOSI   32
+#define TOUCH_MISO   39
+#define TOUCH_CS_PIN 33
+#define TOUCH_IRQ    36
+
+static SPIClass touch_spi(VSPI);
+static XPT2046_Touchscreen touch(TOUCH_CS_PIN, TOUCH_IRQ);
+
+/* RAW XPT2046 EXTREMES. NOT CALIBRATED FOR THIS PANEL -- these are the usual
+ * defaults, the same ones board_probe carries. Touches observed on the bench
+ * landed around raw (1900-2300, 1580-2410), which is consistent with them but
+ * covers only the middle of the glass and proves nothing about the corners.
+ *
+ * Until they are measured the buttons will be APPROXIMATELY where they are
+ * drawn, which is the worst kind of wrong for a touchscreen: close enough to
+ * look like it works, far enough to miss. Touch all four corners with
+ * board_probe and set these from what it prints. */
+static const int RAW_X_MIN = 200, RAW_X_MAX = 3700;
+static const int RAW_Y_MIN = 240, RAW_Y_MAX = 3800;
+
+/* The display runs at rotation 1 (landscape), so the panel's raw axes are
+ * swapped relative to the layout: raw Y runs along screen X. TOUCH_FLIP_*
+ * exist because which end of each axis is which cannot be settled without
+ * corner readings -- if a press lands mirrored, flip the matching one. */
+#define TOUCH_SWAP_XY 1
+#define TOUCH_FLIP_X  0
+#define TOUCH_FLIP_Y  1
+
 /* Backlight on its own LEDC channel. Channel 1: TFT_eSPI does not use LEDC
  * itself, but Arduino's tone() takes channel 0, and a panel that dims when
  * something beeps would be a memorable bug. */
@@ -64,6 +99,37 @@ void cyd_ui_backend_init(void)
     ledcSetup(BL_CHANNEL, 5000, 8);
     ledcAttachPin(TFT_BL, BL_CHANNEL);
     ledcWrite(BL_CHANNEL, 255);
+
+    touch_spi.begin(TOUCH_SCLK, TOUCH_MISO, TOUCH_MOSI, TOUCH_CS_PIN);
+    touch.begin(touch_spi);
+    touch.setRotation(0);      /* raw; the mapping above does the rotation */
+}
+
+bool cyd_ui_touch_read(int *x, int *y)
+{
+    if (!x || !y || !touch.touched())
+        return false;
+
+    TS_Point p = touch.getPoint();
+
+    long rx = TOUCH_SWAP_XY ? p.y : p.x;
+    long ry = TOUCH_SWAP_XY ? p.x : p.y;
+    int  rx_lo = TOUCH_SWAP_XY ? RAW_Y_MIN : RAW_X_MIN;
+    int  rx_hi = TOUCH_SWAP_XY ? RAW_Y_MAX : RAW_X_MAX;
+    int  ry_lo = TOUCH_SWAP_XY ? RAW_X_MIN : RAW_Y_MIN;
+    int  ry_hi = TOUCH_SWAP_XY ? RAW_X_MAX : RAW_Y_MAX;
+
+    long sx = map(rx, rx_lo, rx_hi, 0, CYD_LAYOUT_W - 1);
+    long sy = map(ry, ry_lo, ry_hi, 0, CYD_LAYOUT_H - 1);
+    if (TOUCH_FLIP_X) sx = (CYD_LAYOUT_W - 1) - sx;
+    if (TOUCH_FLIP_Y) sy = (CYD_LAYOUT_H - 1) - sy;
+
+    /* Clamped, not rejected. A press just off the calibrated edge is still a
+     * press at the edge, and dropping it would make the outer few pixels of
+     * every button dead. */
+    *x = (int)constrain(sx, 0, CYD_LAYOUT_W - 1);
+    *y = (int)constrain(sy, 0, CYD_LAYOUT_H - 1);
+    return true;
 }
 
 void cyd_ui_set_backlight(uint8_t pct)
