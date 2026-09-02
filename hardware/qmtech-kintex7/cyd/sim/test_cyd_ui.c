@@ -268,6 +268,73 @@ int main(void)
         ok(on,  "settings controls are on the panel");
     }
 
+    /* ================================================================
+     * TOUCH EDGE DETECTION. Extracted from main.cpp because it was wrong
+     * TWICE in one hour and neither version was visible to any test:
+     *
+     *   1. no edge detection at all -- a held press walked
+     *      GLANCE -> ACTIONS -> CONFIRM -> YES and rebooted the miner
+     *   2. a debounce that re-assigned its own start time every iteration,
+     *      so the elapsed time never grew, the release never fired, and the
+     *      panel accepted exactly ONE touch before going permanently dead
+     *
+     * The second is what these checks exist for. It is trivially visible here
+     * and was invisible on the board until someone pressed the screen twice.
+     * ================================================================ */
+    printf("\n-- touch edge detection --\n");
+    {
+        cyd_touch_edge_t e;
+        cyd_touch_edge_init(&e);
+
+        ok(cyd_touch_edge_update(&e, false, 1000, 40) == CYD_TOUCH_NONE,
+           "no finger, no event");
+        ok(cyd_touch_edge_update(&e, true, 1001, 40) == CYD_TOUCH_PRESS,
+           "PRESS on the rising edge");
+
+        /* THE HELD PRESS: many polls, exactly one press. */
+        int extra = 0;
+        for (uint32_t t = 1002; t < 1200; t++)
+            if (cyd_touch_edge_update(&e, true, t, 40) != CYD_TOUCH_NONE)
+                extra = 1;
+        ok(!extra, "holding it produces NO further events");
+
+        /* THE RELEASE MUST ACTUALLY ARRIVE. This is the check that fails
+         * against the re-arming-timer bug, where every up iteration reset the
+         * start time and RELEASE never came at all. */
+        ok(cyd_touch_edge_update(&e, false, 1200, 40) == CYD_TOUCH_NONE,
+           "release starts the debounce, no event yet");
+        ok(cyd_touch_edge_update(&e, false, 1220, 40) == CYD_TOUCH_NONE,
+           "still inside the debounce window");
+        ok(cyd_touch_edge_update(&e, false, 1241, 40) == CYD_TOUCH_RELEASE,
+           "RELEASE fires once the window elapses");
+        ok(cyd_touch_edge_update(&e, false, 1300, 40) == CYD_TOUCH_NONE,
+           "and only once");
+
+        /* A SECOND PRESS MUST WORK. The re-arming bug left `pressed` stuck
+         * true, so the panel was dead after a single touch. */
+        ok(cyd_touch_edge_update(&e, true, 1400, 40) == CYD_TOUCH_PRESS,
+           "a SECOND press is detected -- the panel does not go dead");
+
+        /* Chatter during a press must not fake a release. */
+        cyd_touch_edge_init(&e);
+        cyd_touch_edge_update(&e, true, 2000, 40);
+        cyd_touch_edge_update(&e, false, 2010, 40);      /* bounce */
+        ok(cyd_touch_edge_update(&e, true, 2015, 40) == CYD_TOUCH_NONE,
+           "a bounce mid-press yields neither PRESS nor RELEASE");
+        int fired = 0;
+        for (uint32_t t = 2016; t < 2100; t++)
+            if (cyd_touch_edge_update(&e, true, t, 40) == CYD_TOUCH_RELEASE)
+                fired = 1;
+        ok(!fired, "and the cancelled release does not arrive later");
+
+        ok(cyd_touch_edge_update(&e, false, 3000, 40) == CYD_TOUCH_NONE &&
+           cyd_touch_edge_update(&e, false, 3041, 40) == CYD_TOUCH_RELEASE,
+           "a real release after that bounce still works");
+
+        ok(cyd_touch_edge_update(NULL, true, 0, 40) == CYD_TOUCH_NONE,
+           "NULL state does not crash");
+    }
+
     printf("\n");
     if (errors == 0) printf("=== ALL %d CHECKS PASSED ===\n", checks);
     else             printf("=== %d of %d CHECK(S) FAILED ===\n", errors, checks);

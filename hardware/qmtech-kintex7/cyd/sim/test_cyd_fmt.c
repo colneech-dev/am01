@@ -153,6 +153,13 @@ int main(void)
     cyd_fmt_epoch_left_at(0, now, b, sizeof b);
     expect(b, "--", "never reported -> unknown, not a huge countdown");
 
+    /* now == 0 means the miner's clock has not arrived yet, which is the
+     * state DETAIL is in before the first STATUS lands. Computing from the
+     * unix epoch rendered "20700d 0h" -- a 56-year countdown, on the one
+     * field whose entire purpose is a deadline. */
+    cyd_fmt_epoch_left_at(next, 0, b, sizeof b);
+    expect(b, "--", "no clock yet -> unknown, NOT a 56-year countdown");
+
     /* ---- buffers and null pointers ------------------------------------ */
     printf("\n-- hostile buffers --\n");
 

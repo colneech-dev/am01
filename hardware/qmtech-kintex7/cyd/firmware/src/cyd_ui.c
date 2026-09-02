@@ -61,6 +61,47 @@ static int tmo_index(uint32_t v)
     return 2;   /* not one of the steps -- snap to 30s */
 }
 
+void cyd_touch_edge_init(cyd_touch_edge_t *e)
+{
+    if (e) { e->pressed = false; e->up_at = 0; }
+}
+
+cyd_touch_ev_t cyd_touch_edge_update(cyd_touch_edge_t *e, bool down,
+                                     uint32_t now_ms, uint32_t debounce_ms)
+{
+    if (!e)
+        return CYD_TOUCH_NONE;
+
+    if (down) {
+        /* Any contact cancels a pending release, so chatter during a press
+         * cannot produce a spurious lift. */
+        e->up_at = 0;
+        if (!e->pressed) {
+            e->pressed = true;
+            return CYD_TOUCH_PRESS;
+        }
+        return CYD_TOUCH_NONE;
+    }
+
+    if (!e->pressed)
+        return CYD_TOUCH_NONE;
+
+    if (e->up_at == 0) {
+        /* Start timing ONCE. Re-assigning this on every up iteration -- which
+         * the first version of this did, inline in main.cpp -- means the
+         * elapsed time never grows and the release never fires. */
+        e->up_at = now_ms ? now_ms : 1;   /* 0 is the "not timing" sentinel */
+        return CYD_TOUCH_NONE;
+    }
+
+    if (now_ms - e->up_at >= debounce_ms) {
+        e->pressed = false;
+        e->up_at   = 0;
+        return CYD_TOUCH_RELEASE;
+    }
+    return CYD_TOUCH_NONE;
+}
+
 void cyd_ui_touch_release(cyd_ui_t *ui)
 {
     if (ui)

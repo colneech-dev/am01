@@ -156,6 +156,14 @@ void cyd_fmt_epoch_left_at(uint32_t epoch_next, uint32_t now, char *out, int n)
         put(out, n, "--");          /* never reported */
         return;
     }
+    /* now == 0 means the miner's clock has not been received yet -- DETAIL is
+     * reachable before the first STATUS lands. Without this the countdown is
+     * computed from the unix epoch and renders "20700d 0h": a 56-year
+     * countdown, on the one field whose whole purpose is a deadline. */
+    if (now == 0) {
+        put(out, n, "--");
+        return;
+    }
     if (now >= epoch_next) {
         put(out, n, "ROLLED");
         return;

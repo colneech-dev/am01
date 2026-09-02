@@ -57,45 +57,31 @@ void loop(void)
         cyd_ui_draw(&g_ui, &g_status);
     }
 
-    /* EDGE-TRIGGERED, and this is not a refinement -- without it the panel
-     * reboots the miner on a single held tap.
+    /* EDGE-TRIGGERED. Without it, one held press walks
+     * GLANCE -> ACTIONS -> CONFIRM -> YES and reboots the miner in
+     * milliseconds -- CYD_CONFIRM_YES is the same rectangle as ACTIONS'
+     * REBOOT button, and touch is polled every loop.
      *
-     * cyd_ui_touch_read() returns true for EVERY loop iteration a finger is
-     * down, tens of times per press. CYD_CONFIRM_YES is the same rectangle as
-     * ACTIONS' REBOOT button (both are CYD_BTN_RIGHT), so one continuous
-     * press on the right-hand button walks GLANCE -> ACTIONS -> CONFIRM ->
-     * YES and reboots, in a few milliseconds, with the confirm screen never
-     * visible.
-     *
-     * sim/test_cyd_ui.c proved no SINGLE CALL can trigger an action, and that
-     * remains true -- the model was never wrong. The bug was that one physical
-     * touch is many calls. The test now covers held presses too.
-     *
-     * The release must also be debounced: a resistive panel chatters, and a
-     * bounce reads as release-then-press, which is another dispatch. */
-    static bool     was_down = false;
-    static uint32_t up_since = 0;
-    const uint32_t  DEBOUNCE_MS = 40;
+     * The state machine lives in cyd_ui.c so it can be TESTED. It was inline
+     * here and wrong twice: once with no edge detection, once with a debounce
+     * that re-armed its own timer every iteration so the release never fired
+     * and the panel died after a single touch. Neither was visible to the
+     * test suite, because this file cannot be built on a PC. */
+    static cyd_touch_edge_t edge;
+    static bool edge_ready = false;
+    if (!edge_ready) { cyd_touch_edge_init(&edge); edge_ready = true; }
 
     int tx, ty;
     bool down = cyd_ui_touch_read(&tx, &ty);
 
-    if (!down) {
-        if (was_down) up_since = millis();
-        /* Only treat it as released once it has been up for the debounce
-         * window; until then keep was_down set so a bounce cannot re-arm. */
-        if (up_since && millis() - up_since >= DEBOUNCE_MS) {
-            was_down = false;
-            /* Tell the model the finger lifted. Until this, cyd_ui_touch()
-             * refuses to return an action after a screen change -- the second
-             * of the two guards on the reboot path, and the one that is
-             * actually testable (sim/test_cyd_ui.c). */
-            cyd_ui_touch_release(&g_ui);
-        }
-    } else if (!was_down) {
-        was_down = true;
-        up_since = 0;
+    switch (cyd_touch_edge_update(&edge, down, millis(), 40)) {
+    case CYD_TOUCH_RELEASE:
+        /* Tell the model the finger lifted -- the second of the two guards on
+         * the reboot path, and the one sim/test_cyd_ui.c can prove. */
+        cyd_ui_touch_release(&g_ui);
+        break;
 
+    case CYD_TOUCH_PRESS: {
         g_ui.last_touch_ms = millis();
         cyd_action_t act = cyd_ui_touch(&g_ui, tx, ty);
 
@@ -110,6 +96,12 @@ void loop(void)
         }
 
         cyd_ui_draw(&g_ui, &g_status);
+        break;
+    }
+
+    case CYD_TOUCH_NONE:
+    default:
+        break;
     }
 
     /* ---- backlight ---------------------------------------------------

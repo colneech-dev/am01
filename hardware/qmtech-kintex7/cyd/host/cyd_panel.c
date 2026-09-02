@@ -44,7 +44,25 @@ static volatile int g_stop;
 static pthread_t    g_thread;
 static int          g_running;
 
+/* Line assembly for the RX side, at file scope so uart_write() can keep
+ * servicing it while it waits for the TX FIFO to drain.
+ *
+ * WITHOUT THAT, a status push starves RX. A 663-byte line at 115200 takes
+ * ~58ms, and the FPGA's RX FIFO is 16 bytes -- about 1.4ms of incoming data.
+ * A command sent while a status is going out would lose bytes mid-line, be
+ * rejected as malformed, and simply not happen. The symptom is a button that
+ * works most of the time, which is the worst kind. */
+typedef struct {
+    char   buf[CYD_LINE_MAX];
+    size_t len;
+    int    overflow;
+} rx_state_t;
+
+static rx_state_t g_rx;
+
 /* ---- UART, over the register bus -------------------------------------- */
+
+static void drain_rx(am01_bus_t *bus);
 
 /* Write the WHOLE line, waiting for the FIFO to drain as needed.
  *
@@ -75,6 +93,9 @@ static int uart_write(am01_bus_t *bus, const char *buf, size_t len)
         if (!room) {
             if (++spins > 2000)          /* ~2s at 1ms */
                 return (int)n;
+            /* Service RX while we wait. See the note on rx_state_t: without
+             * this a command arriving during a status push loses bytes. */
+            drain_rx(bus);
             usleep(1000);
             continue;
         }
@@ -180,49 +201,51 @@ static void apply(const cyd_cmd_t *c, am01_bus_t *bus)
 
 /* ---- the thread -------------------------------------------------------- */
 
+/* Read whatever is waiting and act on any complete lines. Called both from
+ * the main loop and from inside uart_write()'s wait, so a command is never
+ * lost behind an outgoing status. */
+static void drain_rx(am01_bus_t *bus)
+{
+    for (int i = 0; i < 256; i++) {
+        uint16_t st;
+        if (am01_bus_read_reg(bus, CYD_REG_UART_STAT, &st) < 0)
+            return;
+        if (ST_RX_EMPTY(st))
+            return;
+
+        uint16_t d;
+        if (am01_bus_read_reg(bus, CYD_REG_UART_DATA, &d) < 0)
+            return;
+        char ch = (char)(d & 0xFF);
+
+        if (ch == '\n' || ch == '\r') {
+            if (g_rx.len && !g_rx.overflow) {
+                g_rx.buf[g_rx.len] = '\0';
+                cyd_cmd_t c;
+                if (cyd_cmd_parse(g_rx.buf, &c) != CYD_CMD_KIND_NONE)
+                    apply(&c, bus);
+                /* An unparseable line is IGNORED, not logged: a stray byte on
+                 * a serial link is ordinary, and a log line per corrupted
+                 * character would bury the journal. */
+            }
+            g_rx.len = 0;
+            g_rx.overflow = 0;
+        } else if (g_rx.len + 1 < sizeof g_rx.buf) {
+            g_rx.buf[g_rx.len++] = ch;
+        } else {
+            g_rx.overflow = 1;   /* drop the line whole; resync at the newline */
+            g_rx.len = 0;
+        }
+    }
+}
+
 static void *panel_thread(void *arg)
 {
     am01_bus_t *bus = (am01_bus_t *)arg;
-
-    char   rx[CYD_LINE_MAX];
-    size_t rxlen = 0;
-    int    overflow = 0;
-    int    tick = 0;
+    int tick = 0;
 
     while (!g_stop) {
-        /* ---- drain RX ------------------------------------------------ */
-        for (int i = 0; i < 256; i++) {
-            uint16_t st;
-            if (am01_bus_read_reg(bus, CYD_REG_UART_STAT, &st) < 0)
-                break;
-            if (ST_RX_EMPTY(st))
-                break;
-
-            uint16_t d;
-            if (am01_bus_read_reg(bus, CYD_REG_UART_DATA, &d) < 0)
-                break;
-            char ch = (char)(d & 0xFF);
-
-            if (ch == '\n' || ch == '\r') {
-                if (rxlen && !overflow) {
-                    rx[rxlen] = '\0';
-                    cyd_cmd_t c;
-                    if (cyd_cmd_parse(rx, &c) != CYD_CMD_KIND_NONE)
-                        apply(&c, bus);
-                    /* An unparseable line is IGNORED, not logged: the link
-                     * carries whatever the panel says, a stray byte is
-                     * ordinary, and a log line per corrupted character would
-                     * bury the journal. */
-                }
-                rxlen = 0;
-                overflow = 0;
-            } else if (rxlen + 1 < sizeof rx) {
-                rx[rxlen++] = ch;
-            } else {
-                overflow = 1;   /* drop the whole line, resync at the newline */
-                rxlen = 0;
-            }
-        }
+        drain_rx(bus);
 
         /* ---- push status, once a second ------------------------------ */
         if (++tick >= 10) {

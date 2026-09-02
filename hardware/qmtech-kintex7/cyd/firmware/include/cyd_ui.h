@@ -91,6 +91,39 @@ void cyd_ui_set_backlight(uint8_t pct);
  * or the buttons will not be where they are drawn. */
 bool cyd_ui_touch_read(int *x, int *y);
 
+/* ---- touch edge detection, extracted so it can be TESTED ---------------
+ *
+ * This lived inline in main.cpp's loop and was wrong twice in one hour: first
+ * with no edge detection at all (a held press walked through the confirm
+ * screen and rebooted the miner), then with a debounce that re-armed its own
+ * timer every iteration, so the release never fired and the panel accepted
+ * exactly one touch before going dead.
+ *
+ * Both were invisible to the test suite because main.cpp cannot be compiled
+ * on a PC. Pulling the state machine out here makes the property testable,
+ * which is the only reason it will stay correct. */
+typedef struct {
+    bool     pressed;    /* debounced: a finger is down                    */
+    uint32_t up_at;      /* when the raw signal first went up; 0 = not timing */
+} cyd_touch_edge_t;
+
+typedef enum {
+    CYD_TOUCH_NONE = 0,
+    CYD_TOUCH_PRESS,     /* dispatch a touch at this instant */
+    CYD_TOUCH_RELEASE    /* tell the model the finger lifted  */
+} cyd_touch_ev_t;
+
+void cyd_touch_edge_init(cyd_touch_edge_t *e);
+
+/* Feed the raw touch state and a millisecond clock; get at most one event.
+ *
+ * PRESS fires once per physical press, on the rising edge. RELEASE fires once
+ * the raw signal has been up for `debounce_ms` -- resistive panels chatter,
+ * and an undebounced release reads as lift-then-press, which is a second
+ * dispatch and puts the reboot path back. */
+cyd_touch_ev_t cyd_touch_edge_update(cyd_touch_edge_t *e, bool down,
+                                     uint32_t now_ms, uint32_t debounce_ms);
+
 /* Draw. Called on a fresh status or a touch, not free-running: a full repaint
  * every frame is wasted power on a panel that changes once a second, and this
  * is sitting on top of a miner where the power budget is not free. */
