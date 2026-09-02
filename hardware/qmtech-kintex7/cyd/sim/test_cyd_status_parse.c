@@ -85,6 +85,15 @@ int main(void)
 
     ok(fabs(st.best_diff_session - 267.579) < 0.001, "best_diff_session");
     ok(st.uptime == 27236,      "uptime");
+
+    /* `updated` is the miner's wall clock and the ONLY sound "now" for the
+     * epoch countdown. The first version used epoch + uptime, which is an
+     * arbitrary instant -- epoch is when the OdoCrypt epoch began, not when
+     * the miner started. Here that sum would be 1787643236, five days adrift
+     * of the real 1788278871, and the countdown would look plausible. */
+    ok(st.updated == 1788278871, "updated (the wall clock) is parsed");
+    ok(st.updated != st.epoch + st.uptime,
+       "and differs from epoch+uptime, which was the bug");
     ok(st.temp_c == 55,         "temp_c 55");
     ok(st.fan_rpm == 3030,      "fan_rpm 3030");
 

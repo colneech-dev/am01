@@ -61,10 +61,32 @@ static int tmo_index(uint32_t v)
     return 2;   /* not one of the steps -- snap to 30s */
 }
 
+void cyd_ui_touch_release(cyd_ui_t *ui)
+{
+    if (ui)
+        ui->needs_release = false;
+}
+
+static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y);
+
 cyd_action_t cyd_ui_touch(cyd_ui_t *ui, int x, int y)
 {
     if (!ui)
         return CYD_ACTION_NONE;
+
+    cyd_screen_t before = ui->screen;
+    cyd_action_t act = touch_inner(ui, x, y);
+
+    /* ANY screen change re-arms the release requirement. Doing it here rather
+     * than in each transition means a new screen cannot be added that quietly
+     * forgets it. */
+    if (ui->screen != before)
+        ui->needs_release = true;
+    return act;
+}
+
+static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
+{
 
     /* ANY touch counts as activity, including one that hits nothing and
      * including the one that wakes a dimmed panel. Waking on a press but not
@@ -120,6 +142,13 @@ cyd_action_t cyd_ui_touch(cyd_ui_t *ui, int x, int y)
 
     case CYD_SCREEN_CONFIRM:
         if (cyd_rect_hit(CYD_CONFIRM_YES, x, y)) {
+            /* THE FINGER MUST HAVE LIFTED since CONFIRM opened. Without this,
+             * one held press on the right-hand button walks
+             * GLANCE -> ACTIONS -> CONFIRM -> YES, because CYD_CONFIRM_YES is
+             * the same rectangle as ACTIONS' REBOOT button -- a reboot in
+             * milliseconds with the confirm screen never seen. */
+            if (ui->needs_release)
+                return CYD_ACTION_NONE;
             cyd_action_t act = ui->pending;
             /* Cleared BEFORE returning, so a second YES cannot repeat it --
              * a double-tap on a reboot confirm should reboot once. */

@@ -30,11 +30,18 @@ static void ok(int cond, const char *what)
     else      { printf("  FAIL  %s\n", what); errors++; }
 }
 
-/* Touch the middle of a rect -- what a finger does. Touching corners would
- * pass while a rect was one pixel wide. */
+/* A COMPLETE tap: press, then lift. The lift matters -- the model requires a
+ * release before an action can fire after a screen change, so a "tap" that
+ * never lifts is a HELD press and is deliberately not the same thing. The
+ * held-press tests below exercise that case on purpose.
+ *
+ * Middle of the rect, because touching corners would pass while a rect was
+ * one pixel wide. */
 static cyd_action_t tap(cyd_ui_t *ui, cyd_rect_t r)
 {
-    return cyd_ui_touch(ui, r.x + r.w / 2, r.y + r.h / 2);
+    cyd_action_t a = cyd_ui_touch(ui, r.x + r.w / 2, r.y + r.h / 2);
+    cyd_ui_touch_release(ui);
+    return a;
 }
 
 int main(void)
@@ -75,6 +82,7 @@ int main(void)
      * silently changes screens is how a panel feels haunted. */
     cyd_ui_init(&ui);
     act = cyd_ui_touch(&ui, 5, 5);
+    cyd_ui_touch_release(&ui);
     ok(ui.screen == CYD_SCREEN_GLANCE && act == CYD_ACTION_NONE,
        "a touch on dead space does nothing");
 
@@ -113,6 +121,7 @@ int main(void)
     tap(&ui, CYD_BTN_RIGHT);
     tap(&ui, CYD_BTN_RIGHT);
     act = cyd_ui_touch(&ui, CYD_LAYOUT_W / 2, 10);
+    cyd_ui_touch_release(&ui);
     ok(act == CYD_ACTION_NONE && ui.screen == CYD_SCREEN_CONFIRM,
        "a touch elsewhere on CONFIRM neither confirms nor dismisses");
 
@@ -136,10 +145,54 @@ int main(void)
                 cyd_ui_init(&ui);
                 if (cyd_ui_touch(&ui, x, y) != CYD_ACTION_NONE)
                     leaked = 1;
+                cyd_ui_touch_release(&ui);
             }
         }
         ok(!leaked,
            "NO single touch anywhere on the panel can trigger an action");
+    }
+
+    /* A HELD TOUCH. THIS IS THE ONE THAT WAS MISSING, and its absence let a
+     * real bug through to the board.
+     *
+     * The checks above prove no single CALL triggers an action. The firmware
+     * makes one call per loop iteration for as long as a finger is down --
+     * tens per press. And CYD_CONFIRM_YES is the SAME RECTANGLE as ACTIONS'
+     * REBOOT button (both CYD_BTN_RIGHT), so repeated dispatch at one point
+     * walks GLANCE -> ACTIONS -> CONFIRM -> YES and reboots the miner, in
+     * milliseconds, with the confirm screen never visible.
+     *
+     * The model was never wrong; the unit under test was. main.cpp now
+     * dispatches on the rising edge only, and this asserts the property that
+     * makes that necessary: repeated identical touches must not walk the
+     * machine into an action. */
+    {
+        int leaked = 0;
+        for (int y = 0; y < CYD_LAYOUT_H; y += 6) {
+            for (int x = 0; x < CYD_LAYOUT_W; x += 6) {
+                cyd_ui_init(&ui);
+                /* 50 dispatches at ONE point, as a held finger would give. */
+                for (int i = 0; i < 50; i++)
+                    if (cyd_ui_touch(&ui, x, y) != CYD_ACTION_NONE)
+                        leaked = 1;
+            }
+        }
+        ok(!leaked,
+           "a HELD touch (50 dispatches at one point) triggers no action");
+    }
+
+    /* And specifically the path that bit: the right-hand button is REBOOT on
+     * ACTIONS and YES on CONFIRM, so holding it is the dangerous case. */
+    {
+        cyd_rect_t r = CYD_BTN_RIGHT;
+        cyd_ui_init(&ui);
+        int fired = 0;
+        for (int i = 0; i < 50; i++)
+            if (cyd_ui_touch(&ui, r.x + r.w / 2, r.y + r.h / 2)
+                    != CYD_ACTION_NONE)
+                fired = 1;
+        ok(!fired,
+           "holding the RIGHT button does not walk GLANCE->ACTIONS->CONFIRM->YES");
     }
 
     /* Two touches should not manage it either, from GLANCE. */
@@ -149,6 +202,7 @@ int main(void)
             for (int x = 0; x < CYD_LAYOUT_W; x += 6) {
                 cyd_ui_init(&ui);
                 cyd_ui_touch(&ui, x, y);
+                cyd_ui_touch_release(&ui);
                 for (int y2 = 0; y2 < CYD_LAYOUT_H; y2 += 24)
                     for (int x2 = 0; x2 < CYD_LAYOUT_W; x2 += 24) {
                         cyd_ui_t u2 = ui;

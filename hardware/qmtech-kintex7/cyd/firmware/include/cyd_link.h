@@ -92,6 +92,14 @@ typedef struct {
 
     uint32_t uptime;
     uint32_t last_share;
+    /* THE MINER'S WALL CLOCK, and the only trustworthy one here: a CYD has no
+     * RTC and NTP may never have run. Needed for the epoch countdown.
+     *
+     * The countdown first used `epoch + uptime`, which is meaningless -- epoch
+     * is when the CURRENT OdoCrypt epoch began, not when the miner started.
+     * With a real status that read 9d 16h instead of 2d 7h, and looked
+     * entirely plausible. */
+    uint32_t updated;
 } cyd_status_t;
 
 /* One STATUS line a second is the design point, so a link that has produced

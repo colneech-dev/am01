@@ -58,6 +58,16 @@ typedef struct {
     uint32_t last_touch_ms;
 
     bool     link_down;         /* drives the MINER DOWN state            */
+
+    /* Set whenever the screen changes; cleared by cyd_ui_touch_release().
+     * While set, no action can be returned.
+     *
+     * DEFENCE IN DEPTH on the only path that can reboot the miner. The caller
+     * dispatches on the rising edge, which is the primary guard -- but that
+     * lives in main.cpp and cannot be tested off hardware, and it is exactly
+     * the guard that was missing when this shipped. This one is in the model,
+     * so sim/test_cyd_ui.c can prove it. */
+    bool     needs_release;
 } cyd_ui_t;
 
 void cyd_ui_init(cyd_ui_t *ui);
@@ -90,6 +100,12 @@ void cyd_ui_draw(cyd_ui_t *ui, const cyd_status_t *st);
  * does NOT call the link itself -- the caller owns that, so this stays
  * testable off-hardware and the UI cannot quietly acquire side effects. */
 cyd_action_t cyd_ui_touch(cyd_ui_t *ui, int x, int y);
+
+/* Tell the model the finger has lifted. Until this is called after a screen
+ * change, cyd_ui_touch() cannot return an action -- so a single held press
+ * can never walk through a confirm screen, however many times the caller
+ * polls it. Call it on the falling edge. */
+void cyd_ui_touch_release(cyd_ui_t *ui);
 
 /* Formatting shared with the drawing code, and the reason it is declared here
  * rather than left inline: these are the places a panel most easily lies.

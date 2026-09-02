@@ -46,25 +46,39 @@ static int          g_running;
 
 /* ---- UART, over the register bus -------------------------------------- */
 
-/* Returns bytes written. SHORT WRITES ARE NORMAL and not an error: the FIFO
- * is 16 deep and drains at 11.5 kB/s, so a whole status line takes several
- * passes. The caller drops the remainder rather than blocking -- a panel that
- * misses one update gets the next one a second later, and stalling the thread
- * to guarantee delivery would be the wrong trade for a display. */
+/* Write the WHOLE line, waiting for the FIFO to drain as needed.
+ *
+ * The first version returned early whenever the FIFO filled, and the caller
+ * ignored the short count. The FIFO is 16 bytes and a status line is ~663, so
+ * roughly 16 bytes went out per second -- no newline, nothing the far end
+ * could ever parse. am01-uartd.c had the retry loop; dropping it here was the
+ * bug.
+ *
+ * BOUNDED, so a dead link cannot wedge the thread: 663 bytes at 115200 baud
+ * is ~58ms, and the budget below allows about 2s before giving up. A partial
+ * line is left partial -- the far end drops it at the next newline and gets a
+ * whole one a second later, which is the right failure for a display. */
 static int uart_write(am01_bus_t *bus, const char *buf, size_t len)
 {
     size_t n = 0;
+    int spins = 0;
+
     while (n < len) {
         uint16_t st;
         if (am01_bus_read_reg(bus, CYD_REG_UART_STAT, &st) < 0)
             return (int)n;
-        if (ST_TX_FULL(st))
-            break;
 
-        unsigned cnt = ST_TX_CNT(st);
-        unsigned room = (cnt < TX_FIFO_DEPTH) ? (TX_FIFO_DEPTH - cnt) : 0;
-        if (!room)
-            break;
+        unsigned cnt  = ST_TX_CNT(st);
+        unsigned room = ST_TX_FULL(st) ? 0
+                      : (cnt < TX_FIFO_DEPTH ? TX_FIFO_DEPTH - cnt : 0);
+
+        if (!room) {
+            if (++spins > 2000)          /* ~2s at 1ms */
+                return (int)n;
+            usleep(1000);
+            continue;
+        }
+        spins = 0;
 
         for (unsigned i = 0; i < room && n < len; i++) {
             if (am01_bus_write_reg(bus, CYD_REG_UART_DATA,
@@ -105,12 +119,21 @@ static void apply_set_pool(const cyd_cmd_t *c)
     fprintf(f, "POOL_PORT=%d\n",   c->port);
     fprintf(f, "POOL_WORKER=%s\n", c->worker);
     fprintf(f, "POOL_PASS=%s\n",   c->pass);
-    int bad = (fflush(f) != 0);
+    /* fflush pushes to the OS; fsync pushes to the DEVICE. Only the second
+     * makes the rename() below meaningful: /boot is vfat on an SD card, and
+     * without it a power cut can leave the directory entry renamed and the
+     * data unwritten -- the exact truncated-config failure the temp-file
+     * dance was supposed to prevent. Claiming power-cut safety with only an
+     * fflush was worse than not claiming it.
+     *
+     * errno is captured BEFORE fclose(), which sets its own. */
+    int bad = (fflush(f) != 0) || (fsync(fileno(f)) != 0);
+    int err = errno;
     fclose(f);
 
     if (bad || rename(tmp, CYD_POOL_CONF_PATH) != 0) {
         fprintf(stderr, "[cyd] set_pool: failed to install %s: %s\n",
-                CYD_POOL_CONF_PATH, strerror(errno));
+                CYD_POOL_CONF_PATH, strerror(bad ? err : errno));
         unlink(tmp);
         return;
     }

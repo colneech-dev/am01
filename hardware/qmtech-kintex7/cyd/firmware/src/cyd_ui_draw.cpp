@@ -344,10 +344,15 @@ void cyd_ui_draw(cyd_ui_t *ui, const cyd_status_t *st)
         break;
     case CYD_SCREEN_DETAIL:
         header("DETAIL", st, ui->link_down);
-        /* The MINER'S clock, passed through, not the ESP32's: a CYD has no
-         * RTC and NTP may never have run, so `now` comes from the status
-         * object. See cyd_fmt_epoch_left_at(). */
-        draw_detail(st, st->epoch ? st->epoch + st->uptime : 0);
+        /* The MINER'S wall clock, passed through: a CYD has no RTC and NTP
+         * may never have run.
+         *
+         * `updated`, NOT `epoch + uptime`. That was the first attempt and it
+         * is nonsense -- `epoch` is when the current OdoCrypt epoch began,
+         * not when the miner started, so the sum is an arbitrary instant. On
+         * a real status it rendered "9d 16h" against a true "2d 7h", which is
+         * exactly the sort of wrong that looks right. */
+        draw_detail(st, st->updated);
         break;
     case CYD_SCREEN_SETTINGS:
         header("SETTINGS", st, ui->link_down);

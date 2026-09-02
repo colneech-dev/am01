@@ -30,10 +30,19 @@
  * signal-integrity margin that is the entire reason for moving off SPI. */
 #define CYD_BAUD_DEFAULT 115200
 
-/* Longest line either direction. A status line is well under this; the cap
- * exists so a desynchronised link cannot make either side allocate without
- * bound while hunting for a newline that is never coming. */
-#define CYD_LINE_MAX 512
+/* Longest line either direction. The cap exists so a desynchronised link
+ * cannot make either side allocate without bound hunting for a newline that
+ * is never coming.
+ *
+ * 1024, NOT 512. "A status line is well under this" was simply wrong: the
+ * miner's status.json measures 655 bytes on the board, and "STATUS " + 655
+ * needs 663. At 512 the daemon truncated it to 511 and the firmware then
+ * discarded every line as an overflow -- so the panel would have sat on
+ * MINER DOWN for ever, with both ends behaving exactly as designed.
+ *
+ * Sized against a MEASURED payload with room for the miner to gain fields,
+ * which it will. */
+#define CYD_LINE_MAX 1024
 
 /*
  * CM4 -> CYD, once a second:

@@ -164,6 +164,7 @@ bool cyd_status_parse(const char *json, cyd_status_t *st)
     get_u32(json, "epoch_next",      &st->epoch_next);
     get_u32(json, "uptime",          &st->uptime);
     get_u32(json, "last_share",      &st->last_share);
+    get_u32(json, "updated",         &st->updated);
 
     /* NOT clamped to zero: -1 is the miner's "could not read" sentinel and
      * cyd_fmt_temp/cyd_fmt_fan turn it into "--". Forcing it to 0 here would
