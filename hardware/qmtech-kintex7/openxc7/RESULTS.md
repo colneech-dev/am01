@@ -507,6 +507,62 @@ for a build that would have succeeded on the RTL/logic side, and the
 resulting swap-thrash made WSL itself unresponsive for extended stretches,
 independent of whether the LUTRAM mapping issue existed.
 
+## `THROUGHPUT=3` alone (no LUTRAM): WORKS, but timing is marginal -- 2026-09-02
+
+The one member of this family that sidesteps the broken LUTRAM mechanism
+entirely: no `--lutram`, all 10 large-sbox types stay `ram_style=block`.
+**This is the first fully successful alternative build of the whole
+session** -- routes cleanly, unlike every 2-miner attempt and unlike Option
+A's crash.
+
+**Resource counts, confirmed exactly as sized:**
+
+| | measured | sized estimate |
+|---|---|---|
+| BRAM | **560 (62.9%)** | 560 (63%) -- exact |
+| LUT | **47,565 (11.7%)** | ~56k (14%) -- came in lower |
+
+**Synthesis and routing both comfortable.** Unlike Option A's 12h crisis,
+this design (only 1.33x baseline vs Option A's ~5x scale) synthesised in a
+few hours without a memory crisis, and every seed routed cleanly to
+`overuse=0 unrouted=0` in 8-19 iterations -- no congestion fight at all,
+consistent with 63% BRAM being comfortably inside the routable regime this
+whole session's 2-miner work never found for 90%+ occupancy.
+
+**But timing is marginal and seed-dependent, unlike the 1-miner baseline:**
+
+| source | clk_h | vs 133.33 MHz |
+|---|---|---|
+| `build.sh`'s own unseeded route | 141.74 | PASS |
+| seed 1 | 132.71 | **FAIL** (by 0.6 MHz) |
+| seed 2 | 121.95 | **FAIL** |
+| seed 3 | 143.88 | PASS |
+
+**Median (n=3): 132.71 MHz -- technically fails the target.** Relative
+hashrate at median: **1.14x** (vs the 1.33x ceiling and vs 2.00x for
+`THROUGHPUT=2`, which remains blocked on the LUTRAM issue). Two of four
+measured configurations fail outright. Contrast with the 1-miner baseline,
+where the *worst* of 5 seeds (145.14) still clears target with 9% margin --
+every seed there passes. A design that only sometimes meets timing is not a
+reliable win.
+
+**Not a floorplan-overflow bug** -- checked the floorplan report directly:
+all 28 rounds fit cleanly within Y40-139 (round 27 ends exactly at Y139,
+no spill). `BRAM_YBASE=40` was carried over unrefined from the 420-BRAM
+1-miner layout (flagged as a caveat when the build was launched) and is
+plausibly just not optimal for a 560-BRAM layout -- nobody has run the
+equivalent y-base (or column-count) sweep that found 40 optimal for 420
+BRAM. **That sweep is the concrete next step**, not a dead end: this design
+routes reliably and has real margin to find (the unseeded route already
+found 141.74 MHz with the same floorplan, so better placements clearly
+exist within this geometry).
+
+**Config used:** `odo_gen <epoch> 3 encrypt_3 --bram-out-reg` (no
+`--lutram`), `miner_t3.v` (THROUGHPUT=3 variant of the pinned miner.v),
+`BRAM_OUTREG=0 BRAM_FP=1 BRAM_YBASE=40 CRIT_DIST=1.0` (build.sh defaults,
+unchanged from the 1-miner recipe). `run_throughput3.sh`, tag
+`throughput3`, results in `seed_ab_results.tsv`.
+
 ## Option B (PLANNED, NOT EXECUTED -- pick up after Option A): two `THROUGHPUT=3` miners
 
 Two independent `THROUGHPUT=3` wide miners (each 1.33x, 560 BRAM alone) for
