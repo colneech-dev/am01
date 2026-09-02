@@ -568,17 +568,62 @@ So the marginal, seed-dependent timing at y-base=40 is not an easy
 misconfiguration -- it looks close to the actual ceiling for this specific
 **6-column** floorplan geometry (`--columns 0,1,2,3,4,5`, hardcoded in
 `build.sh`, also carried over unchanged from the 1-miner default) at 560
-BRAM. **Column count, not row range, is the untested lever now** -- e.g.
-spreading across 7 columns (adding X6) or a different column grouping.
-Not attempted. `run_throughput3_ybase_sweep.sh` can be adapted for a
-column-count sweep the same way (reuse the synthesised netlist, vary
-`--columns` instead of `--y-base`).
+BRAM.
+
+### Column-count fix (2026-09-02): adding X6 WORKS -- 134.86 MHz, real PASS
+
+Column count, not row range, was the right lever. Reused the synthesised
+netlist again, this time varying `--columns` instead of `--y-base`
+(`run_throughput3_cols7.sh`). `--columns 0,1,2,3,4,5,6` (adding X6, which
+only contributes ~20 rows at y-base=40 since it stops at Y59 -- not a full
+7th column, just extra room where the floorplanner needs it):
+
+| config | seed 1 | vs 133.33 MHz |
+|---|---|---|
+| 6 columns, y-base=40 (original) | 132.71 MHz | FAIL (by 0.6 MHz) |
+| **7 columns (+X6), y-base=40** | **134.86 MHz** | **PASS** (1.53 MHz / ~1.1% margin) |
+
+Confirmed as the genuine post-route result (line order checked directly:
+the reported `Max frequency` follows `iter=49 ... overuse=0`, not a
+pre-route estimate). Seeds 2-3 launched to confirm this isn't a lucky
+single seed before adopting it as the new default. **This is the first
+real, confirmed improvement found for THROUGHPUT=3's marginal timing.**
+
+### `rom_style` lead investigated and ruled out for yosys (2026-09-02)
+
+A parallel effort (memory: `am01-hashrate-scaling-options`, "MEASURED
+2026-09-02: --lutram=3 with 3 miners") building the same `--lutram`
+mechanism via **Vivado**, targeting `NUM_MINERS=3`, found Vivado silently
+falls back to raw combinational logic (~730 LUT/instance, not the ~420
+this project's cost model assumed) rather than hard-erroring like yosys
+does, and suspected `rom_style` (not `ram_style`) is the attribute Vivado
+actually needs for a write-less memory -- untested there as of that
+writing.
+
+**Tested on yosys, cheaply (isolated <1min test, not a full rebuild):
+`rom_style="distributed"` hits the identical `ERROR: no valid mapping
+found` as `ram_style`.** yosys's `MEMORY_LIBMAP` recognises the attribute
+name (`found attribute 'rom_style = distributed'...`) but applies the same
+write-port-required LUTRAM rule regardless of which attribute signals ROM
+intent. **Does not unblock Option A / `THROUGHPUT=2` on this toolchain.**
+Worth trying on the actual Vivado flow if that effort continues -- the two
+toolchains' `memory_libmap`/synthesis behaviour are unrelated, so a Vivado
+result doesn't transfer either direction.
+
+**Coordination note:** that same session left a comment in the memory file
+flagging `odo_gen.cpp`'s `--lutram` mechanism as uncommitted/not-theirs and
+asking to check with whoever wrote it -- that's this work (committed on
+`claude/option-a-wide-miner-lutram`, not yet merged anywhere they'd see it
+by default). Worth a heads-up to avoid duplicate or conflicting `--lutram`
+implementations landing independently.
 
 **Config used:** `odo_gen <epoch> 3 encrypt_3 --bram-out-reg` (no
 `--lutram`), `miner_t3.v` (THROUGHPUT=3 variant of the pinned miner.v),
 `BRAM_OUTREG=0 BRAM_FP=1 BRAM_YBASE=40 CRIT_DIST=1.0` (build.sh defaults,
-unchanged from the 1-miner recipe). `run_throughput3.sh`, tag
-`throughput3`, results in `seed_ab_results.tsv`.
+unchanged from the 1-miner recipe), `--columns 0,1,2,3,4,5,6` (fixed from
+build.sh's hardcoded 6-column default via `run_throughput3_cols7.sh`).
+Results in `seed_ab_results.tsv`, tags `throughput3` (original 6-col) and
+`throughput3_cols7_yb40` (the fix).
 
 ## Option B (PLANNED, NOT EXECUTED -- pick up after Option A): two `THROUGHPUT=3` miners
 
