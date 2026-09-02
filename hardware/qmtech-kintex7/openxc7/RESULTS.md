@@ -548,14 +548,31 @@ reliable win.
 
 **Not a floorplan-overflow bug** -- checked the floorplan report directly:
 all 28 rounds fit cleanly within Y40-139 (round 27 ends exactly at Y139,
-no spill). `BRAM_YBASE=40` was carried over unrefined from the 420-BRAM
-1-miner layout (flagged as a caveat when the build was launched) and is
-plausibly just not optimal for a 560-BRAM layout -- nobody has run the
-equivalent y-base (or column-count) sweep that found 40 optimal for 420
-BRAM. **That sweep is the concrete next step**, not a dead end: this design
-routes reliably and has real margin to find (the unseeded route already
-found 141.74 MHz with the same floorplan, so better placements clearly
-exist within this geometry).
+no spill).
+
+### y-base sweep (2026-09-02): 40 is already the best of what's testable in this geometry
+
+Reused the already-synthesised netlist (`BRAM_YBASE` only affects the
+floorplan step, not synthesis) to sweep candidates without a
+resynthesis -- `run_throughput3_ybase_sweep.sh`. Result: **nothing beats
+the original 40.**
+
+| y-base | seed 1 result | note |
+|---|---|---|
+| 0 | 107.70 MHz | **invalid** -- killed mid-route (68+ min stuck on iter=1, then slow iter=2; consistent with the historical finding that y-base=0 was the worst option for the smaller 420-BRAM case too) |
+| 20 | **118.41 MHz** | genuine, converged cleanly (iter=103, `overuse=0`) -- but worse than 40 |
+| **40** | **132.71 MHz** | unchanged from the original build -- remains the best found |
+| 53 | -- | **floorplan generation failed outright**: Y53-137 is 84 rows x 6 cols = 504 slots, doesn't fit 560 BRAM |
+
+So the marginal, seed-dependent timing at y-base=40 is not an easy
+misconfiguration -- it looks close to the actual ceiling for this specific
+**6-column** floorplan geometry (`--columns 0,1,2,3,4,5`, hardcoded in
+`build.sh`, also carried over unchanged from the 1-miner default) at 560
+BRAM. **Column count, not row range, is the untested lever now** -- e.g.
+spreading across 7 columns (adding X6) or a different column grouping.
+Not attempted. `run_throughput3_ybase_sweep.sh` can be adapted for a
+column-count sweep the same way (reuse the synthesised netlist, vary
+`--columns` instead of `--y-base`).
 
 **Config used:** `odo_gen <epoch> 3 encrypt_3 --bram-out-reg` (no
 `--lutram`), `miner_t3.v` (THROUGHPUT=3 variant of the pinned miner.v),
