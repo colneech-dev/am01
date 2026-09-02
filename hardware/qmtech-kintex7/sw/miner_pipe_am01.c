@@ -37,6 +37,9 @@
  * the bus while the miner runs. Safe because am01_gpio_bus.c serialises
  * every transaction. */
 #include "cyd_panel.h"
+/* cyd_panel_stop() MUST be called before miner_io_pipe_shutdown(): the
+ * panel thread holds the am01_bus_t pointer it was handed at creation,
+ * and shutdown destroys the bus mutex and frees it. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -408,6 +411,7 @@ int main(int argc, char **argv)
     stratum_ctx_t st;
     if (stratum_init(&st, host, port, worker, pass) != 0) {
         fprintf(stderr, "[pipe] stratum_init failed\n");
+        cyd_panel_stop();          /* before the bus it uses is freed */
         miner_io_pipe_shutdown();
         return 1;
     }
@@ -734,9 +738,24 @@ int main(int argc, char **argv)
     }
 
     stratum_destroy(&st);
-    miner_io_pipe_shutdown();
+
+    /* JOIN EVERY BUS USER BEFORE FREEING THE BUS.
+     *
+     * miner_io_pipe_shutdown() calls am01_bus_close(), which destroys the bus
+     * mutex and frees the handle. Both the panel and thermal threads hold
+     * that pointer -- the panel captured it at creation and never re-checks
+     * miner_io_gpio_bus(), so setting the global to NULL does not protect it.
+     *
+     * This was a guaranteed use-after-free on EVERY clean exit, including
+     * every systemctl restart: a pthread_mutex_lock on a destroyed mutex, a
+     * dereference of freed memory, and a half-issued GPIO transaction -- the
+     * very "host died mid-transaction" state found_path's soft_reset exists
+     * to recover from. The thermal join was already on the wrong side of
+     * shutdown for the same reason. */
+    cyd_panel_stop();
     if (have_therm)
         pthread_join(therm_tid, NULL);
+    miner_io_pipe_shutdown();
     printf("[pipe] exit: found=%" PRIu64 " shares=%" PRIu64 " stale=%" PRIu64 "\n",
            found, shares, stale);
     return 0;

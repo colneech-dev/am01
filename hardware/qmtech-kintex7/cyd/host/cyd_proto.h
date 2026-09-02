@@ -44,6 +44,17 @@
  * which it will. */
 #define CYD_LINE_MAX 1024
 
+/* The most status.json the daemon may ship, derived so the two ends CANNOT
+ * disagree.
+ *
+ * The firmware accepts CYD_LINE_MAX-1 characters before the newline, and the
+ * daemon prepends "STATUS " and appends "\n". Both sides now compute their
+ * limit from this one expression instead of each sizing a buffer and hoping.
+ * They did not agree before: the daemon could emit 1030 characters into a
+ * 1023-character receiver, so every line would have been dropped. */
+#define CYD_STATUS_BODY_MAX \
+    (CYD_LINE_MAX - (int)sizeof(CYD_MSG_STATUS) - 1)
+
 /*
  * CM4 -> CYD, once a second:
  *

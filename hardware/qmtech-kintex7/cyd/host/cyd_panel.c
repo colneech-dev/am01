@@ -60,9 +60,14 @@ typedef struct {
 
 static rx_state_t g_rx;
 
+/* A command parsed while a status line was being transmitted, to be executed
+ * once transmission finishes. See the may_apply note in uart_write(). */
+static cyd_cmd_t g_deferred;
+static int       g_deferred_valid;
+
 /* ---- UART, over the register bus -------------------------------------- */
 
-static void drain_rx(am01_bus_t *bus);
+static void drain_rx(am01_bus_t *bus, int may_apply);
 
 /* Write the WHOLE line, waiting for the FIFO to drain as needed.
  *
@@ -95,7 +100,22 @@ static int uart_write(am01_bus_t *bus, const char *buf, size_t len)
                 return (int)n;
             /* Service RX while we wait. See the note on rx_state_t: without
              * this a command arriving during a status push loses bytes. */
-            drain_rx(bus);
+            /* may_apply = 0. Servicing RX here is necessary, but ACTING
+             * on a command is not safe mid-transmission:
+             *
+             *   - apply() answers PING with uart_write(), which would splice
+             *     "PONG\n" into the middle of the status line already going
+             *     out. The panel would see one line broken into two, both
+             *     unparseable.
+             *   - drain_rx resets g_rx.len only AFTER apply() returns, so a
+             *     nested call would append incoming bytes at the previous
+             *     line's offset and then have its work zeroed by the outer
+             *     frame.
+             *
+             * So lines are collected here and executed by the main loop.
+             * Only reachable today via a PING the firmware never originates,
+             * but any stray byte on the wire arms it. */
+            drain_rx(bus, 0);
             usleep(1000);
             continue;
         }
@@ -204,7 +224,7 @@ static void apply(const cyd_cmd_t *c, am01_bus_t *bus)
 /* Read whatever is waiting and act on any complete lines. Called both from
  * the main loop and from inside uart_write()'s wait, so a command is never
  * lost behind an outgoing status. */
-static void drain_rx(am01_bus_t *bus)
+static void drain_rx(am01_bus_t *bus, int may_apply)
 {
     for (int i = 0; i < 256; i++) {
         uint16_t st;
@@ -222,8 +242,19 @@ static void drain_rx(am01_bus_t *bus)
             if (g_rx.len && !g_rx.overflow) {
                 g_rx.buf[g_rx.len] = '\0';
                 cyd_cmd_t c;
-                if (cyd_cmd_parse(g_rx.buf, &c) != CYD_CMD_KIND_NONE)
-                    apply(&c, bus);
+                if (cyd_cmd_parse(g_rx.buf, &c) != CYD_CMD_KIND_NONE) {
+                    if (may_apply) {
+                        apply(&c, bus);
+                    } else if (!g_deferred_valid) {
+                        /* Hold ONE command until the main loop. One slot is
+                         * enough: commands come from a finger on a screen,
+                         * not a stream, so a second arriving inside the same
+                         * ~58ms transmit window would be a double-press --
+                         * and dropping that is better than queueing it. */
+                        g_deferred = c;
+                        g_deferred_valid = 1;
+                    }
+                }
                 /* An unparseable line is IGNORED, not logged: a stray byte on
                  * a serial link is ordinary, and a log line per corrupted
                  * character would bury the journal. */
@@ -245,17 +276,57 @@ static void *panel_thread(void *arg)
     int tick = 0;
 
     while (!g_stop) {
-        drain_rx(bus);
+        drain_rx(bus, 1);
+
+        /* Anything held back during a transmission runs here, where it cannot
+         * splice itself into an outgoing line. */
+        if (g_deferred_valid) {
+            g_deferred_valid = 0;
+            apply(&g_deferred, bus);
+        }
 
         /* ---- push status, once a second ------------------------------ */
         if (++tick >= 10) {
             tick = 0;
             FILE *f = fopen(CYD_STATUS_PATH, "r");
             if (f) {
-                char body[CYD_LINE_MAX];
+                /* THE TWO SIDES MUST AGREE ON THIS, and until now they did
+                 * not. The firmware accepts CYD_LINE_MAX-1 characters before
+                 * the newline (cyd_link_uart.cpp's `len + 1 < sizeof line`),
+                 * and this end was emitting "STATUS " + up to CYD_LINE_MAX-1
+                 * body bytes -- 1030 characters against a 1023 limit. Every
+                 * line would have been discarded as an overflow.
+                 *
+                 * Raising CYD_LINE_MAX from 512 to 1024 did not fix that; it
+                 * moved the cliff from 505 bytes of status.json to 1016. The
+                 * live object is 655 bytes, so it was still latent, and the
+                 * comment cheerfully anticipated the miner gaining fields --
+                 * which is exactly what would have tripped it. */
+                char body[CYD_STATUS_BODY_MAX + 1];
                 size_t n = fread(body, 1, sizeof body - 1, f);
+
+                /* Did it all fit? fread short-reads without complaining, so
+                 * without this a status.json past the limit is shipped cut
+                 * off mid-token and the panel silently shows nothing. Better
+                 * to send nothing and say why, once. */
+                int too_big = (n == sizeof body - 1) && (fgetc(f) != EOF);
                 fclose(f);
                 body[n] = '\0';
+
+                if (too_big) {
+                    static int moaned;
+                    if (!moaned) {
+                        moaned = 1;
+                        fprintf(stderr,
+                            "[cyd] status.json exceeds %d bytes; the panel "
+                            "cannot be fed. Raise CYD_LINE_MAX on BOTH "
+                            "sides and rebuild the firmware too.\n",
+                            CYD_STATUS_BODY_MAX);
+                    }
+                    tick = 0;
+                    usleep(100000);
+                    continue;
+                }
 
                 /* status.json is pretty-printed across lines; the wire format
                  * is ONE line. Newlines become spaces rather than being

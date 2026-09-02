@@ -110,7 +110,14 @@ cyd_cmd_kind_t cyd_cmd_parse(const char *line, cyd_cmd_t *out)
             goto bad;
         out->port = (int)v;
 
-        if (out->host[0] == '\0' || out->worker[0] == '\0')
+        /* pass too. token() treats CR/LF as a terminator and returns an
+         * empty string rather than NULL, so
+         *   CMD set_pool h 80 w <CR>
+         * parsed cleanly and wrote POOL_PASS= into /boot/am01-miner.conf
+         * -- a file that survives a reflash. host and worker were
+         * guarded here from the start; pass was simply missed. */
+        if (out->host[0] == '\0' || out->worker[0] == '\0' ||
+            out->pass[0] == '\0')
             goto bad;
 
         out->kind = CYD_CMD_KIND_SET_POOL;

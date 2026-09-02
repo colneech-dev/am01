@@ -989,11 +989,26 @@ module odocrypt_gpio_wrapper #(
             fan_floor       <= 8'd0;
         end else begin
             nonce_valid_clear_pulse <= 1'b0;
-            // One-shots, same discipline as the pulses above: default low
-            // every cycle so a multi-cycle S_WRITE/S_READ cannot push or pop
-            // the FIFO more than once. nonce_valid_clear_pulse is NOT a
-            // one-shot despite its name -- see the note where it is consumed
-            // -- and that difference cost a torn nonce read in 0x0200.
+            // Defaulted low every cycle. THAT ALONE DOES NOT MAKE A
+            // ONE-SHOT, and believing it did was a real bug: S_WRITE
+            // re-executes its case on EVERY bus_clk until the CM4 releases
+            // WR_N, so a case body that sets a strobe re-asserts it every
+            // cycle and the default never wins. Measured in simulation on the
+            // real wrapper: one host write to ADDR_UART_DATA pushed the byte
+            // 4 times with WR_N released instantly and 16 times (FIFO full)
+            // at the ~20us a real CM4 syscall takes.
+            //
+            // Two disciplines actually work, and both are used here:
+            //   - fire at END of transaction, inside the
+            //     `if (gpio_ready && !rd_sync[2])` block -- what the READ
+            //     path does for uart_rx_rd and the nonce ack
+            //   - guard the case body with `request_issued`, cleared in
+            //     S_IDLE -- what the clk_h handshake writes do, and now the
+            //     UART and LCD writes too
+            //
+            // nonce_valid_clear_pulse is NOT a one-shot despite its name --
+            // see the note where it is consumed -- and that difference cost a
+            // torn nonce read in 0x0200.
             uart_tx_wr <= 1'b0;
             uart_rx_rd <= 1'b0;
 
@@ -1030,34 +1045,63 @@ module odocrypt_gpio_wrapper #(
                         // Display writes are dropped if the shifter is still
                         // busy; the host polls LCD_STAT before writing.
                         ADDR_LCD_CMD: begin
-                            if (!spi_busy) begin
+                            // ONE-SHOT via request_issued -- see the note at
+                            // the strobe defaults. Without it lcd_req_toggle
+                            // flipped on every cycle of S_WRITE, starting 16
+                            // SPI transfers per host write. !spi_busy does not
+                            // prevent that: the duplication happens WITHIN one
+                            // transaction, while spi_busy gates between them.
+                            if (!request_issued && !spi_busy) begin
                                 lcd_start_data <= wdata_latched;
                                 lcd_start_dc   <= 1'b0;
                                 lcd_start_16   <= 1'b0;
                                 lcd_req_toggle <= ~lcd_req_toggle;
+                                request_issued <= 1'b1;
                             end
                             gpio_ready <= 1'b1;
                         end
                         ADDR_LCD_DATA: begin
-                            if (!spi_busy) begin
+                            // ONE-SHOT via request_issued -- see the note at
+                            // the strobe defaults. Without it lcd_req_toggle
+                            // flipped on every cycle of S_WRITE, starting 16
+                            // SPI transfers per host write. !spi_busy does not
+                            // prevent that: the duplication happens WITHIN one
+                            // transaction, while spi_busy gates between them.
+                            if (!request_issued && !spi_busy) begin
                                 lcd_start_data <= wdata_latched;
                                 lcd_start_dc   <= 1'b1;
                                 lcd_start_16   <= 1'b1;
                                 lcd_req_toggle <= ~lcd_req_toggle;
+                                request_issued <= 1'b1;
                             end
                             gpio_ready <= 1'b1;
                         end
                         ADDR_LCD_DATA8: begin
-                            if (!spi_busy) begin
+                            // ONE-SHOT via request_issued -- see the note at
+                            // the strobe defaults. Without it lcd_req_toggle
+                            // flipped on every cycle of S_WRITE, starting 16
+                            // SPI transfers per host write. !spi_busy does not
+                            // prevent that: the duplication happens WITHIN one
+                            // transaction, while spi_busy gates between them.
+                            if (!request_issued && !spi_busy) begin
                                 lcd_start_data <= wdata_latched;
                                 lcd_start_dc   <= 1'b1;
                                 lcd_start_16   <= 1'b0;
                                 lcd_req_toggle <= ~lcd_req_toggle;
+                                request_issued <= 1'b1;
                             end
                             gpio_ready <= 1'b1;
                         end
                         ADDR_UART_DATA: begin
-                            if (!uart_tx_full) uart_tx_wr <= 1'b1;
+                            // request_issued makes this fire ONCE. Without it
+                            // the byte was pushed on every cycle of S_WRITE --
+                            // 4 to 16 copies per host write, so the panel
+                            // received an unbroken run of one character and
+                            // could never assemble a line.
+                            if (!request_issued) begin
+                                if (!uart_tx_full) uart_tx_wr <= 1'b1;
+                                request_issued <= 1'b1;
+                            end
                             // A write into a full FIFO is dropped. The host
                             // can read UART_STAT first; blocking the bus here
                             // would stall the miner's register traffic for a

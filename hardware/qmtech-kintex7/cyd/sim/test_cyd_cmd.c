@@ -114,6 +114,15 @@ int main(void)
     ok(k("CMD set_pool host abc worker pass", &c) == CYD_CMD_KIND_NONE,
        "non-numeric port rejected");
 
+    /* An EMPTY PASSWORD must be rejected too. token() treats CR/LF as a
+     * terminator and hands back an empty string, so this line parsed
+     * happily and wrote POOL_PASS= into a boot config that survives a
+     * reflash. host and worker were guarded; pass was not. */
+    ok(k("CMD set_pool host 5103 worker \r", &c) == CYD_CMD_KIND_NONE,
+       "an empty password is rejected, not written as POOL_PASS=");
+    ok(k("CMD set_pool host 5103 worker x", &c) == CYD_CMD_KIND_SET_POOL,
+       "and a one-character password is still fine");
+
     /* Over-length must reject, not truncate. A host shortened from
      * "pool.example.com" to "pool.exampl" is a miner mining to nowhere that
      * looks like a network fault. */
