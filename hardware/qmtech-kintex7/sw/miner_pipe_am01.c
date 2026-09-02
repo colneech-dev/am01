@@ -32,6 +32,11 @@
  * thermal_init() failed here and temp_c/fan_rpm stayed at -1 on the
  * dashboard. Same API, FPGA registers underneath. */
 #include "thermal_am01.h"
+/* CYD front panel. A THREAD, not a daemon: libgpiod line requests are
+ * exclusive and this process holds all 25 lines, so nothing else can open
+ * the bus while the miner runs. Safe because am01_gpio_bus.c serialises
+ * every transaction. */
+#include "cyd_panel.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -363,6 +368,16 @@ int main(int argc, char **argv)
     printf("[pipe] FPGA epoch=%" PRIu32 " (0x%08" PRIx32 ") version=0x%08" PRIx32 "\n",
            seed, seed, ver);
     odo_epoch_generate(&g_epoch, seed);   /* validation uses the baked-in epoch */
+
+    /* CYD front panel. AFTER miner_io_pipe_init(), which opens the bus it
+     * shares -- cyd_panel.h says so, and starting it before the init was the
+     * first thing I got wrong here: it logged "bus not open" and disabled
+     * itself, which is the failure behaving as designed but still a failure.
+     *
+     * Its return value is deliberately ignored. A bitstream without a UART,
+     * or a panel that is simply not fitted, must never stop the miner; it
+     * logs its own reason either way. */
+    (void)cyd_panel_start();
 
     /* Optional backup pool: tried alternately after each failed connect. */
     const char *hosts[2] = { host, getenv("ODOD_POOL_HOST2") };

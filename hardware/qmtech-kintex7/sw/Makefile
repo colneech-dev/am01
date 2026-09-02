@@ -27,6 +27,8 @@ ODO_HDL := $(ODO_REPO)/hdl/odocrypt
 ODO_SW := $(ODO_REPO)/sw
 ODO_CRYPTO := $(ODO_REPO)/third_party/odo-miner/src/crypto
 GPIO_BUS := ../cm4-firmware
+# CYD front-panel sources, compiled into the miner (see cyd_panel.h).
+CYD_HOST := $(abspath ../cyd/host)
 
 # Installation prefix
 PREFIX ?= /usr/local
@@ -41,7 +43,7 @@ LDFLAGS ?=
 # Base compiler flags
 # Include paths: local, odo-miner-cyclonev sources, AM01 gpio bus, keccak
 # headers, and the stb single-header libs vendored alongside odo-ui.
-override CFLAGS += -I. -I$(ODO_HPS) -I$(ODO_HDL) -I$(ODO_CRYPTO) -I$(GPIO_BUS) \
+override CFLAGS += -I. -I$(ODO_HPS) -I$(ODO_HDL) -I$(ODO_CRYPTO) -I$(GPIO_BUS) -I$(CYD_HOST) \
 	-I$(ODO_SW)/odo-ui/stb
 
 # Base libraries (for all binaries)
@@ -112,6 +114,8 @@ SOURCES_STRATUM := \
 SOURCES_DAEMON := \
 	miner_pipe_am01.c \
 	thermal_am01.c \
+	$(CYD_HOST)/cyd_panel.c \
+	$(CYD_HOST)/cyd_cmd.c \
 	miner_io_gpio.c \
 	$(GPIO_BUS)/am01_gpio_bus.c \
 	$(GPIO_BUS)/am01_panel.c
