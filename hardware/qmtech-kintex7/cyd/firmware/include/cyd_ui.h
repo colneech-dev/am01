@@ -18,6 +18,10 @@
 #ifndef CYD_UI_H
 #define CYD_UI_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "cyd_link.h"
 
 /* 2.8" CYD panel, landscape. Same geometry odo-ui assumes. */
@@ -58,6 +62,17 @@ typedef struct {
 
 void cyd_ui_init(cyd_ui_t *ui);
 
+/* Bring up the panel itself: TFT, rotation, backlight. SEPARATE from
+ * cyd_ui_init() on purpose -- that one is pure state and runs in the host
+ * tests, where there is no display to initialise. Keeping the hardware out of
+ * it is what lets sim/test_cyd_ui.c drive all five screens on a PC. */
+void cyd_ui_backend_init(void);
+
+/* Backlight, 0-100. Called by the caller's idle logic, not from inside the UI:
+ * dimming is a policy decision about how long the panel has been untouched,
+ * and the screen model has no clock. */
+void cyd_ui_set_backlight(uint8_t pct);
+
 /* Draw. Called on a fresh status or a touch, not free-running: a full repaint
  * every frame is wasted power on a panel that changes once a second, and this
  * is sitting on top of a miner where the power budget is not free. */
@@ -89,5 +104,9 @@ void cyd_fmt_fan(int rpm, int duty_pct, char *out, int n);
  * completely wrong countdown on a panel that had just booted, and could not
  * be tested against a fixed instant. */
 void cyd_fmt_epoch_left_at(uint32_t epoch_next, uint32_t now, char *out, int n);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CYD_UI_H */

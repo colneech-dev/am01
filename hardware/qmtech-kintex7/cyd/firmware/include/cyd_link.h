@@ -28,6 +28,10 @@
 #ifndef CYD_LINK_H
 #define CYD_LINK_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -116,5 +120,9 @@ bool cyd_link_reset_stats(cyd_link_t *link);
 bool cyd_link_reboot(cyd_link_t *link);
 bool cyd_link_set_pool(cyd_link_t *link, const char *host, int port,
                        const char *worker, const char *pass);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CYD_LINK_H */
