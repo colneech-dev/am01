@@ -538,27 +538,58 @@ int main(int argc, char **argv)
     int listen_secs = 30;
 
 
-    /* `selftest` is all that is wired up so far, and it is deliberately the
-     * first thing built: it answers "is there a UART in this bitstream and
-     * does a byte come back" without a CYD attached at all, by looping TX to
-     * RX. Wire JP5 15 to JP5 16 and run it. Everything above this -- the PTY,
-     * the status push -- is worth nothing until that passes. */
+    /* `selftest` -- loop JP5 15 to JP5 16 with a jumper and prove the whole
+     * external TX path in one shot, no CYD and no meter involved.
+     *
+     * This is the test that settles the last inferred link in the chain.
+     * JP5 16 -> AF25, 17 -> AB21 and 18 -> AC21 are all confirmed by working
+     * hardware; JP5 15 -> AF24 is only believed, from a document. A jumper
+     * makes the FPGA prove it to itself.
+     *
+     * IT MUST DRAIN WHILE IT SENDS. The earlier version pushed all 28 bytes,
+     * slept 25ms and then read: with a CORRECT jumper the loopback fills the
+     * 16-byte RX FIFO in 2.4ms with nothing draining it, 12 bytes are lost,
+     * and it reports LOOPBACK FAILED. A false negative on correct wiring is
+     * the worst possible bug in a test whose entire job is to apportion
+     * blame, so the loop below interleaves sending and receiving and never
+     * lets more than a half-FIFO accumulate. */
     if (argc > 1 && strcmp(argv[1], "selftest") == 0) {
         if (uart_open_bus() < 0)
             return 1;
 
         static const uint8_t pat[] = "AM01-CYD-LOOPBACK-0123456789";
         const size_t n = sizeof(pat) - 1;
+        const size_t CHUNK = 8;         /* half the FIFO, comfortably */
 
-        int w = uart_tx(pat, n);
-        printf("tx: %d of %zu bytes\n", w, n);
+        uint8_t got[64];
+        size_t sent = 0, rcvd = 0;
+        memset(got, 0, sizeof got);
 
-        /* One byte at 115200 is 87us; allow generously for the whole burst. */
-        usleep(20000 + n * 200);
+        /* Drain the FIFO of anything a previously attached panel left. */
+        { uint8_t junk[64]; while (uart_rx(junk, sizeof junk) > 0) ; }
 
-        uint8_t got[64] = {0};
-        int r = uart_rx(got, sizeof(got) - 1);
-        printf("rx: %d bytes: \"%s\"\n", r, got);
+        while (sent < n || rcvd < n) {
+            if (sent < n) {
+                size_t burst = n - sent;
+                if (burst > CHUNK) burst = CHUNK;
+                int w = uart_tx(pat + sent, burst);
+                if (w <= 0) break;
+                sent += (size_t)w;
+            }
+            /* 8 bytes at 115200 is 700us. */
+            usleep(1500);
+            if (rcvd < sizeof got - 1) {
+                int r = uart_rx(got + rcvd, sizeof got - 1 - rcvd);
+                if (r > 0) rcvd += (size_t)r;
+            }
+            if (sent >= n && rcvd >= n) break;
+            /* Nothing coming back at all: stop rather than spin. */
+            if (sent >= n && rcvd == 0) { usleep(20000); break; }
+        }
+
+        printf("tx: %lu of %lu bytes\n", (unsigned long)sent,
+               (unsigned long)n);
+        printf("rx: %lu bytes: \"%s\"\n", (unsigned long)rcvd, got);
 
         uint16_t st = 0;
         am01_bus_read_reg(g_bus, CYD_REG_UART_STAT, &st);
@@ -567,9 +598,20 @@ int main(int argc, char **argv)
                st, ST_RX_ERR(st), ST_RX_CNT(st), ST_TX_CNT(st),
                ST_TX_FULL(st), ST_RX_EMPTY(st));
 
-        int ok = (w == (int)n) && (r == (int)n) && memcmp(pat, got, n) == 0;
-        printf("%s\n", ok ? "LOOPBACK OK" : "LOOPBACK FAILED "
-               "(is JP5 15 wired to JP5 16?)");
+        int ok = (sent == n) && (rcvd == n) && memcmp(pat, got, n) == 0;
+        if (ok) {
+            printf("LOOPBACK OK -- JP5 15 really is the FPGA TX, and it\n"
+                   "drives the connector. The fault is at the CYD end.\n");
+        } else if (rcvd == 0) {
+            printf("LOOPBACK FAILED, nothing came back at all.\n"
+                   "Either the jumper is not on (JP5 15 to JP5 16), or JP5 15\n"
+                   "is not the ball the pinout doc claims. Given RX itself is\n"
+                   "known good, this would point at JP5 15.\n");
+        } else {
+            printf("LOOPBACK PARTIAL: %lu of %lu bytes returned.\n"
+                   "The path works but is losing data -- suspect the jumper.\n",
+                   (unsigned long)rcvd, (unsigned long)n);
+        }
         uart_close_bus();
         return ok ? 0 : 1;
     }
