@@ -102,6 +102,26 @@ typedef struct {
 #define CYD_KB_CANCEL ((cyd_rect_t){ 133, CYD_KB_CTRL_Y, 88, 34 })
 #define CYD_KB_OK     ((cyd_rect_t){ 225, CYD_KB_CTRL_Y, 90, 34 })
 
+/* ---- odo-miner navigation ----------------------------------------------
+ *
+ * ONE hamburger, bottom right, exactly where odo_ui.c puts it -- everything
+ * else lives in the modal menu it opens. This replaces the three-button strip
+ * this panel used to carry, which was invented here and matches nothing.
+ */
+#define CYD_MENU_BTN ((cyd_rect_t){ CYD_LAYOUT_W - 62, CYD_LAYOUT_H - 42, 56, 34 })
+
+/* The action sheet: 7 rows, 220x26, 3px gap, centred. odo_ui.c's
+ * action_rect() verbatim. */
+#define CYD_AS_N      7
+#define CYD_AS_W    220
+#define CYD_AS_H     26
+#define CYD_AS_GAP    3
+#define CYD_AS_TOTAL (CYD_AS_N * CYD_AS_H + (CYD_AS_N - 1) * CYD_AS_GAP)
+#define CYD_AS_ROW(i) ((cyd_rect_t){ (CYD_LAYOUT_W - CYD_AS_W) / 2, \
+                                     (CYD_LAYOUT_H - CYD_AS_TOTAL) / 2 \
+                                       + (i) * (CYD_AS_H + CYD_AS_GAP), \
+                                     CYD_AS_W, CYD_AS_H })
+
 static inline int cyd_rect_hit(cyd_rect_t r, int x, int y)
 {
     return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;

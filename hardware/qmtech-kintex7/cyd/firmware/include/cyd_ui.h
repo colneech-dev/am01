@@ -37,6 +37,7 @@ typedef enum {
     CYD_SCREEN_CONFIRM,     /* guards anything destructive                */
     CYD_SCREEN_POOL,        /* host / port / worker / pass, tap to edit   */
     CYD_SCREEN_KEYBOARD,    /* on-screen entry for one POOL field         */
+    CYD_SCREEN_MENU,        /* the hamburger's modal action sheet         */
     CYD_SCREEN_COUNT
 } cyd_screen_t;
 

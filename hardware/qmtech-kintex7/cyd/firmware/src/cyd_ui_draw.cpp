@@ -41,6 +41,8 @@ static inline uint16_t rgb(uint8_t r, uint8_t g, uint8_t b)
 }
 #define C_BG      rgb(16, 15, 11)
 #define C_PANEL   rgb(26, 24, 18)
+/* The honeycomb. Barely above C_BG on purpose: texture, not content. */
+#define C_HEX     rgb(38, 34, 25)
 #define C_TEXT    rgb(242, 239, 230)
 #define C_DIM     rgb(172, 165, 144)
 #define C_OK      rgb(70, 200, 120)
@@ -177,40 +179,143 @@ static void row(int y, const char *label, const char *value, uint16_t vc)
 
 /* The mark from the dashboard's SVG: a hexagon outline with a smaller filled
  * hexagon inside it. Drawn rather than embedded -- it is six points. */
-static void logo(int cx, int cy, int r)
+/* odo_ui.c's 16x16 mark, verbatim: outer ring plus a solid inner hex, flat-top
+ * to match the web SVG. Pixel art rather than geometry, because that is what
+ * the other panel draws and a mark that is subtly the wrong shape is worse
+ * than no mark at all. */
+static const char *LOGO_PX[16] = {
+    "................",
+    "....11111111....",
+    "...1........1...",
+    "..1..........1..",
+    ".1....2222....1.",
+    ".1...222222...1.",
+    "1...22222222...1",
+    "1...22222222...1",
+    "1...22222222...1",
+    ".1...222222...1.",
+    ".1....2222....1.",
+    "..1..........1..",
+    "...1........1...",
+    "....11111111....",
+    "................",
+    "................",
+};
+
+static void logo(int x, int y, int scale)
 {
-    for (int i = 0; i < 6; i++) {
-        float a0 = (float)i * 1.0471976f, a1 = (float)(i + 1) * 1.0471976f;
-        tft.drawLine(cx + (int)(r * cosf(a0)), cy + (int)(r * sinf(a0)),
-                     cx + (int)(r * cosf(a1)), cy + (int)(r * sinf(a1)), C_ACCENT);
-    }
-    int ri = r / 2;
-    for (int i = 0; i < 6; i++) {
-        float a0 = (float)i * 1.0471976f, a1 = (float)(i + 1) * 1.0471976f;
-        tft.fillTriangle(cx, cy,
-                         cx + (int)(ri * cosf(a0)), cy + (int)(ri * sinf(a0)),
-                         cx + (int)(ri * cosf(a1)), cy + (int)(ri * sinf(a1)), C_ACCENT);
+    for (int r = 0; r < 16; r++)
+        for (int c = 0; c < 16; c++) {
+            char v = LOGO_PX[r][c];
+            if (v != '1' && v != '2')
+                continue;
+            tft.fillRect(x + c * scale, y + r * scale, scale, scale, C_ACCENT);
+        }
+}
+
+/* THE HONEYCOMB. odo_ui.c blits a bg.png; drawing the hex grid costs ~150KB
+ * less flash and is the same picture. Faint on purpose -- it is texture behind
+ * data. The previous version of this panel skipped it entirely, which is most
+ * of why the two screens did not look like the same product.
+ *
+ * Flat-top hexagons on the usual offset grid: columns step 1.5*R and odd
+ * columns drop half a row. */
+static void hexbg(void)
+{
+    const int R  = 17;                    /* circumradius */
+    const int dx = (R * 3) / 2;
+    const int dy = (int)(R * 1.732f);
+    for (int col = -1; col * dx < CYD_LAYOUT_W + R; col++) {
+        int cx   = col * dx;
+        int yoff = (col & 1) ? dy / 2 : 0;
+        for (int row = -1; row * dy + yoff < CYD_LAYOUT_H + R; row++) {
+            int cy = row * dy + yoff;
+            int px = 0, py = 0;
+            for (int k = 0; k <= 6; k++) {
+                float a = (float)k * 1.0471976f;   /* 60 degrees */
+                int nx = cx + (int)(R * cosf(a));
+                int ny = cy + (int)(R * sinf(a));
+                if (k)
+                    tft.drawLine(px, py, nx, ny, C_HEX);
+                px = nx; py = ny;
+            }
+        }
     }
 }
 
-/* Header, ported from odo_ui.c's draw_glance(): a 36px band, a 2px accent rule
- * under it, the mark at the left, "ODO MINER", and a right-aligned status pill.
- *
- * The pill's THREE states and their exact words come from there too:
- *   MINER DOWN (bad)  -- no status has arrived; look at the Pi
- *   OFFLINE    (warn) -- status arriving, pool not connected; look at the net
- *   POOL OK    (ok)
- * Collapsing them would send you to the wrong place. */
+/* The MINER's wall clock, in the header. A CYD has no RTC and NTP may never
+ * have run on it, so this is st->updated passed through -- the same reason
+ * odo_ui.c draws the miner's time rather than its own. */
+static void draw_clock(uint32_t updated)
+{
+    if (!updated)
+        return;
+    char b[8];
+    uint32_t tod = updated % 86400u;
+    snprintf(b, sizeof b, "%02u:%02u", (unsigned)(tod / 3600u),
+             (unsigned)((tod % 3600u) / 60u));
+    tft.setTextDatum(TR_DATUM);
+    tft.setTextColor(C_DIM, C_PANEL);
+    tft.drawString(b, CYD_LAYOUT_W - 76, 4, 2);
+}
+
+/* ONE hamburger, bottom right, where odo_ui.c puts it. */
+static void hamburger(void)
+{
+    cyd_rect_t r = CYD_MENU_BTN;
+    tft.drawRect(r.x, r.y, r.w, r.h, C_ACCENT);
+    for (int i = 0; i < 3; i++)
+        tft.fillRect(r.x + 12, r.y + 9 + i * 6, r.w - 24, 3, C_ACCENT);
+}
+
+static const char *AS_LABELS[CYD_AS_N] = {
+    "GLANCE", "DETAIL", "SETUP", "WIFI SETUP", "RESTART", "REBOOT", "CANCEL"
+};
+
+/* WIFI SETUP and RESTART are drawn but INERT, and drawn dim so that is
+ * visible. Both need a protocol verb this link does not have -- cyd_proto.h
+ * carries fan_boost, reset_stats, reboot and set_pool, and nothing for WiFi
+ * credentials or for restarting the daemon. Greyed is honest; hiding them
+ * would make this a different panel again, and showing them live would be a
+ * button that silently does nothing. */
+static bool as_enabled(int i)
+{
+    return !(i == 3 || i == 4);
+}
+
+static void draw_menu(void)
+{
+    cyd_rect_t top = CYD_AS_ROW(0), bot = CYD_AS_ROW(CYD_AS_N - 1);
+    int pad = 12;
+    tft.fillRect(top.x - pad, top.y - pad, top.w + 2 * pad,
+                 (bot.y + bot.h - top.y) + 2 * pad, C_ACCENT);
+    tft.fillRect(top.x - pad + 1, top.y - pad + 1, top.w + 2 * pad - 2,
+                 (bot.y + bot.h - top.y) + 2 * pad - 2, C_BG);
+
+    for (int i = 0; i < CYD_AS_N; i++) {
+        cyd_rect_t r = CYD_AS_ROW(i);
+        uint16_t border = (i == 5) ? C_BAD : (i == 6) ? C_PANEL : C_ACCENT;
+        uint16_t tc     = (i == 5) ? C_BAD : (i == 6) ? C_TEXT  : C_ACCENT;
+        if (!as_enabled(i)) { border = C_PANEL; tc = C_DIM; }
+        tft.fillRect(r.x, r.y, r.w, r.h, border);
+        tft.fillRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2, C_PANEL);
+        tft.setTextDatum(MC_DATUM);
+        tft.setTextColor(tc, C_PANEL);
+        tft.drawString(AS_LABELS[i], r.x + r.w / 2, r.y + r.h / 2, 2);
+    }
+}
+
 static void header(const char *title, const cyd_status_t *st, bool link_down)
 {
     tft.fillRect(0, 0, CYD_LAYOUT_W, 36, C_PANEL);
     tft.fillRect(0, 36, CYD_LAYOUT_W, 2, C_ACCENT);
 
-    logo(17, 18, 11);
+    logo(4, 2, 2);
 
     tft.setTextDatum(TL_DATUM);
     tft.setTextColor(C_TEXT, C_PANEL);
-    tft.drawString("ODO MINER", 44, 10, 4);
+    tft.drawString("ODO MINER", 40, 8, 4);
+    draw_clock(st->updated);
 
     const char *tag;
     uint16_t    tc;
@@ -346,9 +451,7 @@ static void draw_glance(const cyd_status_t *st, bool link_down)
         tft.drawString(b, 250, 176, 2);
     }
 
-    button(CYD_BTN_LEFT,  "DETAIL",  false);
-    button(CYD_BTN_MID,   "SET",     false);
-    button(CYD_BTN_RIGHT, "ACTIONS", false);
+    hamburger();
 }
 
 static void draw_detail(const cyd_status_t *st, uint32_t now)
@@ -575,6 +678,10 @@ void cyd_ui_draw(cyd_ui_t *ui, const cyd_status_t *st)
         return;
 
     tft.fillScreen(C_BG);
+    /* The honeycomb goes under EVERY screen, not just glance -- it is the
+     * backdrop on all five of odo-miner's, and leaving it off is most of why
+     * this panel did not read as the same product. */
+    hexbg();
 
     switch (ui->screen) {
     case CYD_SCREEN_GLANCE:
@@ -600,6 +707,10 @@ void cyd_ui_draw(cyd_ui_t *ui, const cyd_status_t *st)
     case CYD_SCREEN_ACTIONS:
         header("ACTIONS", st, ui->link_down);
         draw_actions(ui);
+        break;
+    case CYD_SCREEN_MENU:
+        header("", st, ui->link_down);
+        draw_menu();
         break;
     case CYD_SCREEN_POOL:
         header("POOL", st, ui->link_down);
