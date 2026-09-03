@@ -126,6 +126,10 @@ bool cyd_link_poll(cyd_link_t *link, cyd_status_t *out);
 bool cyd_link_fan_boost(cyd_link_t *link, bool on);
 bool cyd_link_reset_stats(cyd_link_t *link);
 bool cyd_link_reboot(cyd_link_t *link);
+/* Restart the miner daemon -- hashing stops for seconds, not a reboot. */
+bool cyd_link_restart(cyd_link_t *link);
+/* WPA2 passphrase: 8..63 characters, checked by BOTH ends. */
+bool cyd_link_set_wifi(cyd_link_t *link, const char *ssid, const char *psk);
 bool cyd_link_set_pool(cyd_link_t *link, const char *host, int port,
                        const char *worker, const char *pass);
 

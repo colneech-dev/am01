@@ -108,6 +108,12 @@ void loop(void)
                               atoi(g_ui.pool_port),
                               g_ui.pool_worker, g_ui.pool_pass);
             break;
+        case CYD_ACTION_RESTART:
+            cyd_link_restart(g_link);
+            break;
+        case CYD_ACTION_SET_WIFI:
+            cyd_link_set_wifi(g_link, g_ui.wifi_ssid, g_ui.wifi_psk);
+            break;
         case CYD_ACTION_NONE:        break;
         }
 

@@ -78,6 +78,13 @@ typedef struct {
 #define CYD_POOL_ROWS  4
 #define CYD_POOL_ROW_H 32
 #define CYD_POOL_ROW(i) ((cyd_rect_t){ 8, 44 + (i) * 37, 304, CYD_POOL_ROW_H })
+/* WIFI SETUP: two rows, same pitch as the pool editor so the two editors
+ * feel identical -- they share the keyboard, so they should. */
+#define CYD_WIFI_ROWS 2
+#define CYD_WIFI_ROW(i) ((cyd_rect_t){ 8, 44 + (i) * 37, 304, CYD_POOL_ROW_H })
+#define CYD_WIFI_BACK  CYD_BTN_LEFT
+#define CYD_WIFI_SAVE  CYD_BTN_RIGHT
+
 #define CYD_POOL_BACK  CYD_BTN_LEFT
 #define CYD_POOL_SAVE  CYD_BTN_RIGHT
 

@@ -148,6 +148,8 @@ char *cyd_ui_field(cyd_ui_t *ui, cyd_field_t f, size_t *cap)
     case CYD_FIELD_PORT:   if (cap) *cap = CYD_POOL_PORT_MAX;   return ui->pool_port;
     case CYD_FIELD_WORKER: if (cap) *cap = CYD_POOL_WORKER_MAX; return ui->pool_worker;
     case CYD_FIELD_PASS:   if (cap) *cap = CYD_POOL_PASS_MAX;   return ui->pool_pass;
+    case CYD_FIELD_SSID:   if (cap) *cap = CYD_WIFI_SSID_MAX;   return ui->wifi_ssid;
+    case CYD_FIELD_PSK:    if (cap) *cap = CYD_WIFI_PSK_MAX;    return ui->wifi_psk;
     default: return NULL;
     }
 }
@@ -206,7 +208,79 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
      * while being used. */
     ui->last_touch_ms++;   /* caller overwrites with a real timestamp */
 
+    /* THE HAMBURGER IS GLOBAL, checked before the per-screen switch so a new
+     * screen cannot be added that quietly loses the only way out of it. Not on
+     * MENU, CONFIRM or KEYBOARD, which are modal by design. */
+    /* WHITELISTED, not blacklisted. CYD_MENU_BTN {258,198,56,34} OVERLAPS
+     * CYD_BTN_RIGHT {240,198,74,34}, so a global check silently swallowed
+     * every right-hand button on every screen -- ACTIONS' REBOOT, POOL's SAVE
+     * and CONFIRM's YES all became "open the menu". Thirteen model checks
+     * caught it; on hardware it would have looked like a panel that ignores
+     * its own buttons.
+     *
+     * These three are exactly the screens odo_ui.c lets you swipe between, and
+     * the only ones with nothing of their own in that corner. */
+    if ((ui->screen == CYD_SCREEN_GLANCE || ui->screen == CYD_SCREEN_DETAIL ||
+         ui->screen == CYD_SCREEN_SETTINGS) &&
+        cyd_rect_hit(CYD_MENU_BTN, x, y)) {
+        ui->screen = CYD_SCREEN_MENU;
+        return CYD_ACTION_NONE;
+    }
+
     switch (ui->screen) {
+
+    /* odo-miner's action sheet. Every item works: WIFI SETUP and RESTART were
+     * dead until cyd_proto.h grew set_wifi and restart. */
+    case CYD_SCREEN_MENU: {
+        static const cyd_screen_t GO[3] = {
+            CYD_SCREEN_GLANCE, CYD_SCREEN_DETAIL, CYD_SCREEN_SETTINGS
+        };
+        for (int i = 0; i < CYD_AS_N; i++) {
+            if (!cyd_rect_hit(CYD_AS_ROW(i), x, y))
+                continue;
+            if (i < 3)       ui->screen = GO[i];
+            else if (i == 3) ui->screen = CYD_SCREEN_WIFI;
+            else if (i == 4) { ui->pending = CYD_ACTION_RESTART;
+                               ui->screen  = CYD_SCREEN_CONFIRM; }
+            else if (i == 5) { ui->pending = CYD_ACTION_REBOOT;
+                               ui->screen  = CYD_SCREEN_CONFIRM; }
+            else             ui->screen = CYD_SCREEN_GLANCE;   /* CANCEL */
+            return CYD_ACTION_NONE;
+        }
+        /* A touch OFF the sheet dismisses it. A modal you cannot leave without
+         * hitting the right row is a trap on an uncalibrated touchscreen. */
+        ui->screen = CYD_SCREEN_GLANCE;
+        return CYD_ACTION_NONE;
+    }
+
+    case CYD_SCREEN_WIFI: {
+        for (int i = 0; i < CYD_WIFI_ROWS; i++) {
+            if (!cyd_rect_hit(CYD_WIFI_ROW(i), x, y))
+                continue;
+            size_t cap = 0;
+            cyd_field_t f = (i == 0) ? CYD_FIELD_SSID : CYD_FIELD_PSK;
+            char *buf = cyd_ui_field(ui, f, &cap);
+            ui->edit_field = f;
+            ui->kb_shift = false;
+            if (buf) snprintf(ui->kb_backup, sizeof ui->kb_backup, "%s", buf);
+            ui->screen = CYD_SCREEN_KEYBOARD;
+            return CYD_ACTION_NONE;
+        }
+        if (cyd_rect_hit(CYD_WIFI_BACK, x, y)) {
+            ui->screen = CYD_SCREEN_GLANCE;
+        } else if (cyd_rect_hit(CYD_WIFI_SAVE, x, y)) {
+            /* WPA2 is 8..63 characters and the daemon rejects anything else.
+             * Refusing HERE means the panel never sends a command that will be
+             * silently dropped -- and a headless board that cannot join is one
+             * somebody has to walk to. */
+            size_t n = strlen(ui->wifi_psk);
+            if (ui->wifi_ssid[0] && n >= 8 && n <= 63) {
+                ui->pending = CYD_ACTION_SET_WIFI;
+                ui->screen  = CYD_SCREEN_CONFIRM;
+            }
+        }
+        return CYD_ACTION_NONE;
+    }
 
     case CYD_SCREEN_GLANCE:
         if (cyd_rect_hit(CYD_BTN_LEFT, x, y))  ui->screen = CYD_SCREEN_DETAIL;
@@ -327,13 +401,18 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
             ui->screen = CYD_SCREEN_POOL;
             return CYD_ACTION_NONE;
         }
+        /* Back to WHICHEVER editor opened the keyboard -- hard-coding POOL
+         * would strand anyone editing WiFi on the wrong screen. */
+        cyd_screen_t home = (ui->edit_field == CYD_FIELD_SSID ||
+                             ui->edit_field == CYD_FIELD_PSK)
+                          ? CYD_SCREEN_WIFI : CYD_SCREEN_POOL;
         if (cyd_rect_hit(CYD_KB_OK, x, y)) {
-            ui->screen = CYD_SCREEN_POOL;
+            ui->screen = home;
             return CYD_ACTION_NONE;
         }
         if (cyd_rect_hit(CYD_KB_CANCEL, x, y)) {
             snprintf(buf, cap, "%s", ui->kb_backup);    /* discard the edit */
-            ui->screen = CYD_SCREEN_POOL;
+            ui->screen = home;
             return CYD_ACTION_NONE;
         }
         if (cyd_rect_hit(CYD_KB_SHIFT, x, y)) {

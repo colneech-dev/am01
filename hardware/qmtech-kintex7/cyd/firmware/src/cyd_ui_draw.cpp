@@ -257,14 +257,17 @@ static const char *AS_LABELS[CYD_AS_N] = {
 };
 
 /* WIFI SETUP and RESTART are drawn but INERT, and drawn dim so that is
- * visible. Both need a protocol verb this link does not have -- cyd_proto.h
- * carries fan_boost, reset_stats, reboot and set_pool, and nothing for WiFi
- * credentials or for restarting the daemon. Greyed is honest; hiding them
- * would make this a different panel again, and showing them live would be a
- * button that silently does nothing. */
+ * visible.
+ *
+ * NOTHING IS GREYED ANY MORE. WIFI SETUP and RESTART were dim only because the
+ * link had no verb for either; cyd_proto.h now carries set_wifi and restart,
+ * the daemon applies both, and every row on the sheet does something. Kept as
+ * a function rather than deleted because a menu that grows an unimplemented
+ * item again should grey it rather than lie. */
 static bool as_enabled(int i)
 {
-    return !(i == 3 || i == 4);
+    (void)i;
+    return true;
 }
 
 static void draw_menu(void)
@@ -548,6 +551,52 @@ static const char *elide(const char *v, char *buf, size_t cap, size_t maxch)
 
 static const char *POOL_LABELS[CYD_POOL_ROWS] = { "HOST", "PORT", "WORKER", "PASS" };
 
+/* WIFI SETUP. Two rows sharing the pool editor's keyboard, so the two feel
+ * like one mechanism rather than two.
+ *
+ * The PSK is MASKED. Unlike the pool password -- which is "x" on every stratum
+ * pool alive and is not a secret -- a WPA passphrase on a panel bolted to the
+ * front of a machine is readable by anyone in the room. */
+static void draw_wifi(const cyd_ui_t *ui)
+{
+    static const char *L[CYD_WIFI_ROWS] = { "SSID", "PSK" };
+    char masked[CYD_WIFI_PSK_MAX];
+
+    for (int i = 0; i < CYD_WIFI_ROWS; i++) {
+        cyd_rect_t r = CYD_WIFI_ROW(i);
+        const char *v = (i == 0) ? ui->wifi_ssid : ui->wifi_psk;
+        bool empty = (v[0] == 0);
+        fill_rect(r, C_PANEL);
+        tft.drawRect(r.x, r.y, r.w, r.h, empty ? C_BAD : C_ACCENT);
+
+        tft.setTextDatum(TL_DATUM);
+        tft.setTextColor(C_DIM, C_PANEL);
+        tft.drawString(L[i], r.x + 6, r.y + 9, 2);
+
+        if (i == 1 && !empty) {
+            size_t n = strlen(v);
+            if (n >= sizeof masked) n = sizeof masked - 1;
+            for (size_t k = 0; k < n; k++) masked[k] = '*';
+            masked[n] = 0;
+            v = masked;
+        }
+        tft.setTextDatum(TR_DATUM);
+        tft.setTextColor(empty ? C_BAD : C_TEXT, C_PANEL);
+        tft.drawString(empty ? "-- tap to set --" : v, r.x + r.w - 6, r.y + 9, 2);
+    }
+
+    /* Say the rule rather than let SAVE do nothing. */
+    size_t n = strlen(ui->wifi_psk);
+    if (ui->wifi_ssid[0] && (n < 8 || n > 63)) {
+        tft.setTextDatum(TL_DATUM);
+        tft.setTextColor(C_WARN, C_BG);
+        tft.drawString("PSK must be 8-63 characters", 10, 126, 2);
+    }
+
+    button(CYD_WIFI_BACK, "BACK", false);
+    button(CYD_WIFI_SAVE, "SAVE", true);
+}
+
 static void draw_pool(const cyd_ui_t *ui)
 {
     char b[80];
@@ -634,6 +683,13 @@ static void draw_confirm(const cyd_ui_t *ui)
     if (ui->pending == CYD_ACTION_REBOOT) {
         what = "REBOOT THE MINER?";
         note = "Mining stops until it comes back.";
+    } else if (ui->pending == CYD_ACTION_RESTART) {
+        what = "RESTART THE MINER?";
+        note = "Hashing stops for a few seconds.";
+    } else if (ui->pending == CYD_ACTION_SET_WIFI) {
+        what = "CHANGE WIFI?";
+        /* Worth spelling out: this is how a headless board gets lost. */
+        note = "Wrong details take the board offline.";
     } else if (ui->pending == CYD_ACTION_SET_POOL) {
         what = "CHANGE THE POOL?";
         /* Say that it persists. This rewrites /boot/am01-miner.conf,
@@ -695,6 +751,10 @@ void cyd_ui_draw(cyd_ui_t *ui, const cyd_status_t *st)
     case CYD_SCREEN_MENU:
         header("", st, ui->link_down);
         draw_menu();
+        break;
+    case CYD_SCREEN_WIFI:
+        header("WIFI SETUP", st, ui->link_down);
+        draw_wifi(ui);
         break;
     case CYD_SCREEN_POOL:
         header("POOL", st, ui->link_down);

@@ -92,6 +92,8 @@
 #define CYD_CMD_RESET_STAT "reset_stats"
 #define CYD_CMD_REBOOT     "reboot"
 #define CYD_CMD_SET_POOL   "set_pool"
+#define CYD_CMD_RESTART    "restart"
+#define CYD_CMD_SET_WIFI   "set_wifi"
 #define CYD_MSG_PING       "PING"
 
 /* Bumped only for an INCOMPATIBLE change. Adding a status field is not one:
@@ -109,6 +111,9 @@
 #define CYD_FAN_BOOST_PATH  "/run/odod/fan_boost"
 #define CYD_RESET_STAT_PATH "/run/odod/reset_stats"
 #define CYD_POOL_CONF_PATH  "/boot/am01-miner.conf"
+/* wpa_supplicant's per-interface config. Holds a PSK, so it is written
+ * 0600 and its contents are NEVER logged. */
+#define CYD_WPA_CONF_PATH   "/etc/wpa_supplicant/wpa_supplicant-wlan0.conf"
 
 /*
  * FPGA registers this rides on. IMPLEMENTED as of VERSION 0x0202 --

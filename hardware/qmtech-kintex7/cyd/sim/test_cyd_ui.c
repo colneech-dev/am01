@@ -95,10 +95,20 @@ int main(void)
     tap(&ui, CYD_BTN_LEFT);
     ok(ui.screen == CYD_SCREEN_GLANCE, "SETTINGS -> GLANCE");
 
-    tap(&ui, CYD_BTN_RIGHT);
-    ok(ui.screen == CYD_SCREEN_ACTIONS, "GLANCE -> ACTIONS");
-    tap(&ui, CYD_BTN_LEFT);
-    ok(ui.screen == CYD_SCREEN_GLANCE, "ACTIONS -> GLANCE");
+    /* Navigation is now odo-miner's: ONE hamburger opening a modal sheet.
+     * The old bottom strip is gone from both the drawing and the model. */
+    tap(&ui, CYD_MENU_BTN);
+    ok(ui.screen == CYD_SCREEN_MENU, "the hamburger opens the menu");
+    tap(&ui, CYD_AS_ROW(1));
+    ok(ui.screen == CYD_SCREEN_DETAIL, "menu -> DETAIL");
+    tap(&ui, CYD_MENU_BTN);
+    tap(&ui, CYD_AS_ROW(3));
+    ok(ui.screen == CYD_SCREEN_WIFI, "menu -> WIFI SETUP");
+    tap(&ui, CYD_WIFI_BACK);
+    ok(ui.screen == CYD_SCREEN_GLANCE, "WIFI -> GLANCE");
+    tap(&ui, CYD_MENU_BTN);
+    tap(&ui, CYD_AS_ROW(6));
+    ok(ui.screen == CYD_SCREEN_GLANCE, "menu CANCEL returns to GLANCE");
 
     /* A touch that hits no control must not navigate. Dead space that
      * silently changes screens is how a panel feels haunted. */
@@ -112,8 +122,8 @@ int main(void)
     printf("\n-- confirm guards (the point of this file) --\n");
 
     cyd_ui_init(&ui);
-    tap(&ui, CYD_BTN_RIGHT);                       /* ACTIONS */
-    act = tap(&ui, CYD_BTN_RIGHT);                 /* REBOOT  */
+    tap(&ui, CYD_MENU_BTN);                        /* menu   */
+    act = tap(&ui, CYD_AS_ROW(5));                 /* REBOOT */
     ok(act == CYD_ACTION_NONE,
        "choosing REBOOT returns NO ACTION -- it only opens CONFIRM");
     ok(ui.screen == CYD_SCREEN_CONFIRM, "and lands on CONFIRM");
@@ -131,25 +141,29 @@ int main(void)
 
     /* NO must cancel. */
     cyd_ui_init(&ui);
-    tap(&ui, CYD_BTN_RIGHT);
-    tap(&ui, CYD_BTN_RIGHT);
+    tap(&ui, CYD_MENU_BTN);
+    tap(&ui, CYD_AS_ROW(5));
     act = tap(&ui, CYD_CONFIRM_NO);
     ok(act == CYD_ACTION_NONE,   "NO returns no action");
     ok(ui.pending == CYD_ACTION_NONE, "NO clears the pending action");
-    ok(ui.screen == CYD_SCREEN_ACTIONS, "NO goes back to ACTIONS, not straight out");
+    ok(ui.screen == CYD_SCREEN_ACTIONS, "NO goes back, not straight out");
 
     /* A stray touch on CONFIRM must neither confirm nor dismiss. */
     cyd_ui_init(&ui);
-    tap(&ui, CYD_BTN_RIGHT);
-    tap(&ui, CYD_BTN_RIGHT);
+    tap(&ui, CYD_MENU_BTN);
+    tap(&ui, CYD_AS_ROW(5));
     act = cyd_ui_touch(&ui, CYD_LAYOUT_W / 2, 10);
     cyd_ui_touch_release(&ui);
     ok(act == CYD_ACTION_NONE && ui.screen == CYD_SCREEN_CONFIRM,
        "a touch elsewhere on CONFIRM neither confirms nor dismisses");
 
-    /* Same guard for RESET STATS. */
+    /* Same guard for RESET STATS. Reached by putting the model on ACTIONS
+     * directly: what this checks is the CONFIRM guard, not the route, and
+     * ACTIONS no longer hangs off GLANCE now that the menu carries REBOOT and
+     * RESTART. (RESET STATS belongs on SETUP, as it does on odo-miner --
+     * moving it is a separate change.) */
     cyd_ui_init(&ui);
-    tap(&ui, CYD_BTN_RIGHT);
+    ui.screen = CYD_SCREEN_ACTIONS;
     act = tap(&ui, CYD_BTN_MID);
     ok(act == CYD_ACTION_NONE && ui.pending == CYD_ACTION_RESET_STATS,
        "RESET STATS is guarded the same way");

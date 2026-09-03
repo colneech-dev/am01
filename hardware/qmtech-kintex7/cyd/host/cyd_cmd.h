@@ -33,7 +33,9 @@ typedef enum {
     CYD_CMD_KIND_FAN_BOOST,
     CYD_CMD_KIND_RESET_STATS,
     CYD_CMD_KIND_REBOOT,
-    CYD_CMD_KIND_SET_POOL
+    CYD_CMD_KIND_SET_POOL,
+    CYD_CMD_KIND_RESTART,
+    CYD_CMD_KIND_SET_WIFI
 } cyd_cmd_kind_t;
 
 /* Sized to match what the miner's own config accepts. Deliberately generous
@@ -42,6 +44,8 @@ typedef struct {
     cyd_cmd_kind_t kind;
     int            fan_on;        /* CYD_CMD_KIND_FAN_BOOST */
     char           host[64];      /* CYD_CMD_KIND_SET_POOL  */
+    char           ssid[64];      /* CYD_CMD_KIND_SET_WIFI  */
+    char           psk[80];       /* CYD_CMD_KIND_SET_WIFI  */
     int            port;
     char           worker[128];
     char           pass[64];

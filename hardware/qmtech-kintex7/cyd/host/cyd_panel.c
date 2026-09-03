@@ -25,6 +25,7 @@
 #include "am01_gpio_bus.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -183,6 +184,70 @@ static void apply_set_pool(const cyd_cmd_t *c)
             c->host, c->port, c->worker);
 }
 
+/* Write wpa_supplicant's config and bounce the supplicant.
+ *
+ * Same temp-file-and-rename dance as apply_set_pool(), for the same reason: a
+ * half-written config is a board that cannot join any network, and on a
+ * headless miner that is a trip to fetch a keyboard.
+ *
+ * The file is created 0600 BEFORE anything is written to it -- creating it
+ * world-readable and chmod'ing afterwards leaves a window where the PSK is
+ * readable. The PSK is never logged, here or anywhere. */
+static void apply_set_wifi(const cyd_cmd_t *c)
+{
+    char tmp[256];
+    snprintf(tmp, sizeof tmp, "%s.tmp", CYD_WPA_CONF_PATH);
+
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        fprintf(stderr, "[cyd] set_wifi: cannot create %s: %s\n",
+                tmp, strerror(errno));
+        return;
+    }
+    FILE *f = fdopen(fd, "w");
+    if (!f) {
+        fprintf(stderr, "[cyd] set_wifi: fdopen: %s\n", strerror(errno));
+        close(fd);
+        return;
+    }
+    fprintf(f, "# written by the CYD front panel\n");
+    fprintf(f, "ctrl_interface=/var/run/wpa_supplicant\n");
+    fprintf(f, "update_config=1\n");
+    fprintf(f, "network={\n");
+    fprintf(f, "\tssid=\"%s\"\n", c->ssid);
+    fprintf(f, "\tpsk=\"%s\"\n", c->psk);
+    fprintf(f, "}\n");
+
+    if (fflush(f) != 0 || fsync(fileno(f)) != 0) {
+        int e = errno;
+        fclose(f);
+        unlink(tmp);
+        fprintf(stderr, "[cyd] set_wifi: flush failed: %s\n", strerror(e));
+        return;
+    }
+    if (fclose(f) != 0) {
+        fprintf(stderr, "[cyd] set_wifi: close failed: %s\n", strerror(errno));
+        unlink(tmp);
+        return;
+    }
+    if (rename(tmp, CYD_WPA_CONF_PATH) != 0) {
+        fprintf(stderr, "[cyd] set_wifi: rename failed: %s\n", strerror(errno));
+        unlink(tmp);
+        return;
+    }
+
+    /* SSID only. The PSK is deliberately absent from the log. */
+    fprintf(stderr, "[cyd] wifi configured for SSID \"%s\"\n", c->ssid);
+
+    /* --no-block: this may be the interface carrying the ssh session that is
+     * watching, and a blocking restart of the supplicant can outlive the call.
+     * Failure is reported, not fatal -- the config is already on disk and will
+     * be picked up at boot regardless. */
+    if (system("systemctl --no-block restart wpa_supplicant@wlan0") != 0)
+        fprintf(stderr, "[cyd] set_wifi: could not restart the supplicant; "
+                        "the config will apply at next boot\n");
+}
+
 static void apply(const cyd_cmd_t *c, am01_bus_t *bus)
 {
     switch (c->kind) {
@@ -212,6 +277,18 @@ static void apply(const cyd_cmd_t *c, am01_bus_t *bus)
         break;
     case CYD_CMD_KIND_SET_POOL:
         apply_set_pool(c);
+        break;
+    case CYD_CMD_KIND_RESTART:
+        /* Restarting the miner means restarting the process this thread lives
+         * in. --no-block is not optional: a blocking `systemctl restart` on
+         * one's own unit waits for a stop that cannot complete until this call
+         * returns. Queue the job and let systemd do it. */
+        fprintf(stderr, "[cyd] miner restart requested from the front panel\n");
+        if (system("systemctl --no-block restart odo-miner") != 0)
+            fprintf(stderr, "[cyd] restart command failed\n");
+        break;
+    case CYD_CMD_KIND_SET_WIFI:
+        apply_set_wifi(c);
         break;
     case CYD_CMD_KIND_NONE:
     default:

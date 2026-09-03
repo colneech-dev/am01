@@ -145,6 +145,53 @@ int main(void)
        "a rejected parse CLEARS the output, leaving no stale fields");
 
     printf("\n");
+    /* ---- restart -------------------------------------------------------- */
+    printf("\n-- restart --\n");
+
+    ok(cyd_cmd_parse("CMD restart", &c) == CYD_CMD_KIND_RESTART,
+       "restart parses");
+    ok(cyd_cmd_parse("CMD restart now", &c) == CYD_CMD_KIND_NONE,
+       "restart takes no arguments");
+
+    /* ---- set_wifi ------------------------------------------------------- */
+    printf("\n-- set_wifi --\n");
+
+    ok(cyd_cmd_parse("CMD set_wifi HomeNet hunter2hunter2", &c)
+           == CYD_CMD_KIND_SET_WIFI &&
+       !strcmp(c.ssid, "HomeNet") && !strcmp(c.psk, "hunter2hunter2"),
+       "set_wifi splits ssid and psk");
+
+    /* THE PSK TAKES THE REST OF THE LINE, spaces included. WPA passphrases
+     * routinely contain them, and a token split would truncate one silently --
+     * a board that cannot join, with a config that looks right. */
+    ok(cyd_cmd_parse("CMD set_wifi HomeNet correct horse battery", &c)
+           == CYD_CMD_KIND_SET_WIFI &&
+       !strcmp(c.psk, "correct horse battery"),
+       "a passphrase may contain spaces and is taken whole");
+
+    ok(cyd_cmd_parse("CMD set_wifi HomeNet short", &c) == CYD_CMD_KIND_NONE,
+       "a passphrase under 8 characters is refused -- WPA2 would reject it");
+
+    {
+        char line[160];
+        char longpsk[80];
+        memset(longpsk, 'x', 64);
+        longpsk[64] = '\0';
+        snprintf(line, sizeof line, "CMD set_wifi HomeNet %s", longpsk);
+        ok(cyd_cmd_parse(line, &c) == CYD_CMD_KIND_NONE,
+           "a passphrase over 63 characters is refused");
+    }
+
+    ok(cyd_cmd_parse("CMD set_wifi HomeNet", &c) == CYD_CMD_KIND_NONE,
+       "set_wifi without a passphrase is refused -- not an open network");
+    ok(cyd_cmd_parse("CMD set_wifi", &c) == CYD_CMD_KIND_NONE,
+       "set_wifi with no arguments is refused");
+
+    /* The daemon writes this straight into wpa_supplicant.conf, so a rejected
+     * parse must leave nothing behind for a later branch to pick up. */
+    ok(c.ssid[0] == '\0' && c.psk[0] == '\0',
+       "a rejected set_wifi leaves no stale ssid or psk");
+
     if (errors == 0) printf("=== ALL %d CHECKS PASSED ===\n", checks);
     else             printf("=== %d of %d CHECK(S) FAILED ===\n", errors, checks);
     return errors ? 1 : 0;

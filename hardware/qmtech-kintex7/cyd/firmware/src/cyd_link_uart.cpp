@@ -197,6 +197,27 @@ bool cyd_link_reboot(cyd_link_t *link)
     return send_cmd(CYD_CMD_REBOOT);
 }
 
+bool cyd_link_restart(cyd_link_t *link)
+{
+    (void)link;
+    return send_cmd(CYD_CMD_RESTART);
+}
+
+bool cyd_link_set_wifi(cyd_link_t *link, const char *ssid, const char *psk)
+{
+    (void)link;
+    if (!ssid || !psk || !*ssid)
+        return false;
+    size_t n = strlen(psk);
+    if (n < 8 || n > 63)          /* the daemon would reject it anyway */
+        return false;
+    char b[CYD_LINE_MAX];
+    /* PSK LAST and unquoted: the parser takes the remainder of the line
+     * whole, which is what lets a passphrase contain spaces. */
+    snprintf(b, sizeof b, "%s %s %s", CYD_CMD_SET_WIFI, ssid, psk);
+    return send_cmd(b);
+}
+
 bool cyd_link_set_pool(cyd_link_t *link, const char *host, int port,
                        const char *worker, const char *pass)
 {

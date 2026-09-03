@@ -6,6 +6,7 @@
 #include "cyd_proto.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 /* Copy one whitespace-delimited token. Returns the start of the next, or NULL
@@ -71,6 +72,34 @@ cyd_cmd_kind_t cyd_cmd_parse(const char *line, cyd_cmd_t *out)
     if (strcmp(verb, CYD_CMD_RESET_STAT) == 0) {
         if (!at_end(p)) return CYD_CMD_KIND_NONE;
         out->kind = CYD_CMD_KIND_RESET_STATS;
+        return out->kind;
+    }
+
+    if (strcmp(verb, CYD_CMD_RESTART) == 0) {
+        if (!at_end(p)) return CYD_CMD_KIND_NONE;   /* takes no arguments */
+        out->kind = CYD_CMD_KIND_RESTART;
+        return out->kind;
+    }
+
+    /* set_wifi <ssid> <psk>
+     *
+     * The PSK is the LAST field and is taken WHOLE, spaces and all, because
+     * WPA passphrases routinely contain them and a token split would silently
+     * truncate one -- giving a board that cannot join, with a config that
+     * looks right. An SSID containing spaces is not supported and is rejected
+     * rather than half-read. */
+    if (strcmp(verb, CYD_CMD_SET_WIFI) == 0) {
+        p = token(p, out->ssid, sizeof out->ssid);
+        if (!p || !out->ssid[0]) return CYD_CMD_KIND_NONE;
+        while (*p == ' ') p++;
+        if (!*p) return CYD_CMD_KIND_NONE;   /* an open network is not this */
+        snprintf(out->psk, sizeof out->psk, "%s", p);
+        /* WPA2 is 8..63 characters. Rejecting here means the daemon never
+         * writes a config wpa_supplicant would refuse, which would drop a
+         * headless board off the network with no way back in. */
+        size_t n = strlen(out->psk);
+        if (n < 8 || n > 63) return CYD_CMD_KIND_NONE;
+        out->kind = CYD_CMD_KIND_SET_WIFI;
         return out->kind;
     }
 

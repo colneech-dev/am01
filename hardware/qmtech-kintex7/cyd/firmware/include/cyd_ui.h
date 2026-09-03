@@ -38,6 +38,7 @@ typedef enum {
     CYD_SCREEN_POOL,        /* host / port / worker / pass, tap to edit   */
     CYD_SCREEN_KEYBOARD,    /* on-screen entry for one POOL field         */
     CYD_SCREEN_MENU,        /* the hamburger's modal action sheet         */
+    CYD_SCREEN_WIFI,        /* SSID + PSK, shares the keyboard            */
     CYD_SCREEN_COUNT
 } cyd_screen_t;
 
@@ -53,7 +54,11 @@ typedef enum {
     CYD_ACTION_FAN_BOOST,
     /* Confirmed, because it rewrites where the miner earns to. The new values
      * are in ui->pool_* when this is returned. */
-    CYD_ACTION_SET_POOL
+    CYD_ACTION_SET_POOL,
+    /* Confirmed: it drops the miner for a few seconds. */
+    CYD_ACTION_RESTART,
+    /* Confirmed: getting this wrong takes a headless board off the network. */
+    CYD_ACTION_SET_WIFI
 } cyd_action_t;
 
 /* Field sizes. Worker is the roomiest because it is <wallet>.<name> and the
@@ -62,6 +67,10 @@ typedef enum {
 #define CYD_POOL_PORT_MAX    8
 #define CYD_POOL_WORKER_MAX 96
 #define CYD_POOL_PASS_MAX   32
+/* WPA2 allows a 63-character passphrase; 80 leaves room for the nul and
+ * for a too-long entry to be REJECTED rather than silently truncated. */
+#define CYD_WIFI_SSID_MAX   64
+#define CYD_WIFI_PSK_MAX    80
 
 /* Which POOL row the keyboard is editing. Order matches CYD_POOL_ROW(i). */
 typedef enum {
@@ -69,6 +78,8 @@ typedef enum {
     CYD_FIELD_PORT,
     CYD_FIELD_WORKER,
     CYD_FIELD_PASS,
+    CYD_FIELD_SSID,
+    CYD_FIELD_PSK,
     CYD_FIELD_COUNT
 } cyd_field_t;
 
@@ -106,6 +117,8 @@ typedef struct {
     char        pool_port[CYD_POOL_PORT_MAX];
     char        pool_worker[CYD_POOL_WORKER_MAX];
     char        pool_pass[CYD_POOL_PASS_MAX];
+    char        wifi_ssid[CYD_WIFI_SSID_MAX];
+    char        wifi_psk[CYD_WIFI_PSK_MAX];
     cyd_field_t edit_field;     /* which row the keyboard is editing      */
     bool        kb_shift;       /* uppercase for the next character       */
     /* The field as it was when the keyboard opened, so CANCEL means
