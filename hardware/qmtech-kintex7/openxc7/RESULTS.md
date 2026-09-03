@@ -758,6 +758,85 @@ headroom a seed shows.
 **Nothing in the openXC7 column has been verified on hardware.** Vivado's
 80 MH/s is a silicon measurement; ours are static timing analysis.
 
+## Global routing tried too -- also worse than the failing baseline (2026-09-03)
+
+`nextpnr-globalroute` (a parallel tree, commits `3f50a59a` + `0c5efea5`)
+implements a coarse routing-capacity model, per-arc A* on a gcell grid,
+PathFinder-style negotiated congestion over that coarse graph, and a
+corridor constraint that filters router2's pips.
+`AUDIT-BUILT-VS-TESTED.md` lists `NEXTPNR_GLOBAL_ROUTE` under "built and
+never exercised" -- this is the first time it has run on a real design.
+
+The global router itself worked: **554141 arcs on a 237x365 gcell grid**.
+Detailed routing then tracked WORSE than the failing baseline:
+
+| iter | baseline | congestion-aware placer | global route |
+|---|---|---|---|
+| 1 | 307999 | 321924 | 348430 |
+| 2 | 45858 | 59906 | **110084** (2.4x baseline) |
+
+Stopped after 2 iterations / 3h18m (~1.6 h per iteration; iteration 6 would
+have cost ~6.4 h more).
+
+**The missing `CRIT_DIST_EXP` in that older tree is not an excuse.** Per
+this audit `CRIT_DIST_EXP=1.0` was *refuted on the routed metric* -- it
+stalled routing at ~1595 overuse where the baseline reached 6. So the
+baseline carried a knob that HURTS routing and still beat the global route
+by 2.4x.
+
+Likely mechanism: the corridor constraint confines detailed routing to the
+coarse path (`NEXTPNR_GR_MARGIN=2` gcells). At this congestion the router
+needs wide detours and the corridor denies them. It is advisory -- the
+`is_bb=false` retry remains an escape hatch -- but evidently not enough.
+
+### Tally: seven approaches, none routes 2 miners
+
+Balanced floorplan partition; `--placer-heap-beta` both directions;
+`TILE_NETS`/`WIRE_DEMAND` proxies; ground-truth `CONGESTION_MAP` at two
+weights; `--lutram` BRAM->LUT conversion (structurally dead on both yosys
+and Vivado -- no 1024-deep dual-port distributed primitive on 7-series);
+capacity-based congestion-aware placement; and now coarse global routing
+with corridor constraints. **Vivado routes it; openXC7 does not.**
+
+### RapidWright: assessed, not attempted
+
+Conceptually the best fit -- two identical miners, and pre-implemented
+module replication is RapidWright's flagship use case. Three blockers, the
+last fatal and device-specific:
+
+1. `RWRoute.SUPPORTED_SERIES = {UltraScale, UltraScale+, Versal}` --
+   Series7 absent, so its router cannot route the stitching.
+2. DCP-centric, so Vivado re-enters the loop for bitstream generation --
+   defeating the only reason to do this (independence from Vivado, which
+   already delivers ~79 MH/s).
+3. **The two regions are not congruent.** Relocation needs a structurally
+   identical target. BRAM columns here: cols 0-4 have 140 sites each, col 5
+   has 130 (ten gaps), col 6 has 60 (stops at Y59). 840 BRAMs need six
+   columns, so the second miner necessarily lands on differently-shaped
+   fabric; and 420 BRAMs in 3 columns is already the full 140-row column
+   height, so there is no vertical alternative either. **This defeats ANY
+   replication-based approach on this part**, not just RapidWright's.
+
+The tree already has a partial native version of the same idea --
+`--fixed-routes` dump (`xilinx/main.cc:56`), a loader binding pips at
+`STRENGTH_LOCKED`, and relocation logic at `xilinx/arch.cc:1191` -- but it
+was built to import golden Vivado clock routing, `NEXTPNR_FIXEDROUTES_HOOK`
+is likewise never-exercised, and the congruence problem blocks repurposing
+it regardless.
+
+### F4PGA / VPR: assessed, not attempted
+
+yosys -> **VPR** -> prjxray; swaps nextpnr for VPR, keeping synthesis and
+bitstream layers. VPR has a mature global-routing congestion model. Not
+installed here and never previously evaluated as a toolchain (VPR appears
+in `CONGESTION-RESEARCH-PLAN.md` only as a source of ideas). The blocker is
+that F4PGA's Xilinx support centres on Artix-7/Spartan-7; **Kintex-7
+(xc7k325t) support is unverified**, and prjxray having kintex7 data is NOT
+the same as F4PGA having a VPR architecture model for it -- that model is
+generated per device and is the multi-week part. Compounding risk: F4PGA's
+Xilinx flow historically had weak hard-block coverage, and this design is
+defined by 840 true-dual-port BRAMs at 94% occupancy.
+
 ## Option B (PLANNED, NOT EXECUTED -- pick up after Option A): two `THROUGHPUT=3` miners
 
 Two independent `THROUGHPUT=3` wide miners (each 1.33x, 560 BRAM alone) for
