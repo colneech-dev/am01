@@ -4,7 +4,7 @@
  * PAIRED WITH cyd_ui.c, which owns the screen model and touch handling and
  * contains no drawing at all. That split is what lets the whole navigation
  * model -- including the confirm guards -- run on a PC in milliseconds
- * (sim/test_cyd_ui.c, 41 checks). Nothing in this file is testable off
+ * (sim/test_cyd_ui.c, 85 checks). Nothing in this file is testable off
  * hardware, which is exactly why as little as possible lives here.
  *
  * BUTTON GEOMETRY COMES FROM cyd_ui_layout.h, the same header cyd_ui.c
@@ -18,7 +18,7 @@
  * point of this panel is that the miner already has a UI; three different
  * vocabularies for the same numbers would be worse than one imperfect one.
  *
- * Values are formatted by cyd_fmt_* (29 checks), never inline. Those
+ * Values are formatted by cyd_fmt_* (30 checks), never inline. Those
  * functions are where "-1" becomes "--" rather than a fault the board does
  * not have.
  */
@@ -30,7 +30,7 @@
 
 #include <string.h>
 #include <math.h>
-#include <string.h>
+#include "cyd_bg.h"
 #include "cyd_ui.h"
 #include "cyd_ui_layout.h"
 
@@ -177,8 +177,6 @@ static void row(int y, const char *label, const char *value, uint16_t vc)
     tft.drawString(value, CYD_LAYOUT_W - 10, y, 2);
 }
 
-/* The mark from the dashboard's SVG: a hexagon outline with a smaller filled
- * hexagon inside it. Drawn rather than embedded -- it is six points. */
 /* odo_ui.c's 16x16 mark, verbatim: outer ring plus a solid inner hex, flat-top
  * to match the web SVG. Pixel art rather than geometry, because that is what
  * the other panel draws and a mark that is subtly the wrong shape is worse
@@ -213,34 +211,20 @@ static void logo(int x, int y, int scale)
         }
 }
 
-/* THE HONEYCOMB. odo_ui.c blits a bg.png; drawing the hex grid costs ~150KB
- * less flash and is the same picture. Faint on purpose -- it is texture behind
- * data. The previous version of this panel skipped it entirely, which is most
- * of why the two screens did not look like the same product.
+/* THE HONEYCOMB, blitted from the real artwork.
  *
- * Flat-top hexagons on the usual offset grid: columns step 1.5*R and odd
- * columns drop half a row. */
+ * cyd_bg.h is odo-miner's own bg.png -- already 320x240, so it goes down
+ * 1:1 with no scaling and is pixel-for-pixel what the other panel shows.
+ *
+ * setSwapBytes(true) because TFT_eSPI pushes 16-bit data big-endian to the
+ * panel while the array is host order; without it every colour comes out
+ * wrong, which on a dark texture reads as "the background is broken" rather
+ * than as a byte-order bug. */
 static void hexbg(void)
 {
-    const int R  = 17;                    /* circumradius */
-    const int dx = (R * 3) / 2;
-    const int dy = (int)(R * 1.732f);
-    for (int col = -1; col * dx < CYD_LAYOUT_W + R; col++) {
-        int cx   = col * dx;
-        int yoff = (col & 1) ? dy / 2 : 0;
-        for (int row = -1; row * dy + yoff < CYD_LAYOUT_H + R; row++) {
-            int cy = row * dy + yoff;
-            int px = 0, py = 0;
-            for (int k = 0; k <= 6; k++) {
-                float a = (float)k * 1.0471976f;   /* 60 degrees */
-                int nx = cx + (int)(R * cosf(a));
-                int ny = cy + (int)(R * sinf(a));
-                if (k)
-                    tft.drawLine(px, py, nx, ny, C_HEX);
-                px = nx; py = ny;
-            }
-        }
-    }
+    tft.setSwapBytes(true);
+    tft.pushImage(0, 0, CYD_BG_W, CYD_BG_H, CYD_BG);
+    tft.setSwapBytes(false);
 }
 
 /* The MINER's wall clock, in the header. A CYD has no RTC and NTP may never
