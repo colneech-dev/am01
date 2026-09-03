@@ -750,13 +750,28 @@ cap_fail:
         if (uart_open_bus() < 0)
             return 1;
         int secs = (argc > 2) ? atoi(argv[2]) : 30;
-        printf("transmitting 0x55 continuously for %ds -- measure now\n", secs);
+        /* The pattern byte is selectable because 0x55 alone cannot finish
+         * the diagnosis. Framed 8N1 it is exactly 50%% duty, so a clean line
+         * averages 1.65V -- but a DMM shows only the average, and a line
+         * whose low is being held up by a second driver averages something
+         * similar. 0x00 separates them: start bit plus eight zeros is nine
+         * lows to one high, 90%% low, so the average IS essentially the low
+         * level.
+         *   ~0.33V -> low is near ground; the ESP32 must be seeing a 0
+         *   ~1.2V  -> the low never gets below the 0.825V input threshold,
+         *             so the chip sees a permanent 1 and no data at all */
+        unsigned pv = 0x55;
+        if (argc > 3) pv = (unsigned)strtoul(argv[3], NULL, 0);
+        printf("transmitting 0x%02x continuously for %ds -- measure now\n",
+               pv & 0xFF, secs);
+        printf("  expected average on a CLEAN line: %.2fV of 3.3V\n",
+               3.3 * (double)(__builtin_popcount(pv & 0xFF) + 1) / 10.0);
         printf("  JP5 15 and the ESP32 RX pin should BOTH drop well below 3.3V\n");
         fflush(stdout);
         time_t end = time(NULL) + secs;
         unsigned long sent = 0;
         uint8_t pat[32];
-        memset(pat, 0x55, sizeof pat);
+        memset(pat, (int)(pv & 0xFF), sizeof pat);
         while (time(NULL) < end) {
             int w = uart_tx(pat, sizeof pat);
             if (w > 0) sent += (unsigned long)w;

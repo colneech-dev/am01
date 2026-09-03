@@ -210,6 +210,49 @@ Read off the board 2026-09-01 (silkscreen `ESP32-2432S028`). CONFIRM WHICH
 PHYSICAL PIN IS WHICH WITH A METER before plugging in: reversing VIN and GND
 destroys the panel, and that is not something to take off a photograph.
 
+### The FPGA -> CYD direction has never worked, and it is P5's RX pin
+
+**Status 2026-09-03: the panel receives nothing, on two separate boards.** The
+CYD's own transmit reaches JP5 16 perfectly; nothing the FPGA sends is ever
+acted on. Everything except one link is now measured rather than assumed, so
+this records what was eliminated, to stop it being re-investigated.
+
+Ruled out, in order:
+
+| Layer | How | Result |
+|---|---|---|
+| Wire format | `sim/tb_uart_tx_pin.v` decodes the pin with a receiver written from the RS-232 spec, sharing no code with the DUT. 0x55 and 0xAA are each other's bit-reversal AND inversion | conformant |
+| Pin placement | `io_placed` report: AF24, LVCMOS33, OUTPUT | correct |
+| Pin driver | timing report: `uart_i/uart_tx_reg` (FDSE) -> OBUF -> AF24, real path | not tied off |
+| Baud | one `DIVISOR` shared by TX and RX; the RX direction decodes correctly | 115200 both ways |
+| Throughput | `txstream`: ~2.07M bytes in a nominal 180s, 11451-11580 B/s | line rate |
+| JP5 15 identity | jumper JP5 15-16, `am01-uartd selftest` | 28/28 bytes, so AF24 really is JP5 15 |
+| Both wires | same jumper moved to the CYD end | 28/28 bytes, wires perfect |
+| Contention | `txstream 240 0x00` (90% low) measured 0.5V, implying a low near 0.19V against a 0.825V threshold | nothing fighting the driver |
+| ESP32 state | `cap boot` reads the mode field: `boot:0x3 (DOWNLOAD_BOOT(UART0/...))`, `waiting for download` | listening |
+| The board itself | a second, different CYD, same wires | identical silence |
+
+That leaves exactly one link never demonstrated: **P5's RX pin to the ESP32's
+GPIO3.** A clean unloaded low is also what an UNCONNECTED pin reads, so the
+0.5V measurement does not distinguish "reaching GPIO3" from "reaching
+nothing".
+
+P5 carrying GPIO1 is certain -- both the ROM bootloader and Arduino `Serial`
+transmit only on UART0, and we receive both. GPIO3 being on the connector was
+inferred from that, never shown.
+
+**To confirm:** unplug the wire and meter P5's RX pin alone, panel running.
+GPIO3 has an internal pull-up and the onboard CH340 drives it, so a real RX pin
+sits near 3.3V; floating or drifting means it is not connected.
+
+**The fix if so.** UART0 is only needed for FLASHING. The panel link can run on
+a second UART over the free GPIOs on CN1 (`GND, IO22, IO27, 3.3V`):
+
+    Serial2.begin(115200, SERIAL_8N1, /*RX=*/27, /*TX=*/22);
+
+Keep power on P5, flash the panel once over USB, and the link never touches
+GPIO3. Firmware change plus moving two wires; no board surgery.
+
 The other two JSTs do NOT carry EN or IO0 - P3 is `GND, IO35, IO22, IO21`
 (IO35 is input-only, ESP32 34-39) and CN1 is `GND, IO22, IO27, 3.3V`. The plan
 had assumed those signals would be available; they are not. So `cyd_esp_en`
