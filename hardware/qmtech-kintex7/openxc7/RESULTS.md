@@ -694,6 +694,70 @@ plan). Deliberately not built -- it amplifies whatever the estimator does,
 so it should only follow evidence the estimator helps, which now exists but
 is a single data point.
 
+## Congestion awareness does NOT rescue 2 miners -- and the reason is structural (2026-09-03)
+
+Ran the validated congestion-aware placer (`CONG_RATIO=1.0
+CONG_SPREAD=0.5`) on the existing 2-miner 94%-BRAM netlist
+(`out_2miner/am01_qmtech_top.fp.json`), seed 1 -- the identical netlist and
+seed whose baseline hard-failed at iter=31 after ~15h. **It tracked worse
+than that failing baseline at every matched iteration:**
+
+| iter | baseline | congestion-aware |
+|---|---|---|
+| 1 | 307999 | 321924 |
+| 2 | 45858 | 59906 |
+| 3 | 14262 | 23338 |
+| 4 | 9409 | 15519 |
+| 5 | 7965 | 13100 |
+| 6 | 7136 | 12005 (+68%) |
+
+Stopped at iter=6 after 4h41m (~47 min/iteration by then; reaching the
+baseline's iter=31 failure point would have cost ~20 more hours to confirm
+what the trajectory already showed).
+
+**Why it fails here, when it rescued THROUGHPUT=3 seed 3:** the 2-miner
+floorplan **BEL-pins all 840 BRAMs** to fixed sites. The spreader cannot
+move them. So congestion-aware spreading can only redistribute the
+surrounding LUT/FF logic -- which sits at ~21% utilisation and was never
+the constraint -- while adding wirelength. The actual bottleneck is BRAM
+egress from 840 pinned sites, which is structurally out of reach of a cell
+spreader. On THROUGHPUT=3 seed 3 the placement was genuinely free, so
+improving it helped; here the thing that needs to move is nailed down.
+
+The congestion statistics said as much before the run and were
+under-weighted at the time: this design's distribution was only modestly
+hotter than the 12%-LUT design (ratio p50 0.040 vs 0.016; 9.9% vs 7.4% of
+tiles above 1.0). It is BRAM-**occupancy**-limited, not
+general-routing-limited, and RUDY measures wire demand, not BRAM site
+pressure. Right instrument, wrong bottleneck.
+
+### Standing conclusion on 2 miners
+
+**94% BRAM occupancy is beyond this flow on this part.** Everything tried
+has now failed: balanced floorplan partitioning, `--placer-heap-beta` in
+both directions, `TILE_NETS`/`WIRE_DEMAND` proxies, ground-truth
+`CONGESTION_MAP` feedback at two weights, `--lutram` BRAM->LUT conversion
+(dead on both yosys and Vivado -- no 1024-deep dual-port distributed
+primitive exists), and now real capacity-based congestion awareness.
+**Vivado routes it; openXC7 does not.**
+
+### Honest standing against Vivado
+
+| | miners | clock | clocks/hash | hashrate |
+|---|---|---|---|---|
+| **Vivado, measured on silicon** | 2 | 162 MHz | 4 | **~81 MH/s** |
+| openXC7 shipping today | 1 | 133.33 | 4 | 33.3 MH/s |
+| openXC7 best this work (`THROUGHPUT=3`) | 1 | 133.33 | 3 | **44.4 MH/s** |
+
+openXC7 is at **~55% of Vivado**, and the dominant term is the 2x from
+miner count, not clock speed. Note `clk_gen_hash.v` hard-wires clk_h to
+800/6 = 133.33 MHz, so **Fmax is a pass/fail gate, not the operating
+speed** -- real hashrate is 133.33/THROUGHPUT regardless of how much Fmax
+headroom a seed shows.
+
+**Nothing in the openXC7 column has been verified on hardware.** Vivado's
+80 MH/s is a silicon measurement; ours are static timing analysis.
+
 ## Option B (PLANNED, NOT EXECUTED -- pick up after Option A): two `THROUGHPUT=3` miners
 
 Two independent `THROUGHPUT=3` wide miners (each 1.33x, 560 BRAM alone) for
