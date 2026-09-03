@@ -653,6 +653,53 @@ int main(int argc, char **argv)
         return ok ? 0 : 1;
     }
 
+    /* `ping` -- end-to-end proof of the link, in BOTH directions at once.
+     *
+     * Sends PING and waits for the panel to answer PONG. Passing means the
+     * FPGA reached the ESP32 AND the ESP32 reached back, so it tests the
+     * exact thing that was broken for two days -- unlike `listen`, which
+     * only ever proved the inbound half.
+     *
+     * Needs firmware that speaks the protocol, so it also confirms the
+     * flash took. board_probe does not answer PING. */
+    if (argc > 1 && strcmp(argv[1], "ping") == 0) {
+        if (uart_open_bus() < 0)
+            return 1;
+
+        { uint8_t junk[64]; while (uart_rx(junk, sizeof junk) > 0) ; }
+
+        static const uint8_t msg[] = CYD_MSG_PING "\n";
+        int w = uart_tx(msg, sizeof msg - 1);
+        printf("sent %s (%d bytes)\n", CYD_MSG_PING, w);
+
+        char got[128];
+        size_t n = 0;
+        time_t end = time(NULL) + 3;
+        while (time(NULL) < end && n < sizeof got - 1) {
+            int r = uart_rx((uint8_t *)got + n, sizeof got - 1 - n);
+            if (r > 0) {
+                n += (size_t)r;
+                got[n] = 0;
+                if (strstr(got, CYD_MSG_PONG))
+                    break;
+            }
+        }
+        got[n] = 0;
+
+        if (strstr(got, CYD_MSG_PONG)) {
+            printf("PONG received -- THE LINK WORKS IN BOTH DIRECTIONS.\n");
+            uart_close_bus();
+            return 0;
+        }
+        printf("no PONG. %lu byte(s) back: \"%s\"\n",
+               (unsigned long)n, got);
+        printf("  nothing at all  -> outbound is still dead, or the panel is\n"
+               "                     not running firmware that answers PING\n"
+               "  bytes but junk  -> wrong baud or a half-connected pair\n");
+        uart_close_bus();
+        return 1;
+    }
+
     /* `cap <boot|run> [secs]` -- reset, then capture SILENTLY and dump after.
      *
      * `listen` formats and fflushes every byte as it arrives, and down an
