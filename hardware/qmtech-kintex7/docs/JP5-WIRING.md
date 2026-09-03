@@ -232,26 +232,51 @@ Ruled out, in order:
 | ESP32 state | `cap boot` reads the mode field: `boot:0x3 (DOWNLOAD_BOOT(UART0/...))`, `waiting for download` | listening |
 | The board itself | a second, different CYD, same wires | identical silence |
 
-That leaves exactly one link never demonstrated: **P5's RX pin to the ESP32's
-GPIO3.** A clean unloaded low is also what an UNCONNECTED pin reads, so the
-0.5V measurement does not distinguish "reaching GPIO3" from "reaching
-nothing".
+**ANSWER, confirmed 2026-09-03.** P5's TX and RX reach GPIO1 and GPIO3 through
+**100 ohm series resistors, R5 and R6**, and the CH340C USB-serial converter is
+wired to those same two GPIOs *directly*. This is documented CYD behaviour, not
+a fault on these units, which is why two different boards behaved identically.
 
-P5 carrying GPIO1 is certain -- both the ROM bootloader and Arduino `Serial`
-transmit only on UART0, and we receive both. GPIO3 being on the connector was
-inferred from that, never shown.
+Why that kills this direction and not the other:
 
-**To confirm:** unplug the wire and meter P5's RX pin alone, panel running.
-GPIO3 has an internal pull-up and the onboard CH340 drives it, so a real RX pin
-sits near 3.3V; floating or drifting means it is not connected.
+* **Panel -> FPGA works.** GPIO1 is an ESP32 output. It drives out through R5
+  into our high-impedance FPGA input; the 100 ohms costs nothing.
+* **FPGA -> panel cannot work.** The CH340C's TX is a powered push-pull output
+  sitting directly on GPIO3. Our driver reaches that node only through R6, so
+  the two form a divider that the CH340 wins:
 
-**The fix if so.** UART0 is only needed for FLASHING. The panel link can run on
-a second UART over the free GPIOs on CN1 (`GND, IO22, IO27, 3.3V`):
+        V(GPIO3) = 3V3 x (R_fpga + R6) / (R_ch340 + R6 + R_fpga)
+
+  With ~30 ohms of FPGA driver, R6 = 100 and a CH340 output near 50 ohms, GPIO3
+  sits around 2.4 V when we are asserting a ZERO. The ESP32 needs below 0.825 V
+  (0.25 x VDD). It reads a permanent 1 and never sees a single bit.
+
+**This is why the measurements looked healthy.** Metering the P5 pin reads our
+own side of R6, where the swing genuinely is clean -- measured 0.5 V average on
+0x00 (90% low) and 1.77 V on 0x55 (50% duty), the latter matching a 3.3 V high
+against a ~0.23 V low to within 5 mV. The contention is on the FAR side of the
+resistor and is invisible from the connector.
+
+Community reports match exactly: "the P1 port RX (GPIO3) wasn't receiving data
+from an Arduino Pro Mini, but TX worked in the opposite direction."
+
+### Two ways forward
+
+**A. Keep flashing over the wires -- requires board rework.** Stop the CH340C
+driving GPIO3, and drop R5/R6 so our driver is not attenuated. The documented
+recipe is to remove the CH340 and replace R5 and R6 with 0R links ("you may get
+away with 20R, but 100R is too high"). Lifting only the CH340's TXD pin is the
+smaller version of the same idea. Per panel, and irreversible in practice.
+
+**B. Move the link off UART0 -- no rework.** UART0 is needed only for FLASHING.
+CN1 carries `GND, IO22, IO27, 3V3`, none of it touched by the CH340:
 
     Serial2.begin(115200, SERIAL_8N1, /*RX=*/27, /*TX=*/22);
 
-Keep power on P5, flash the panel once over USB, and the link never touches
-GPIO3. Firmware change plus moving two wires; no board surgery.
+Keep power on P5, flash the panel once over USB, and the link never contends.
+
+Sources: atomic14's CYD board notes; witnessmenow/ESP32-Cheap-Yellow-Display
+discussion #113.
 
 The other two JSTs do NOT carry EN or IO0 - P3 is `GND, IO35, IO22, IO21`
 (IO35 is input-only, ESP32 34-39) and CN1 is `GND, IO22, IO27, 3.3V`. The plan

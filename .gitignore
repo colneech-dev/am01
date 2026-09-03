@@ -57,3 +57,7 @@ hardware/qmtech-kintex7/openxc7/vivado_net_delay_calib*.csv
 hardware/qmtech-kintex7/openxc7/absorb_report.txt
 hardware/qmtech-kintex7/openxc7/tight_setup_hold_pins.txt
 hardware/qmtech-kintex7/openxc7/vivado_worst_path_anatomy.txt
+
+# Third-party binaries fetched by post-build.sh (esptool aarch64 tarball).
+# Verified by hash at build time; not tracked.
+hardware/qmtech-kintex7/linux/dl/

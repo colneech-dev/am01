@@ -499,27 +499,64 @@ static int tcp_bridge(int port, int enter_boot)
         usleep(200000);
     }
 
+    /* BOTH DIRECTIONS BUFFER AND RESUME. The first version of this loop lost
+     * bytes in three separate ways, none of which showed up while the link was
+     * failing at sync -- but every one of them would silently corrupt a real
+     * firmware image, which is the only thing this bridge exists to carry:
+     *
+     *  1. send() to the socket was called once and its result discarded. The
+     *     socket is O_NONBLOCK, so a full send buffer returns EAGAIN or a
+     *     partial count and those ESP32 bytes were gone. esptool would then
+     *     wait for a reply that had been thrown away.
+     *  2. A short uart_tx -- normal, since the FIFO is 16 bytes -- printed a
+     *     warning and dropped the remainder, because buf was immediately
+     *     reused for the receive direction.
+     *  3. recv() returning -1 was treated as "no data" whatever errno said, so
+     *     a genuine socket error span forever instead of ending the session.
+     *
+     * Each side now keeps its pending span and resumes from exactly where it
+     * stopped, so a partial transfer costs a loop iteration rather than data. */
     unsigned long tx = 0, rx = 0;
-    while (!g_pty_stop) {
-        uint8_t buf[256];
+    uint8_t hbuf[512]; size_t hlen = 0, hoff = 0;   /* socket -> panel */
+    uint8_t ebuf[512]; size_t elen = 0, eoff = 0;   /* panel  -> socket */
+    int closed = 0;
+
+    while (!g_pty_stop && !closed) {
         int busy = 0;
 
-        int n = (int)recv(cs, buf, sizeof buf, 0);
-        if (n == 0) { printf("\nclient closed\n"); break; }
-        if (n > 0) {
-            int w = uart_tx(buf, (size_t)n);
-            if (w > 0) tx += (unsigned long)w;
-            if (w != n)
-                fprintf(stderr, "\nWARNING: %d of %d bytes sent\n", w, n);
-            busy = 1;
+        /* Only read more from the socket once the last span is fully sent. */
+        if (hoff == hlen) {
+            hoff = hlen = 0;
+            int n = (int)recv(cs, hbuf, sizeof hbuf, 0);
+            if (n == 0) { printf("\nclient closed\n"); break; }
+            if (n > 0) { hlen = (size_t)n; busy = 1; }
+            else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+                fprintf(stderr, "\nrecv: %s\n", strerror(errno));
+                closed = 1;
+            }
+        }
+        if (hoff < hlen) {
+            int w = uart_tx(hbuf + hoff, hlen - hoff);
+            if (w > 0) { hoff += (size_t)w; tx += (unsigned long)w; busy = 1; }
+            else if (w < 0 && errno != ETIMEDOUT) {
+                fprintf(stderr, "\nuart_tx: %s\n", strerror(errno));
+                closed = 1;
+            }
         }
 
-        int r = uart_rx(buf, sizeof buf);
-        if (r > 0) {
-            ssize_t u = send(cs, buf, (size_t)r, MSG_NOSIGNAL);
-            (void)u;
-            rx += (unsigned long)r;
-            busy = 1;
+        if (eoff == elen) {
+            eoff = elen = 0;
+            int r = uart_rx(ebuf, sizeof ebuf);
+            if (r > 0) { elen = (size_t)r; busy = 1; }
+        }
+        if (eoff < elen) {
+            ssize_t s = send(cs, ebuf + eoff, elen - eoff, MSG_NOSIGNAL);
+            if (s > 0) { eoff += (size_t)s; rx += (unsigned long)s; busy = 1; }
+            else if (s < 0 && errno != EAGAIN && errno != EWOULDBLOCK
+                            && errno != EINTR) {
+                fprintf(stderr, "\nsend: %s\n", strerror(errno));
+                closed = 1;
+            }
         }
 
         if (!busy)
