@@ -22,6 +22,7 @@
 extern "C" {
 #endif
 
+#include <stddef.h>
 #include "cyd_link.h"
 
 /* 2.8" CYD panel, landscape. Same geometry odo-ui assumes. */
@@ -32,8 +33,10 @@ typedef enum {
     CYD_SCREEN_GLANCE = 0,  /* hashrate, pool, ACC/REJ, uptime            */
     CYD_SCREEN_DETAIL,      /* + epoch, job, fan, best diff, backend      */
     CYD_SCREEN_SETTINGS,    /* dim level, dim timeout                     */
-    CYD_SCREEN_ACTIONS,     /* RESET STATS, REBOOT                        */
+    CYD_SCREEN_ACTIONS,     /* RESET STATS, REBOOT, FAN BOOST             */
     CYD_SCREEN_CONFIRM,     /* guards anything destructive                */
+    CYD_SCREEN_POOL,        /* host / port / worker / pass, tap to edit   */
+    CYD_SCREEN_KEYBOARD,    /* on-screen entry for one POOL field         */
     CYD_SCREEN_COUNT
 } cyd_screen_t;
 
@@ -43,8 +46,30 @@ typedef enum {
 typedef enum {
     CYD_ACTION_NONE = 0,
     CYD_ACTION_RESET_STATS,
-    CYD_ACTION_REBOOT
+    CYD_ACTION_REBOOT,
+    /* NOT confirmed, deliberately: reversible and harmless. Only the two
+     * above can lose work, and only those go through CONFIRM. */
+    CYD_ACTION_FAN_BOOST,
+    /* Confirmed, because it rewrites where the miner earns to. The new values
+     * are in ui->pool_* when this is returned. */
+    CYD_ACTION_SET_POOL
 } cyd_action_t;
+
+/* Field sizes. Worker is the roomiest because it is <wallet>.<name> and the
+ * wallet alone is ~34 base58 characters. */
+#define CYD_POOL_HOST_MAX   64
+#define CYD_POOL_PORT_MAX    8
+#define CYD_POOL_WORKER_MAX 96
+#define CYD_POOL_PASS_MAX   32
+
+/* Which POOL row the keyboard is editing. Order matches CYD_POOL_ROW(i). */
+typedef enum {
+    CYD_FIELD_HOST = 0,
+    CYD_FIELD_PORT,
+    CYD_FIELD_WORKER,
+    CYD_FIELD_PASS,
+    CYD_FIELD_COUNT
+} cyd_field_t;
 
 typedef struct {
     cyd_screen_t screen;
@@ -68,7 +93,38 @@ typedef struct {
      * the guard that was missing when this shipped. This one is in the model,
      * so sim/test_cyd_ui.c can prove it. */
     bool     needs_release;
+
+    /* Fan boost, mirrored locally so the button can show its state. The miner
+     * owns the real value; this is what the user last asked for. */
+    bool     fan_boost;
+
+    /* POOL editor. Held as a working copy so an abandoned edit changes
+     * nothing -- the miner is only told on SAVE, and set_pool rewrites
+     * /boot/am01-miner.conf, which survives a reflash. */
+    char        pool_host[CYD_POOL_HOST_MAX];
+    char        pool_port[CYD_POOL_PORT_MAX];
+    char        pool_worker[CYD_POOL_WORKER_MAX];
+    char        pool_pass[CYD_POOL_PASS_MAX];
+    cyd_field_t edit_field;     /* which row the keyboard is editing      */
+    bool        kb_shift;       /* uppercase for the next character       */
+    /* The field as it was when the keyboard opened, so CANCEL means
+     * "discard this edit" rather than "clear the field". Sized to
+     * the largest field. */
+    char        kb_backup[CYD_POOL_WORKER_MAX];
 } cyd_ui_t;
+
+/* The buffer and capacity for one field, so the keyboard and the drawing code
+ * cannot disagree about which is which. Returns NULL for a bad index. */
+char *cyd_ui_field(cyd_ui_t *ui, cyd_field_t f, size_t *cap);
+
+/* Keep host/port in step with what the miner reports, WITHOUT
+ * clobbering an edit in progress. Safe to call on every status
+ * update. */
+void cyd_ui_pool_sync(cyd_ui_t *ui, const cyd_status_t *st);
+
+/* The character a keyboard cell carries, honouring shift. col/row are grid
+ * coordinates; returns 0 when out of range. */
+char cyd_ui_kb_char(int col, int row, bool shift);
 
 void cyd_ui_init(cyd_ui_t *ui);
 

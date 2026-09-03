@@ -44,6 +44,28 @@ static cyd_action_t tap(cyd_ui_t *ui, cyd_rect_t r)
     return a;
 }
 
+/* Centre of a rect -- every touch in these tests aims at one. */
+#define CTR_X(r) ((r).x + (r).w / 2)
+#define CTR_Y(r) ((r).y + (r).h / 2)
+
+/* Press the key carrying `want`, wherever it is in the grid. Searching for it
+ * rather than hard-coding coordinates means the layout can be rearranged
+ * without silently turning these tests into no-ops. */
+static void type_key(cyd_ui_t *ui, char want)
+{
+    for (int r = 0; r < CYD_KB_ROWS; r++)
+        for (int c = 0; c < CYD_KB_COLS; c++) {
+            char lc = cyd_ui_kb_char(c, r, false);
+            char uc = cyd_ui_kb_char(c, r, true);
+            if (lc != want && uc != want)
+                continue;
+            cyd_rect_t k = CYD_KB_KEY(c, r);
+            cyd_ui_touch(ui, CTR_X(k), CTR_Y(k));
+            cyd_ui_touch_release(ui);
+            return;
+        }
+}
+
 int main(void)
 {
     cyd_ui_t ui;
@@ -206,12 +228,20 @@ int main(void)
                 for (int y2 = 0; y2 < CYD_LAYOUT_H; y2 += 24)
                     for (int x2 = 0; x2 < CYD_LAYOUT_W; x2 += 24) {
                         cyd_ui_t u2 = ui;
-                        if (cyd_ui_touch(&u2, x2, y2) != CYD_ACTION_NONE)
+                        cyd_action_t a = cyd_ui_touch(&u2, x2, y2);
+                        /* FAN_BOOST is REACHABLE in two touches on purpose:
+                         * GLANCE -> ACTIONS -> FAN. It is reversible, loses no
+                         * work, and putting it behind CONFIRM would train the
+                         * habit of tapping YES without reading -- which is what
+                         * makes the reboot guard worth anything. The property
+                         * being protected here is that nothing DESTRUCTIVE is
+                         * reachable, not that nothing at all is. */
+                        if (a != CYD_ACTION_NONE && a != CYD_ACTION_FAN_BOOST)
                             leaked = 1;
                     }
             }
         }
-        ok(!leaked, "nor can any TWO touches -- three is the minimum path");
+        ok(!leaked, "no DESTRUCTIVE action in two touches -- three is the minimum");
     }
 
     /* ---- settings ----------------------------------------------------- */
@@ -333,6 +363,172 @@ int main(void)
 
         ok(cyd_touch_edge_update(NULL, true, 0, 40) == CYD_TOUCH_NONE,
            "NULL state does not crash");
+    }
+
+
+    /* ---- fan boost ---------------------------------------------------- */
+    {
+        cyd_ui_init(&ui);
+        ui.screen = CYD_SCREEN_ACTIONS;
+        ok(!ui.fan_boost, "fan boost starts off");
+
+        cyd_action_t a = cyd_ui_touch(&ui, CTR_X(CYD_ACT_FAN), CTR_Y(CYD_ACT_FAN));
+        ok(a == CYD_ACTION_FAN_BOOST, "the fan button acts immediately");
+        ok(ui.fan_boost, "and toggles the mirrored state on");
+        ok(ui.screen == CYD_SCREEN_ACTIONS, "without leaving the screen");
+
+        cyd_ui_touch_release(&ui);
+        a = cyd_ui_touch(&ui, CTR_X(CYD_ACT_FAN), CTR_Y(CYD_ACT_FAN));
+        ok(a == CYD_ACTION_FAN_BOOST && !ui.fan_boost, "and toggles back off");
+    }
+
+    /* ---- pool editor: reaching the keyboard ---------------------------- */
+    {
+        cyd_ui_init(&ui);
+        ui.screen = CYD_SCREEN_ACTIONS;
+        cyd_ui_touch(&ui, CTR_X(CYD_ACT_POOL), CTR_Y(CYD_ACT_POOL));
+        ok(ui.screen == CYD_SCREEN_POOL, "EDIT POOL opens the pool screen");
+        cyd_ui_touch_release(&ui);
+
+        cyd_rect_t r = CYD_POOL_ROW(CYD_FIELD_WORKER);
+        cyd_ui_touch(&ui, CTR_X(r), CTR_Y(r));
+        ok(ui.screen == CYD_SCREEN_KEYBOARD, "tapping a row opens the keyboard");
+        ok(ui.edit_field == CYD_FIELD_WORKER, "on the row that was tapped");
+    }
+
+    /* ---- typing -------------------------------------------------------- */
+    {
+        cyd_ui_init(&ui);
+        ui.screen = CYD_SCREEN_KEYBOARD;
+        ui.edit_field = CYD_FIELD_WORKER;
+
+        type_key(&ui, 'a');
+        type_key(&ui, 'b');
+        ok(!strcmp(ui.pool_worker, "ab"), "characters append");
+
+        /* Shift is one-shot, like a real keyboard. */
+        cyd_ui_touch(&ui, CTR_X(CYD_KB_SHIFT), CTR_Y(CYD_KB_SHIFT));
+        cyd_ui_touch_release(&ui);
+        ok(ui.kb_shift, "shift latches");
+        type_key(&ui, 'c');
+        ok(!strcmp(ui.pool_worker, "abC"), "and uppercases exactly one key");
+        ok(!ui.kb_shift, "then clears itself");
+
+        cyd_ui_touch(&ui, CTR_X(CYD_KB_BKSP), CTR_Y(CYD_KB_BKSP));
+        ok(!strcmp(ui.pool_worker, "ab"), "DEL removes the last character");
+
+        /* Backspace on empty must not walk off the front of the buffer. */
+        cyd_ui_touch_release(&ui);
+        cyd_ui_touch(&ui, CTR_X(CYD_KB_BKSP), CTR_Y(CYD_KB_BKSP));
+        cyd_ui_touch(&ui, CTR_X(CYD_KB_BKSP), CTR_Y(CYD_KB_BKSP));
+        cyd_ui_touch(&ui, CTR_X(CYD_KB_BKSP), CTR_Y(CYD_KB_BKSP));
+        ok(ui.pool_worker[0] == 0, "DEL on an empty field is harmless");
+    }
+
+    /* ---- the port field takes digits only ------------------------------ */
+    {
+        cyd_ui_init(&ui);
+        ui.screen = CYD_SCREEN_KEYBOARD;
+        ui.edit_field = CYD_FIELD_PORT;
+        type_key(&ui, '3');
+        type_key(&ui, 'q');          /* must be refused */
+        type_key(&ui, '3');
+        ok(!strcmp(ui.pool_port, "33"),
+           "a non-digit cannot be typed into PORT -- an unreachable pool");
+    }
+
+    /* ---- CANCEL discards, OK keeps ------------------------------------- */
+    {
+        cyd_ui_init(&ui);
+        ui.screen = CYD_SCREEN_POOL;
+        snprintf(ui.pool_host, sizeof ui.pool_host, "old.example");
+
+        cyd_rect_t r = CYD_POOL_ROW(CYD_FIELD_HOST);
+        cyd_ui_touch(&ui, CTR_X(r), CTR_Y(r));
+        cyd_ui_touch_release(&ui);
+        type_key(&ui, 'z');
+        ok(!strcmp(ui.pool_host, "old.examplez"), "the edit is applied live");
+
+        cyd_ui_touch(&ui, CTR_X(CYD_KB_CANCEL), CTR_Y(CYD_KB_CANCEL));
+        ok(!strcmp(ui.pool_host, "old.example"),
+           "CANCEL restores the value the keyboard opened with");
+        ok(ui.screen == CYD_SCREEN_POOL, "and returns to the pool screen");
+    }
+
+    /* ---- SAVE refuses an incomplete pool -------------------------------- */
+    {
+        cyd_ui_init(&ui);
+        ui.screen = CYD_SCREEN_POOL;
+        snprintf(ui.pool_host, sizeof ui.pool_host, "pool.example");
+        snprintf(ui.pool_port, sizeof ui.pool_port, "3333");
+        /* worker deliberately left empty; pass defaults to "x" */
+        cyd_ui_touch(&ui, CTR_X(CYD_POOL_SAVE), CTR_Y(CYD_POOL_SAVE));
+        ok(ui.screen == CYD_SCREEN_POOL,
+           "SAVE with an empty WORKER does not even reach CONFIRM");
+        ok(ui.pending == CYD_ACTION_NONE, "and queues nothing");
+    }
+
+    /* ---- a complete pool goes through CONFIRM --------------------------- */
+    {
+        cyd_ui_init(&ui);
+        ui.screen = CYD_SCREEN_POOL;
+        snprintf(ui.pool_host, sizeof ui.pool_host, "pool.example");
+        snprintf(ui.pool_port, sizeof ui.pool_port, "3333");
+        snprintf(ui.pool_worker, sizeof ui.pool_worker, "wallet.rig");
+
+        cyd_ui_touch(&ui, CTR_X(CYD_POOL_SAVE), CTR_Y(CYD_POOL_SAVE));
+        ok(ui.screen == CYD_SCREEN_CONFIRM, "a complete pool reaches CONFIRM");
+        ok(ui.pending == CYD_ACTION_SET_POOL, "carrying SET_POOL");
+
+        /* CYD_POOL_SAVE and CYD_CONFIRM_YES are the SAME RECTANGLE, which is
+         * the trap that once rebooted the miner on a single held press. The
+         * release guard is what stops a held finger walking straight through. */
+        cyd_action_t a = cyd_ui_touch(&ui, CTR_X(CYD_CONFIRM_YES),
+                                      CTR_Y(CYD_CONFIRM_YES));
+        ok(a == CYD_ACTION_NONE,
+           "a HELD press cannot confirm it -- same rect as SAVE");
+
+        cyd_ui_touch_release(&ui);
+        a = cyd_ui_touch(&ui, CTR_X(CYD_CONFIRM_YES), CTR_Y(CYD_CONFIRM_YES));
+        ok(a == CYD_ACTION_SET_POOL, "but a released finger confirms it");
+    }
+
+    /* ---- prefill never clobbers an edit in progress --------------------- */
+    {
+        cyd_status_t st;
+        memset(&st, 0, sizeof st);
+        snprintf(st.pool, sizeof st.pool, "live.example:9999");
+
+        cyd_ui_init(&ui);
+        cyd_ui_pool_sync(&ui, &st);
+        ok(!strcmp(ui.pool_host, "live.example") &&
+           !strcmp(ui.pool_port, "9999"),
+           "host and port prefill from the miner's status");
+
+        ui.screen = CYD_SCREEN_KEYBOARD;
+        snprintf(ui.pool_host, sizeof ui.pool_host, "half-typed");
+        cyd_ui_pool_sync(&ui, &st);
+        ok(!strcmp(ui.pool_host, "half-typed"),
+           "but a status arriving mid-edit does NOT overwrite the field");
+
+        ui.screen = CYD_SCREEN_POOL;
+        cyd_ui_pool_sync(&ui, &st);
+        ok(!strcmp(ui.pool_host, "half-typed"),
+           "nor while the pool screen is open");
+    }
+
+    /* ---- keyboard bounds ------------------------------------------------ */
+    {
+        ok(cyd_ui_kb_char(-1, 0, false) == 0 &&
+           cyd_ui_kb_char(0, -1, false) == 0 &&
+           cyd_ui_kb_char(CYD_KB_COLS, 0, false) == 0 &&
+           cyd_ui_kb_char(0, CYD_KB_ROWS, false) == 0,
+           "out-of-range keyboard cells return 0");
+        ok(cyd_ui_kb_char(0, 0, true) == '1',
+           "shift does not disturb a digit");
+        ok(cyd_ui_kb_char(0, 1, false) == 'q' &&
+           cyd_ui_kb_char(0, 1, true) == 'Q',
+           "shift uppercases a letter");
     }
 
     printf("\n");

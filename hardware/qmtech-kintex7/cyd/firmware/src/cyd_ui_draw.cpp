@@ -28,6 +28,7 @@
 #include <TFT_eSPI.h>
 #include <XPT2046_Touchscreen.h>
 
+#include <string.h>
 #include "cyd_ui.h"
 #include "cyd_ui_layout.h"
 
@@ -295,12 +296,123 @@ static void draw_settings(const cyd_ui_t *ui)
     button(CYD_BTN_LEFT, "BACK", false);
 }
 
-static void draw_actions(void)
+/* A two-state button. Distinct from button()'s `hot`, which paints C_BAD:
+ * red means "this is destructive", and fan boost is neither destructive nor a
+ * warning. Green reads as "on" without implying danger. */
+static void toggle(cyd_rect_t r, const char *label, bool on)
+{
+    fill_rect(r, on ? C_OK : C_PANEL);
+    tft.drawRect(r.x, r.y, r.w, r.h, on ? C_OK : C_ACCENT);
+    tft.setTextColor(on ? C_BG : C_ACCENT, on ? C_OK : C_PANEL);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString(label, r.x + r.w / 2, r.y + r.h / 2, 2);
+}
+
+/* const-correct field read. cyd_ui_field() hands back a writable pointer for
+ * the keyboard; drawing has no business with that. */
+static const char *field_value(const cyd_ui_t *ui, int i)
+{
+    switch (i) {
+    case CYD_FIELD_HOST:   return ui->pool_host;
+    case CYD_FIELD_PORT:   return ui->pool_port;
+    case CYD_FIELD_WORKER: return ui->pool_worker;
+    case CYD_FIELD_PASS:   return ui->pool_pass;
+    default:               return "";
+    }
+}
+
+/* Show the TAIL of an over-long value, marked with a leading ellipsis.
+ *
+ * The tail, not the head: a worker is <wallet>.<name>, the wallets all look
+ * alike for their first several characters, and the part that says WHICH rig
+ * this is lives at the end. Truncating the head would hide the only bit worth
+ * reading. */
+static const char *elide(const char *v, char *buf, size_t cap, size_t maxch)
+{
+    size_t n = strlen(v);
+    if (n <= maxch) {
+        snprintf(buf, cap, "%s", v);
+        return buf;
+    }
+    snprintf(buf, cap, "..%s", v + (n - (maxch - 2)));
+    return buf;
+}
+
+static const char *POOL_LABELS[CYD_POOL_ROWS] = { "HOST", "PORT", "WORKER", "PASS" };
+
+static void draw_pool(const cyd_ui_t *ui)
+{
+    char b[80];
+    for (int i = 0; i < CYD_POOL_ROWS; i++) {
+        cyd_rect_t r = CYD_POOL_ROW(i);
+        bool empty = (field_value(ui, i)[0] == 0);
+        fill_rect(r, C_PANEL);
+        /* An empty required field is outlined in red: SAVE refuses to send an
+         * incomplete pool, and a SAVE that silently does nothing is the worst
+         * possible feedback. */
+        tft.drawRect(r.x, r.y, r.w, r.h, empty ? C_BAD : C_ACCENT);
+
+        tft.setTextDatum(TL_DATUM);
+        tft.setTextColor(C_DIM, C_PANEL);
+        tft.drawString(POOL_LABELS[i], r.x + 6, r.y + 9, 2);
+
+        tft.setTextDatum(TR_DATUM);
+        tft.setTextColor(empty ? C_BAD : C_TEXT, C_PANEL);
+        tft.drawString(empty ? "-- tap to set --"
+                             : elide(field_value(ui, i), b, sizeof b, 26),
+                       r.x + r.w - 6, r.y + 9, 2);
+    }
+
+    button(CYD_POOL_BACK, "BACK", false);
+    button(CYD_POOL_SAVE, "SAVE", true);
+}
+
+static void draw_keyboard(const cyd_ui_t *ui)
+{
+    char b[80];
+
+    /* The field being edited and its value so far, at the top where a text
+     * cursor would be. */
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextColor(C_DIM, C_BG);
+    tft.drawString(POOL_LABELS[ui->edit_field], 8, 26, 2);
+
+    tft.setTextDatum(TR_DATUM);
+    tft.setTextColor(C_TEXT, C_BG);
+    tft.drawString(elide(field_value(ui, ui->edit_field), b, sizeof b, 30),
+                   CYD_LAYOUT_W - 8, 26, 2);
+
+    for (int r = 0; r < CYD_KB_ROWS; r++) {
+        for (int c = 0; c < CYD_KB_COLS; c++) {
+            char ch = cyd_ui_kb_char(c, r, ui->kb_shift);
+            if (!ch)
+                continue;
+            cyd_rect_t k = CYD_KB_KEY(c, r);
+            char lbl[2] = { ch, 0 };
+            fill_rect(k, C_PANEL);
+            tft.drawRect(k.x, k.y, k.w, k.h, C_ACCENT);
+            tft.setTextDatum(MC_DATUM);
+            tft.setTextColor(C_TEXT, C_PANEL);
+            tft.drawString(lbl, k.x + k.w / 2, k.y + k.h / 2, 2);
+        }
+    }
+
+    toggle(CYD_KB_SHIFT, "SHIFT", ui->kb_shift);
+    button(CYD_KB_BKSP,   "DEL",    false);
+    button(CYD_KB_CANCEL, "CANCEL", false);
+    button(CYD_KB_OK,     "OK",     true);
+}
+
+static void draw_actions(const cyd_ui_t *ui)
 {
     tft.setTextDatum(TL_DATUM);
     tft.setTextColor(C_DIM, C_BG);
-    tft.drawString("Both actions ask for confirmation.", 10, 60, 2);
-    tft.drawString("Nothing here happens on one touch.", 10, 80, 2);
+    tft.drawString("RESET and REBOOT ask for confirmation.", 10, 58, 2);
+    tft.drawString("Fan boost is immediate and reversible.", 10, 76, 2);
+
+    toggle(CYD_ACT_FAN, ui->fan_boost ? "FAN: BOOST" : "FAN: AUTO",
+           ui->fan_boost);
+    button(CYD_ACT_POOL, "EDIT POOL", false);
 
     button(CYD_BTN_LEFT,  "BACK",   false);
     button(CYD_BTN_MID,   "RESET",  false);
@@ -309,11 +421,17 @@ static void draw_actions(void)
 
 static void draw_confirm(const cyd_ui_t *ui)
 {
-    const char *what = (ui->pending == CYD_ACTION_REBOOT)
-                     ? "REBOOT THE MINER?" : "RESET STATISTICS?";
-    const char *note = (ui->pending == CYD_ACTION_REBOOT)
-                     ? "Mining stops until it comes back."
-                     : "Share counters return to zero.";
+    const char *what = "RESET STATISTICS?";
+    const char *note = "Share counters return to zero.";
+    if (ui->pending == CYD_ACTION_REBOOT) {
+        what = "REBOOT THE MINER?";
+        note = "Mining stops until it comes back.";
+    } else if (ui->pending == CYD_ACTION_SET_POOL) {
+        what = "CHANGE THE POOL?";
+        /* Say that it persists. This rewrites /boot/am01-miner.conf,
+         * so it is not a runtime tweak that a restart undoes. */
+        note = "Saved to /boot; survives a reflash.";
+    }
 
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(C_BAD, C_BG);
@@ -360,7 +478,15 @@ void cyd_ui_draw(cyd_ui_t *ui, const cyd_status_t *st)
         break;
     case CYD_SCREEN_ACTIONS:
         header("ACTIONS", st, ui->link_down);
-        draw_actions();
+        draw_actions(ui);
+        break;
+    case CYD_SCREEN_POOL:
+        header("POOL", st, ui->link_down);
+        draw_pool(ui);
+        break;
+    case CYD_SCREEN_KEYBOARD:
+        header(POOL_LABELS[ui->edit_field], st, ui->link_down);
+        draw_keyboard(ui);
         break;
     case CYD_SCREEN_CONFIRM:
         header("CONFIRM", st, ui->link_down);

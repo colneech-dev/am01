@@ -22,6 +22,7 @@
 #include "cyd_ui_layout.h"
 
 #include <string.h>
+#include <stdio.h>
 
 /* Dim level steps in 10s: fine-grained control here is fiddly on a resistive
  * panel and nobody needs 63% backlight. */
@@ -49,6 +50,13 @@ void cyd_ui_init(cyd_ui_t *ui)
      * at, so the floor is dim rather than off. */
     ui->dim_level = 20;
     ui->dim_timeout_s = 60;
+
+    /* Almost every stratum pool ignores the password and the
+     * convention is "x". Defaulting it saves typing the one field
+     * that never varies, on a keyboard where typing is expensive --
+     * and SAVE refuses to send an empty one. */
+    ui->pool_pass[0] = 'x';
+    ui->pool_pass[1] = 0;
     ui->last_touch_ms = 0;
     ui->link_down = false;
 }
@@ -106,6 +114,69 @@ void cyd_ui_touch_release(cyd_ui_t *ui)
 {
     if (ui)
         ui->needs_release = false;
+}
+
+/* ---- POOL / KEYBOARD helpers ------------------------------------------ */
+
+/* Lowercase base layout. Shift affects LETTERS ONLY: a wallet address is
+ * base58 (mixed case, no punctuation to shift into) and a hostname wants
+ * . - _ : unshifted, so a full symbol layer would be four keys nobody would
+ * ever press. */
+static const char KB_ROWS_LC[CYD_KB_ROWS][CYD_KB_COLS + 1] = {
+    "1234567890",
+    "qwertyuiop",
+    "asdfghjkl.",
+    "zxcvbnm-_:"
+};
+
+char cyd_ui_kb_char(int col, int row, bool shift)
+{
+    if (col < 0 || col >= CYD_KB_COLS || row < 0 || row >= CYD_KB_ROWS)
+        return 0;
+    char c = KB_ROWS_LC[row][col];
+    if (shift && c >= 'a' && c <= 'z')
+        c = (char)(c - 'a' + 'A');
+    return c;
+}
+
+char *cyd_ui_field(cyd_ui_t *ui, cyd_field_t f, size_t *cap)
+{
+    if (!ui)
+        return NULL;
+    switch (f) {
+    case CYD_FIELD_HOST:   if (cap) *cap = CYD_POOL_HOST_MAX;   return ui->pool_host;
+    case CYD_FIELD_PORT:   if (cap) *cap = CYD_POOL_PORT_MAX;   return ui->pool_port;
+    case CYD_FIELD_WORKER: if (cap) *cap = CYD_POOL_WORKER_MAX; return ui->pool_worker;
+    case CYD_FIELD_PASS:   if (cap) *cap = CYD_POOL_PASS_MAX;   return ui->pool_pass;
+    default: return NULL;
+    }
+}
+
+void cyd_ui_pool_sync(cyd_ui_t *ui, const cyd_status_t *st)
+{
+    if (!ui || !st)
+        return;
+    /* NEVER while the user is editing. A status arrives once a second and
+     * would otherwise overwrite half-typed input mid-keystroke. */
+    if (ui->screen == CYD_SCREEN_POOL || ui->screen == CYD_SCREEN_KEYBOARD)
+        return;
+
+    /* status carries "host:port" and no worker, so only these two can be
+     * prefilled -- the worker has to be typed, there is nowhere to get it
+     * from. Split on the LAST colon so an IPv6 literal does not lose its
+     * tail. */
+    const char *colon = NULL;
+    for (const char *q = st->pool; *q; q++)
+        if (*q == ':')
+            colon = q;
+    if (!colon)
+        return;
+    size_t hl = (size_t)(colon - st->pool);
+    if (hl == 0 || hl >= CYD_POOL_HOST_MAX)
+        return;
+    memcpy(ui->pool_host, st->pool, hl);
+    ui->pool_host[hl] = 0;
+    snprintf(ui->pool_port, CYD_POOL_PORT_MAX, "%s", colon + 1);
 }
 
 static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y);
@@ -168,6 +239,18 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
         return CYD_ACTION_NONE;
 
     case CYD_SCREEN_ACTIONS:
+        /* Fan boost returns IMMEDIATELY and does NOT go through
+         * CONFIRM. It is reversible and cannot lose work, and routing
+         * harmless things through the confirm screen is precisely how
+         * people learn to tap YES without reading it. */
+        if (cyd_rect_hit(CYD_ACT_FAN, x, y)) {
+            ui->fan_boost = !ui->fan_boost;
+            return CYD_ACTION_FAN_BOOST;
+        }
+        if (cyd_rect_hit(CYD_ACT_POOL, x, y)) {
+            ui->screen = CYD_SCREEN_POOL;
+            return CYD_ACTION_NONE;
+        }
         if (cyd_rect_hit(CYD_BTN_LEFT, x, y)) {
             ui->screen = CYD_SCREEN_GLANCE;
         } else if (cyd_rect_hit(CYD_BTN_MID, x, y)) {
@@ -207,6 +290,85 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
          * touch would be fine; confirming would not, and treating "outside"
          * as either invites getting it the wrong way round later. */
         return CYD_ACTION_NONE;
+
+    case CYD_SCREEN_POOL: {
+        for (int i = 0; i < CYD_POOL_ROWS; i++) {
+            if (cyd_rect_hit(CYD_POOL_ROW(i), x, y)) {
+                size_t cap = 0;
+                char *buf = cyd_ui_field(ui, (cyd_field_t)i, &cap);
+                ui->edit_field = (cyd_field_t)i;
+                ui->kb_shift = false;
+                if (buf)
+                    snprintf(ui->kb_backup, sizeof ui->kb_backup, "%s", buf);
+                ui->screen = CYD_SCREEN_KEYBOARD;
+                return CYD_ACTION_NONE;
+            }
+        }
+        if (cyd_rect_hit(CYD_POOL_BACK, x, y)) {
+            ui->screen = CYD_SCREEN_ACTIONS;
+        } else if (cyd_rect_hit(CYD_POOL_SAVE, x, y)) {
+            /* Refuse an incomplete pool HERE rather than sending it. The
+             * daemon rejects empty host/worker/pass, and a command dropped
+             * silently at the far end is indistinguishable from a dead
+             * panel -- which is the bug this whole link already had once. */
+            if (ui->pool_host[0] && ui->pool_port[0] &&
+                ui->pool_worker[0] && ui->pool_pass[0]) {
+                ui->pending = CYD_ACTION_SET_POOL;
+                ui->screen  = CYD_SCREEN_CONFIRM;
+            }
+        }
+        return CYD_ACTION_NONE;
+    }
+
+    case CYD_SCREEN_KEYBOARD: {
+        size_t cap = 0;
+        char *buf = cyd_ui_field(ui, ui->edit_field, &cap);
+        if (!buf || cap == 0) {           /* cannot happen; fail closed */
+            ui->screen = CYD_SCREEN_POOL;
+            return CYD_ACTION_NONE;
+        }
+        if (cyd_rect_hit(CYD_KB_OK, x, y)) {
+            ui->screen = CYD_SCREEN_POOL;
+            return CYD_ACTION_NONE;
+        }
+        if (cyd_rect_hit(CYD_KB_CANCEL, x, y)) {
+            snprintf(buf, cap, "%s", ui->kb_backup);    /* discard the edit */
+            ui->screen = CYD_SCREEN_POOL;
+            return CYD_ACTION_NONE;
+        }
+        if (cyd_rect_hit(CYD_KB_SHIFT, x, y)) {
+            ui->kb_shift = !ui->kb_shift;
+            return CYD_ACTION_NONE;
+        }
+        if (cyd_rect_hit(CYD_KB_BKSP, x, y)) {
+            size_t n = strlen(buf);
+            if (n)
+                buf[n - 1] = 0;
+            return CYD_ACTION_NONE;
+        }
+        for (int r = 0; r < CYD_KB_ROWS; r++) {
+            for (int c = 0; c < CYD_KB_COLS; c++) {
+                if (!cyd_rect_hit(CYD_KB_KEY(c, r), x, y))
+                    continue;
+                char ch = cyd_ui_kb_char(c, r, ui->kb_shift);
+                if (!ch)
+                    return CYD_ACTION_NONE;
+                /* A non-numeric port is a pool you cannot reach, and the
+                 * daemon would reject it -- so do not let it be typed. */
+                if (ui->edit_field == CYD_FIELD_PORT &&
+                    (ch < '0' || ch > '9'))
+                    return CYD_ACTION_NONE;
+                size_t n = strlen(buf);
+                if (n + 1 < cap) {
+                    buf[n] = ch;
+                    buf[n + 1] = 0;
+                }
+                ui->kb_shift = false;     /* one-shot, like a real keyboard */
+                return CYD_ACTION_NONE;
+            }
+        }
+        return CYD_ACTION_NONE;
+    }
 
     default:
         ui->screen = CYD_SCREEN_GLANCE;

@@ -61,6 +61,47 @@ typedef struct {
 #define CYD_CONFIRM_NO   CYD_BTN_LEFT
 #define CYD_CONFIRM_YES  CYD_BTN_RIGHT
 
+/* ---- ACTIONS: fan boost ------------------------------------------------
+ *
+ * In the CONTENT area, not the button row, and NOT behind CONFIRM. Boosting a
+ * fan is reversible and harmless -- guarding it the way a reboot is guarded
+ * would teach the habit of tapping through confirm screens, which is exactly
+ * what makes the reboot guard worthless. */
+#define CYD_ACT_FAN  ((cyd_rect_t){  20, 108, 130, 40 })
+#define CYD_ACT_POOL ((cyd_rect_t){ 170, 108, 130, 40 })
+
+/* ---- POOL editor -------------------------------------------------------
+ *
+ * Four tappable rows -- host, port, worker, password -- each opening the
+ * keyboard. 37px pitch keeps the last row clear of the button strip at
+ * CYD_BTN_Y (155 + 32 = 187, buttons start at 198). */
+#define CYD_POOL_ROWS  4
+#define CYD_POOL_ROW_H 32
+#define CYD_POOL_ROW(i) ((cyd_rect_t){ 8, 44 + (i) * 37, 304, CYD_POOL_ROW_H })
+#define CYD_POOL_BACK  CYD_BTN_LEFT
+#define CYD_POOL_SAVE  CYD_BTN_RIGHT
+
+/* ---- KEYBOARD ----------------------------------------------------------
+ *
+ * 10 x 4 character grid plus a control row. Keys are 31 x 34, which is about
+ * as small as a resistive panel and a fingertip can manage -- and note the
+ * touch constants are NOT CALIBRATED yet (see cyd_ui_touch_read), so until
+ * they are, expect to miss. Calibration matters far more here than anywhere
+ * else in this UI: every other screen has at most four targets. */
+#define CYD_KB_COLS 10
+#define CYD_KB_ROWS 4
+#define CYD_KB_X0    5
+#define CYD_KB_Y0   56
+#define CYD_KB_KW   31
+#define CYD_KB_KH   34
+#define CYD_KB_PITCH_Y 36
+#define CYD_KB_KEY(c, r) ((cyd_rect_t){ CYD_KB_X0 + (c) * CYD_KB_KW,                                         CYD_KB_Y0 + (r) * CYD_KB_PITCH_Y,                                         CYD_KB_KW, CYD_KB_KH })
+#define CYD_KB_CTRL_Y 202
+#define CYD_KB_SHIFT  ((cyd_rect_t){   5, CYD_KB_CTRL_Y, 60, 34 })
+#define CYD_KB_BKSP   ((cyd_rect_t){  69, CYD_KB_CTRL_Y, 60, 34 })
+#define CYD_KB_CANCEL ((cyd_rect_t){ 133, CYD_KB_CTRL_Y, 88, 34 })
+#define CYD_KB_OK     ((cyd_rect_t){ 225, CYD_KB_CTRL_Y, 90, 34 })
+
 static inline int cyd_rect_hit(cyd_rect_t r, int x, int y)
 {
     return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;

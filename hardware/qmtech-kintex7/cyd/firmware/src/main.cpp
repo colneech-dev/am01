@@ -16,7 +16,8 @@
  * usual reason a CYD sketch shows a working display and a dead touchscreen.
  */
 
-#include <Arduino.h>      /* millis(), and the Arduino entry points */
+#include <Arduino.h>
+#include <stdlib.h>      /* millis(), and the Arduino entry points */
 
 #include "cyd_link.h"
 #include "cyd_ui.h"
@@ -47,6 +48,11 @@ void loop(void)
      * core rail; a free-running repaint loop spends power to display nothing
      * new. odo-ui takes the same approach. */
     if (cyd_link_poll(g_link, &g_status)) {
+        /* Prefill the pool editor from what the miner reports, so a pool
+         * change is an edit rather than typing a host from memory. It
+         * declines to touch anything while POOL or KEYBOARD is open, so a
+         * once-a-second status cannot overwrite half-typed input. */
+        cyd_ui_pool_sync(&g_ui, &g_status);
         g_ui.link_down = false;
         cyd_ui_draw(&g_ui, &g_status);
     } else if (g_status.age_ms > CYD_LINK_STALE_MS && !g_ui.link_down) {
@@ -92,6 +98,16 @@ void loop(void)
         switch (act) {
         case CYD_ACTION_RESET_STATS: cyd_link_reset_stats(g_link); break;
         case CYD_ACTION_REBOOT:      cyd_link_reboot(g_link);      break;
+        case CYD_ACTION_FAN_BOOST:
+            cyd_link_fan_boost(g_link, g_ui.fan_boost);
+            break;
+        case CYD_ACTION_SET_POOL:
+            /* atoi is safe here: the keyboard refuses non-digits in the
+             * port field, and SAVE refuses to fire on an empty one. */
+            cyd_link_set_pool(g_link, g_ui.pool_host,
+                              atoi(g_ui.pool_port),
+                              g_ui.pool_worker, g_ui.pool_pass);
+            break;
         case CYD_ACTION_NONE:        break;
         }
 
