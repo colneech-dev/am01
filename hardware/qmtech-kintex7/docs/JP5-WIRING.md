@@ -288,10 +288,23 @@ RGB LED.
 | JP5 15 (`cyd_uart_tx`, AF24) | -> | **CN1 IO27** |
 | JP5 16 (`cyd_uart_rx`, AF25) | <- | **CN1 IO22** |
 | JP5 47/48 (GND) | -- | P5 GND |
-| 6V supply | -- | P5 VIN |
+| **5 V** supply | -- | P5 VIN |
 
-P5's TX and RX are now UNUSED -- leave them unconnected. Power and ground stay
-on P5; do NOT feed CN1's 3V3, which would backfeed the regulator.
+**5 V, NOT 6 V.** The 6 V figure below belongs to the QMTECH FPGA board, whose
+U17 bucks 5V0 down from VIN and cannot regulate if VIN is already 5 V. Both
+boards call their input VIN, which makes them easy to conflate. The CYD is a
+USB-powered part: its AMS1117 makes 3V3 from the USB 5 V rail, and P5's VIN is
+that same node. It has run all evening on 5 V.
+
+P5's TX and RX are now UNUSED -- leave them unconnected.
+
+**Why two wires on each connector rather than four on one.** Ground is common,
+so it is not worth duplicating: CN1 needs only its two GPIOs. No single
+connector carries both a 5 V input and two free GPIOs -- CN1's fourth pin is
+3V3, not VIN. Powering through CN1's 3V3 instead is possible, and would put all
+four wires on one connector, but it backfeeds the AMS1117's output and needs a
+clean 3V3 supply able to carry the display and backlight. Feeding 5 V into it
+would destroy the panel. Not worth it to save a connector.
 
 The panel is flashed over USB. `cyd_esp_en` / `cyd_esp_io0` on JP5 17/18 no
 longer have a role in flashing, since the ROM bootloader only listens on UART0,
