@@ -282,16 +282,16 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
         return CYD_ACTION_NONE;
     }
 
+    /* GLANCE and DETAIL have NO buttons of their own -- the hamburger above
+     * is their only control, as on odo-miner.
+     *
+     * These used to hit-test CYD_BTN_LEFT/MID/RIGHT, which stopped being drawn
+     * when the strip was removed. CYD_BTN_RIGHT spans x 240..313 and the
+     * hamburger covers 258..313, so x 240..257 stayed LIVE BUT INVISIBLE: an
+     * 18-pixel strip that silently jumped to ACTIONS. Hit geometry that
+     * outlives its drawing is exactly what this file's header warns about. */
     case CYD_SCREEN_GLANCE:
-        if (cyd_rect_hit(CYD_BTN_LEFT, x, y))  ui->screen = CYD_SCREEN_DETAIL;
-        else if (cyd_rect_hit(CYD_BTN_MID, x, y))   ui->screen = CYD_SCREEN_SETTINGS;
-        else if (cyd_rect_hit(CYD_BTN_RIGHT, x, y)) ui->screen = CYD_SCREEN_ACTIONS;
-        return CYD_ACTION_NONE;
-
     case CYD_SCREEN_DETAIL:
-        if (cyd_rect_hit(CYD_BTN_LEFT, x, y))  ui->screen = CYD_SCREEN_GLANCE;
-        else if (cyd_rect_hit(CYD_BTN_MID, x, y))   ui->screen = CYD_SCREEN_SETTINGS;
-        else if (cyd_rect_hit(CYD_BTN_RIGHT, x, y)) ui->screen = CYD_SCREEN_ACTIONS;
         return CYD_ACTION_NONE;
 
     case CYD_SCREEN_SETTINGS:
@@ -309,6 +309,11 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
             if (i < TMO_N - 1) ui->dim_timeout_s = TMO_STEPS[i + 1];
         } else if (cyd_rect_hit(CYD_BTN_LEFT, x, y)) {
             ui->screen = CYD_SCREEN_GLANCE;
+        } else if (cyd_rect_hit(CYD_BTN_MID, x, y)) {
+            /* The only route to ACTIONS now that GLANCE has no strip. MID, not
+             * RIGHT: CYD_BTN_RIGHT overlaps the hamburger, and putting a
+             * control under it is how the invisible strip happened. */
+            ui->screen = CYD_SCREEN_ACTIONS;
         }
         return CYD_ACTION_NONE;
 

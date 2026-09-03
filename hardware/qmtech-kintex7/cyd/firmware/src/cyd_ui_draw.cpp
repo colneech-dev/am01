@@ -474,9 +474,9 @@ static void draw_detail(const cyd_status_t *st, uint32_t now)
              up / 86400u, (up % 86400u) / 3600u, (up % 3600u) / 60u);
     row(y, "UPTIME", b, C_DIM);
 
-    button(CYD_BTN_LEFT,  "BACK",    false);
-    button(CYD_BTN_MID,   "SET",     false);
-    button(CYD_BTN_RIGHT, "ACTIONS", false);
+    /* No strip here either -- DETAIL is one of the three screens the hamburger
+     * serves, and the model no longer hit-tests these rects. */
+    hamburger();
 }
 
 static void stepper(int y, const char *label, const char *value,
@@ -505,6 +505,8 @@ static void draw_settings(const cyd_ui_t *ui)
     stepper(CYD_SET_ROW1_Y, "DIM AFTER", b, CYD_SET_TMO_MINUS, CYD_SET_TMO_PLUS);
 
     button(CYD_BTN_LEFT, "BACK", false);
+    /* MID, not RIGHT -- RIGHT sits under the hamburger. */
+    button(CYD_BTN_MID,  "MORE", false);
 }
 
 /* A two-state button. Distinct from button()'s `hot`, which paints C_BAD:

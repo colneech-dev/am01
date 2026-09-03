@@ -84,16 +84,29 @@ int main(void)
 
     /* ---- navigation --------------------------------------------------- */
     printf("\n-- navigation --\n");
+    /* GLANCE and DETAIL carry NO buttons -- the hamburger is their only
+     * control, as on odo-miner. */
     cyd_ui_init(&ui);
-    tap(&ui, CYD_BTN_LEFT);
-    ok(ui.screen == CYD_SCREEN_DETAIL, "GLANCE -> DETAIL");
-    tap(&ui, CYD_BTN_LEFT);
-    ok(ui.screen == CYD_SCREEN_GLANCE, "DETAIL -> GLANCE (the same button goes back)");
+    tap(&ui, CYD_MENU_BTN);
+    tap(&ui, CYD_AS_ROW(1));
+    ok(ui.screen == CYD_SCREEN_DETAIL, "menu -> DETAIL");
+    tap(&ui, CYD_MENU_BTN);
+    tap(&ui, CYD_AS_ROW(0));
+    ok(ui.screen == CYD_SCREEN_GLANCE, "menu -> GLANCE");
 
-    tap(&ui, CYD_BTN_MID);
-    ok(ui.screen == CYD_SCREEN_SETTINGS, "GLANCE -> SETTINGS");
+    tap(&ui, CYD_MENU_BTN);
+    tap(&ui, CYD_AS_ROW(2));
+    ok(ui.screen == CYD_SCREEN_SETTINGS, "menu -> SETUP");
     tap(&ui, CYD_BTN_LEFT);
     ok(ui.screen == CYD_SCREEN_GLANCE, "SETTINGS -> GLANCE");
+
+    /* THE INVISIBLE STRIP. CYD_BTN_RIGHT spans x 240..313 and the hamburger
+     * covers 258..313, so 240..257 was live-but-undrawn and jumped to ACTIONS.
+     * Nothing may respond there now. */
+    cyd_ui_init(&ui);
+    tap(&ui, ((cyd_rect_t){ 244, CYD_BTN_Y + 4, 4, 4 }));
+    ok(ui.screen == CYD_SCREEN_GLANCE,
+       "the undrawn strip beside the hamburger does nothing");
 
     /* Navigation is now odo-miner's: ONE hamburger opening a modal sheet.
      * The old bottom strip is gone from both the drawing and the model. */
@@ -262,7 +275,8 @@ int main(void)
     printf("\n-- settings --\n");
 
     cyd_ui_init(&ui);
-    tap(&ui, CYD_BTN_MID);
+    tap(&ui, CYD_MENU_BTN);
+    tap(&ui, CYD_AS_ROW(2));
     ok(ui.screen == CYD_SCREEN_SETTINGS, "on SETTINGS");
 
     uint8_t d0 = ui.dim_level;
