@@ -61,3 +61,19 @@ hardware/qmtech-kintex7/openxc7/vivado_worst_path_anatomy.txt
 # Third-party binaries fetched by post-build.sh (esptool aarch64 tarball).
 # Verified by hash at build time; not tracked.
 hardware/qmtech-kintex7/linux/dl/
+
+# Build outputs from hardware/qmtech-kintex7/sw. Untracked but not ignored is
+# the worst of both: they clutter `git status` and sit one `git add -A` away
+# from being committed. obj/ and obj-cross/ are separate on purpose -- a native
+# and a cross build sharing an object directory is how an x86-64 object once
+# reached the aarch64 linker.
+hardware/qmtech-kintex7/sw/obj/
+hardware/qmtech-kintex7/sw/obj-cross/
+hardware/qmtech-kintex7/sw/odo-miner
+hardware/qmtech-kintex7/sw/am01_probe
+hardware/qmtech-kintex7/sw/am01_reg
+hardware/qmtech-kintex7/sw/am01_smoke
+hardware/qmtech-kintex7/sw/am01_diag
+
+# PlatformIO build tree for the CYD firmware.
+hardware/qmtech-kintex7/cyd/firmware/.pio/
