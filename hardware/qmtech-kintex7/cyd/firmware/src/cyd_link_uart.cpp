@@ -8,19 +8,41 @@
  * be tested on hardware.
  *
  * ---------------------------------------------------------------------------
- * IT USES Serial. UART0. THE SAME PORT AS THE USB CONSOLE.
+ * IT USES Serial2 ON CN1 (GPIO27 RX, GPIO22 TX). NOT UART0, AND NOT P5.
  * ---------------------------------------------------------------------------
- * Not a choice: the CYD's P5 connector carries VIN/TX/RX/GND, and its TX/RX
- * are GPIO1/GPIO3 -- UART0 -- which is also what the onboard CH340 drives.
- * There is no second UART broken out. P3 and CN1 carry GPIO21/22/27/35 only.
+ * This was UART0 over P5, and UART0 CANNOT WORK for the inbound direction on
+ * this board. P5's TX/RX reach GPIO1/GPIO3 through 100 ohm series resistors
+ * (R5/R6) while the onboard CH340C sits DIRECTLY on those same two GPIOs. An
+ * external driver therefore reaches GPIO3 only through 100 ohms and loses the
+ * divider against the CH340's powered push-pull output: GPIO3 sits near 2.4V
+ * while the far end asserts a zero, against a 0.825V threshold. The chip reads
+ * a permanent 1.
  *
- * Two consequences that are easy to get bitten by:
+ * Measured, not assumed: the FPGA transmits conformant RS-232 at line rate
+ * from a pin proved by loopback, the wires are proved end to end, and the
+ * ESP32 sits in DOWNLOAD_BOOT saying "waiting for download" -- and never
+ * answers. Two different panels behaved identically, because it is the board
+ * design. Outbound works because GPIO1 is an OUTPUT driving through R5 into a
+ * high-impedance input, where 100 ohms costs nothing. See docs/JP5-WIRING.md.
  *
- *   1. USB AND P5 MUST NEVER BOTH BE CONNECTED. Two drivers on one pair.
- *   2. NOTHING MAY Serial.print() FOR DEBUGGING once this is running -- it
- *      goes down the link and the daemon has to skip it. Unknown lines are
- *      ignored by both ends precisely so a stray print is survivable, but it
- *      is still noise on the wire, so this file emits nothing uninvited.
+ * No amount of drive strength fixes it. Even a zero-impedance driver through
+ * R6 leaves GPIO3 at 2.2V, and even replacing R6 with a 0R link leaves 1.24V.
+ * The only cure on UART0 is removing the CH340, which costs USB flashing.
+ *
+ * CN1 carries GND, IO22, IO27, 3V3 and the CH340 touches none of it. GPIO22
+ * and GPIO27 are free on this board -- the display uses 2/12/13/14/15/21, touch
+ * uses 25/32/33/36/39, the SD card uses 5/18/19/23, and the RGB LED uses 4/16/17.
+ *
+ * NOTE the RGB LED on 16/17: those are Serial2's DEFAULT pins, so begin() MUST
+ * be given explicit pins or the link would drive the LED and nothing else.
+ *
+ * Two consequences of the move, both improvements:
+ *
+ *   1. USB and the link no longer share a pair, so the USB console is free
+ *      again -- and it is how the panel gets flashed.
+ *   2. Serial.print() debugging is safe once more: it goes to USB, not down
+ *      the link. This file still emits nothing uninvited, because the daemon
+ *      would have to skip it, but a stray print is no longer a wire fault.
  *
  * The protocol is line-oriented text (see ../host/cyd_proto.h), which is what
  * makes that tolerable at all -- a binary framing would desynchronise on the
@@ -31,6 +53,14 @@
 
 #include "cyd_link.h"
 #include "cyd_status_parse.h"
+
+/* CN1's two free GPIOs. Explicit because Serial2 would otherwise default to
+ * GPIO16/17, which are the RGB LED. */
+#define CYD_LINK_RX_PIN 27
+#define CYD_LINK_TX_PIN 22
+
+/* One name for the port, so the choice lives in exactly one place. */
+static HardwareSerial &LINK = Serial2;
 
 struct cyd_link {
     uint32_t last_rx_ms;      /* when a STATUS last arrived */
@@ -45,8 +75,9 @@ cyd_link_t *cyd_link_uart_open(int baud)
 {
     memset(&g_link, 0, sizeof g_link);
 
-    /* SERIAL_8N1 on the default UART0 pins, which are the ones P5 exposes. */
-    Serial.begin(baud > 0 ? baud : CYD_BAUD_DEFAULT);
+    /* Pins given explicitly: Serial2 defaults to GPIO16/17, the RGB LED. */
+    LINK.begin(baud > 0 ? baud : CYD_BAUD_DEFAULT, SERIAL_8N1,
+               CYD_LINK_RX_PIN, CYD_LINK_TX_PIN);
 
     /* Started at "never heard from", so age_ms is large immediately and the
      * UI shows MINER DOWN until a real STATUS lands. Starting at 0 would
@@ -71,8 +102,8 @@ static bool handle_line(cyd_link_t *l, char *line, cyd_status_t *out)
     }
 
     if (strncmp(line, CYD_MSG_PING, strlen(CYD_MSG_PING)) == 0) {
-        Serial.print(CYD_MSG_PONG);
-        Serial.print('\n');
+        LINK.print(CYD_MSG_PONG);
+        LINK.print('\n');
         return false;
     }
 
@@ -93,8 +124,8 @@ bool cyd_link_poll(cyd_link_t *link, cyd_status_t *out)
      * unbounded backlog here would stall redraws and touch handling for as
      * long as the miner cared to talk. */
     int budget = 512;
-    while (Serial.available() > 0 && budget-- > 0) {
-        int c = Serial.read();
+    while (LINK.available() > 0 && budget-- > 0) {
+        int c = LINK.read();
         if (c < 0)
             break;
 
@@ -140,9 +171,9 @@ bool cyd_link_poll(cyd_link_t *link, cyd_status_t *out)
 
 static bool send_cmd(const char *cmd)
 {
-    Serial.print(CYD_CMD_PREFIX);
-    Serial.print(cmd);
-    Serial.print('\n');
+    LINK.print(CYD_CMD_PREFIX);
+    LINK.print(cmd);
+    LINK.print('\n');
     return true;
 }
 

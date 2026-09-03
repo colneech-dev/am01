@@ -268,12 +268,38 @@ recipe is to remove the CH340 and replace R5 and R6 with 0R links ("you may get
 away with 20R, but 100R is too high"). Lifting only the CH340's TXD pin is the
 smaller version of the same idea. Per panel, and irreversible in practice.
 
-**B. Move the link off UART0 -- no rework.** UART0 is needed only for FLASHING.
-CN1 carries `GND, IO22, IO27, 3V3`, none of it touched by the CH340:
+**B. Move the link off UART0 -- no rework. THIS IS WHAT IS IMPLEMENTED.**
+UART0 is needed only for FLASHING. CN1 carries `GND, IO22, IO27, 3V3`, none of
+it touched by the CH340, and all four of those GPIOs are free on this board:
+the display uses 2/12/13/14/15/21, touch 25/32/33/36/39, the SD card 5/18/19/23
+and the RGB LED 4/16/17.
+
+`cyd_link_uart.cpp` now opens:
 
     Serial2.begin(115200, SERIAL_8N1, /*RX=*/27, /*TX=*/22);
 
-Keep power on P5, flash the panel once over USB, and the link never contends.
+The pins MUST be given explicitly: Serial2 defaults to GPIO16/17, which are the
+RGB LED.
+
+### Wiring for the CN1 link
+
+| FPGA | Direction | CYD |
+|---|---|---|
+| JP5 15 (`cyd_uart_tx`, AF24) | -> | **CN1 IO27** |
+| JP5 16 (`cyd_uart_rx`, AF25) | <- | **CN1 IO22** |
+| JP5 47/48 (GND) | -- | P5 GND |
+| 6V supply | -- | P5 VIN |
+
+P5's TX and RX are now UNUSED -- leave them unconnected. Power and ground stay
+on P5; do NOT feed CN1's 3V3, which would backfeed the regulator.
+
+The panel is flashed over USB. `cyd_esp_en` / `cyd_esp_io0` on JP5 17/18 no
+longer have a role in flashing, since the ROM bootloader only listens on UART0,
+but they remain useful for resetting a wedged panel from the miner.
+
+Two consequences of the move, both improvements: USB and the link no longer
+share a pair, so the USB console is free; and `Serial.print()` debugging is safe
+again, because it goes to USB rather than down the link.
 
 Sources: atomic14's CYD board notes; witnessmenow/ESP32-Cheap-Yellow-Display
 discussion #113.
