@@ -625,6 +625,75 @@ build.sh's hardcoded 6-column default via `run_throughput3_cols7.sh`).
 Results in `seed_ab_results.tsv`, tags `throughput3` (original 6-col) and
 `throughput3_cols7_yb40` (the fix).
 
+### Seed 3 does NOT converge without congestion awareness (2026-09-03)
+
+Completing the 7-column seed set honestly: seed 3 **failed to route** --
+600 router iterations, `overuse=82` residual, never reached 0. Its
+`129.20` row in `seed_ab_results.tsv` is therefore **not a routed result**;
+with overuse != 0 that figure is the stale pre-route SA estimate. Read
+correctly the set is **2 of 3 seeds pass, 1 of 3 fails to route at all** --
+so THROUGHPUT=3's real defect is convergence variance, not median Fmax.
+
+## Congestion-aware placement: measured, and it fixes the failing seed (2026-09-03)
+
+Implemented real congestion awareness in the HeAP placer (branch
+`congestion-aware-placement` in the nextpnr tree, commits `e317869a` and
+`ec7d4066`): a per-tile routing-capacity map built from `ctx->getWires()`
+using the same wire-location rule as `router2::setup_wires()`, congestion
+expressed as demand/capacity (`NEXTPNR_CONG_RATIO`), and congestion
+allowed to STEER the spreader -- tightening the region density target and
+weighting the cut objective (`NEXTPNR_CONG_SPREAD`) -- rather than merely
+triggering it. Both knobs default off and multiply by exactly 1.0 when
+off; verified bit-identical against the old binary over 4 placement
+iterations on an identical netlist and seed.
+
+**Two wrong hypotheses, both caught by measurement rather than reasoning,
+recorded because the reasoning looked sound each time:**
+
+1. *"`build_wire_demand()` is computed once and never refreshed."* Wrong --
+   `CutSpreader` is constructed per HeAP iteration, so the demand map
+   already tracked the placement. Only the capacity denominator was absent.
+2. *"RUDY demand must systematically exceed wire-count capacity (a units
+   mismatch)."* Wrong. Instrumenting it (`NEXTPNR_CONG_STATS=1`) over 78302
+   wired tiles gave capacity p50 249.0, demand p50 0.84, **ratio p50
+   0.016**, with only 7-17% of tiles above 1.0. Units are broadly sane.
+   The real defect was **aggregation**: `cong_max()` took the MAXIMUM over
+   a region against a distribution whose max is 1310, so one degenerate
+   tile (capacity p10 is a single wire) set an entire region's multiplier,
+   `overused()` could never be satisfied, and regions expanded until the
+   whole die was spread. Fixed by flooring the capacity denominator at
+   0.25x the device median, aggregating regions by MEAN, and clamping the
+   multiplier (`NEXTPNR_CONG_CLAMP`, default 2.0).
+
+**Measured effect, same netlist and seed throughout:**
+
+| | spread wirelen | router iters | routed `clk_h` |
+|---|---|---|---|
+| off (seed 1) | 5674942 | 49 | **134.86** PASS |
+| broken max-aggregation (seed 1) | 13547342 (+139%) | 49 | 54.84 FAIL |
+| fixed, `RATIO=1.0 SPREAD=0.5` (seed 1) | 6715551 (+18%) | **10** | 129.12 FAIL |
+| off (seed 3) | -- | 600 | **never converged** (overuse 82) |
+| **fixed (seed 3)** | -- | **35** | **139.66 PASS** |
+
+**Conclusion: it buys ROUTABILITY, not Fmax -- exactly as the literature
+says, and that is what this design needed.** On a seed that already routed
+it cost 4.3% of Fmax and cut router iterations 49 -> 10. On the seed that
+could not be routed at all it converged in 35 iterations and produced
+**139.66 MHz, the best of the three**. VPR's own published ablation has the
+same shape (routing failures 15 -> 1, route time 0.49x, critical path
+0.979x).
+
+So the "1 in 3 seeds fails to route" caveat above looks **fixable rather
+than intrinsic**. The open question is whether to apply congestion
+awareness always (costing a few percent on healthy seeds) or only as a
+rescue for seeds that fail to converge -- the latter is strictly better if
+the flow can retry, and needs no further tool work.
+
+Not yet done: an in-process place -> route -> re-place loop (step 4 of the
+plan). Deliberately not built -- it amplifies whatever the estimator does,
+so it should only follow evidence the estimator helps, which now exists but
+is a single data point.
+
 ## Option B (PLANNED, NOT EXECUTED -- pick up after Option A): two `THROUGHPUT=3` miners
 
 Two independent `THROUGHPUT=3` wide miners (each 1.33x, 560 BRAM alone) for

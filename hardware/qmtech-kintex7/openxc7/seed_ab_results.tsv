@@ -49,3 +49,7 @@ seed	variant	clk_h_MHz	iters	overuse
 1	throughput3_yb0	107.70	2	96531
 1	throughput3_yb20	118.41	103	0
 1	throughput3_cols7_yb40	134.86	49	0
+2	throughput3_cols7_yb40	135.96	37	0
+3	throughput3_cols7_yb40	129.20	600	82
+3	throughput3_cong_r1_s05	139.66	35	0
+1	throughput3_cong_r1_s05	129.12	10	0
