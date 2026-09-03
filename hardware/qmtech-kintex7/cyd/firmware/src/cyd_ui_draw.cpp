@@ -29,6 +29,8 @@
 #include <XPT2046_Touchscreen.h>
 
 #include <string.h>
+#include <math.h>
+#include <string.h>
 #include "cyd_ui.h"
 #include "cyd_ui_layout.h"
 
@@ -173,61 +175,180 @@ static void row(int y, const char *label, const char *value, uint16_t vc)
     tft.drawString(value, CYD_LAYOUT_W - 10, y, 2);
 }
 
+/* The mark from the dashboard's SVG: a hexagon outline with a smaller filled
+ * hexagon inside it. Drawn rather than embedded -- it is six points. */
+static void logo(int cx, int cy, int r)
+{
+    for (int i = 0; i < 6; i++) {
+        float a0 = (float)i * 1.0471976f, a1 = (float)(i + 1) * 1.0471976f;
+        tft.drawLine(cx + (int)(r * cosf(a0)), cy + (int)(r * sinf(a0)),
+                     cx + (int)(r * cosf(a1)), cy + (int)(r * sinf(a1)), C_ACCENT);
+    }
+    int ri = r / 2;
+    for (int i = 0; i < 6; i++) {
+        float a0 = (float)i * 1.0471976f, a1 = (float)(i + 1) * 1.0471976f;
+        tft.fillTriangle(cx, cy,
+                         cx + (int)(ri * cosf(a0)), cy + (int)(ri * sinf(a0)),
+                         cx + (int)(ri * cosf(a1)), cy + (int)(ri * sinf(a1)), C_ACCENT);
+    }
+}
+
+/* Header, ported from odo_ui.c's draw_glance(): a 36px band, a 2px accent rule
+ * under it, the mark at the left, "ODO MINER", and a right-aligned status pill.
+ *
+ * The pill's THREE states and their exact words come from there too:
+ *   MINER DOWN (bad)  -- no status has arrived; look at the Pi
+ *   OFFLINE    (warn) -- status arriving, pool not connected; look at the net
+ *   POOL OK    (ok)
+ * Collapsing them would send you to the wrong place. */
 static void header(const char *title, const cyd_status_t *st, bool link_down)
 {
-    tft.fillRect(0, 0, CYD_LAYOUT_W, 24, C_PANEL);
-    tft.setTextDatum(TL_DATUM);
-    tft.setTextColor(C_ACCENT, C_PANEL);
-    tft.drawString(title, 8, 4, 2);
+    tft.fillRect(0, 0, CYD_LAYOUT_W, 36, C_PANEL);
+    tft.fillRect(0, 36, CYD_LAYOUT_W, 2, C_ACCENT);
 
-    /* Connection state, top right. THREE states, not two: the link being up
-     * and the POOL being connected are different failures and want telling
-     * apart -- "MINER DOWN" sends you to the Pi, "POOL" sends you to the
-     * network. Collapsing them would send you to the wrong place. */
+    logo(17, 18, 11);
+
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextColor(C_TEXT, C_PANEL);
+    tft.drawString("ODO MINER", 44, 10, 4);
+
     const char *tag;
     uint16_t    tc;
-    if (link_down)          { tag = "MINER DOWN"; tc = C_BAD;  }
-    else if (!st->connected){ tag = "POOL";       tc = C_WARN; }
-    else                    { tag = "OK";         tc = C_OK;   }
+    if (link_down)           { tag = "MINER DOWN"; tc = C_BAD;  }
+    else if (!st->connected) { tag = "OFFLINE";    tc = C_WARN; }
+    else                     { tag = "POOL OK";    tc = C_OK;   }
     tft.setTextDatum(TR_DATUM);
     tft.setTextColor(tc, C_PANEL);
-    tft.drawString(tag, CYD_LAYOUT_W - 8, 4, 2);
+    tft.drawString(tag, CYD_LAYOUT_W - 8, 14, 2);
+
+    /* The screen's own name, only when it is not GLANCE -- odo_ui.c's glance
+     * header carries the brand alone. */
+    if (title && title[0]) {
+        tft.setTextDatum(TR_DATUM);
+        tft.setTextColor(C_DIM, C_PANEL);
+        tft.drawString(title, CYD_LAYOUT_W - 8, 2, 2);
+    }
 }
 
 /* ---- screens ---------------------------------------------------------- */
 
+/* GLANCE, ported coordinate-for-coordinate from odo_ui.c's draw_glance().
+ *
+ * odo_ui renders a TTF at scales 1/2/3; TFT_eSPI has bitmap fonts, so the
+ * mapping is 1 -> font 2, 2 -> font 4, 3 -> font 6. Font 6 carries digits,
+ * '.', ':', 'a', 'p' and 'm' only, so the hashrate NUMBER is drawn in 6 and
+ * its unit in 4 beside it -- odo_ui gets both from one TTF call.
+ *
+ * odo_ui also blits a bg.png behind everything. Not carried over: it would
+ * mean embedding a 320x240 RGB565 bitmap (150KB) in flash for a texture, and
+ * the flat C_BG underneath it is the same colour. */
 static void draw_glance(const cyd_status_t *st, bool link_down)
 {
     char b[48];
+    (void)link_down;
 
-    /* THE HASHRATE IS THE POINT OF THE PANEL, so it gets font 6 and the top
-     * third to itself. Everything else is a supporting detail you go looking
-     * for; this is the number you read from across the room. */
-    cyd_fmt_hashrate(st->hashrate, b, sizeof b);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextColor(link_down ? C_DIM : C_ACCENT, C_BG);
-    tft.drawString(b, CYD_LAYOUT_W / 2, 62, 6);
+    /* hashrate hero */
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextColor(C_DIM, C_BG);
+    tft.drawString("HASHRATE", 14, 42, 2);
 
-    int y = 104;
-    row(y, "POOL", st->pool[0] ? st->pool : "--", C_TEXT);      y += 20;
+    cyd_fmt_hashrate(st->hashrate, b, (int)sizeof b);
+    {
+        /* Split "82.51 MH/s" so the number can use the big font. */
+        char num[24], *sp = strchr(b, ' ');
+        const char *unit = "";
+        size_t n = sp ? (size_t)(sp - b) : strlen(b);
+        if (n >= sizeof num) n = sizeof num - 1;
+        memcpy(num, b, n); num[n] = 0;
+        if (sp) unit = sp + 1;
+        tft.setTextColor(C_TEXT, C_BG);
+        tft.drawString(num, 14, 54, 6);
+        int w = tft.textWidth(num, 6);
+        tft.setTextColor(C_ACCENT, C_BG);
+        tft.drawString(unit, 14 + w + 6, 76, 4);
+    }
 
-    snprintf(b, sizeof b, "%llu / %llu",
-             (unsigned long long)st->shares_accepted,
-             (unsigned long long)st->shares_rejected);
-    /* Rejects are the number worth colouring: any non-zero is worth a look,
-     * and it is the first symptom of a stale bitstream after an epoch
-     * rollover. */
-    row(y, "ACC / REJ", b, st->shares_rejected ? C_WARN : C_OK); y += 20;
+    /* shapechange countdown + progress bar */
+    tft.setTextColor(C_DIM, C_BG);
+    tft.drawString("SHAPECHANGE IN", 14, 110, 2);
 
-    cyd_fmt_temp(st->temp_c, b, sizeof b);
-    row(y, "TEMP", b, st->temp_c >= 80 ? C_WARN : C_TEXT);       y += 20;
+    int bar_full = CYD_LAYOUT_W - 28;
+    if (st->epoch && st->epoch_next > st->epoch) {
+        long left = (long)st->epoch_next - (long)st->updated;
+        if (left < 0) left = 0;
+        snprintf(b, sizeof b, "%ldd %ldh %ldm",
+                 left / 86400, (left % 86400) / 3600, (left % 3600) / 60);
+        tft.setTextColor(C_TEXT, C_BG);
+        tft.drawString(b, 14, 122, 4);
 
-    cyd_fmt_fan(st->fan_rpm, st->fan_duty_pct, b, sizeof b);
-    row(y, "FAN", b, C_TEXT);
+        long total = (long)st->epoch_next - (long)st->epoch;
+        long done  = (long)st->updated - (long)st->epoch;
+        if (done < 0) done = 0;
+        int fill = (total > 0) ? (int)((long)bar_full * done / total) : 0;
+        if (fill > bar_full) fill = bar_full;
+        tft.fillRect(14, 148, bar_full, 7, C_PANEL);
+        if (fill > 0) tft.fillRect(14, 148, fill, 7, C_ACCENT);
+    } else {
+        tft.setTextColor(C_DIM, C_BG);
+        tft.drawString("loading...", 14, 122, 2);
+        tft.fillRect(14, 148, bar_full, 7, C_PANEL);
+    }
 
-    button(CYD_BTN_LEFT,  "DETAIL",   false);
-    button(CYD_BTN_MID,   "SET",      false);
-    button(CYD_BTN_RIGHT, "ACTIONS",  false);
+    /* Either the wrong-epoch warning, or the compact summary. Never both:
+     * odo_ui.c gives the warning the whole strip because nothing else on the
+     * screen matters while every share is being rejected. */
+    if (st->bitstream_epoch && st->epoch && st->bitstream_epoch != st->epoch) {
+        tft.fillRect(6, 158, CYD_LAYOUT_W - 12, 18, C_BAD);
+        tft.setTextDatum(MC_DATUM);
+        tft.setTextColor(C_TEXT, C_BAD);
+        tft.drawString("! WRONG EPOCH - REBOOT !", CYD_LAYOUT_W / 2, 167, 2);
+        tft.setTextDatum(TL_DATUM);
+        return;
+    }
+
+    /* Line 1: accepted shares, best difficulty this session. */
+    tft.setTextColor(C_DIM, C_BG);
+    tft.drawString("SHARES", 14, 160, 2);
+    snprintf(b, sizeof b, "%llu", (unsigned long long)st->shares_accepted);
+    tft.setTextColor(C_TEXT, C_BG);
+    tft.drawString(b, 68, 160, 2);
+
+    tft.setTextColor(C_DIM, C_BG);
+    tft.drawString("BEST-S", 168, 160, 2);
+    /* odo_ui.c has fmt_diff(); this tree formats plainly, as its
+     * DETAIL screen already did. */
+    snprintf(b, sizeof b, "%.3f", st->best_diff_session);
+    tft.setTextColor(C_ACCENT, C_BG);
+    tft.drawString(b, 222, 160, 2);
+
+    /* Line 2: temp, accept rate, fan -- with odo_ui.c's own thresholds. */
+    unsigned long long total = st->shares_accepted + st->shares_rejected;
+    if (st->temp_c >= -50 && st->temp_c <= 150) {
+        snprintf(b, sizeof b, "%dC", st->temp_c);
+        tft.setTextColor(C_DIM, C_BG);
+        tft.drawString("TEMP", 14, 176, 2);
+        tft.setTextColor(st->temp_c >= 65 ? C_WARN : C_TEXT, C_BG);
+        tft.drawString(b, 54, 176, 2);
+    }
+    if (total > 0) {
+        int pct = (int)(st->shares_accepted * 100ULL / total);
+        snprintf(b, sizeof b, "%d%%", pct);
+        tft.setTextColor(C_DIM, C_BG);
+        tft.drawString("ACC", 120, 176, 2);
+        tft.setTextColor(pct >= 90 ? C_OK : pct >= 70 ? C_WARN : C_BAD, C_BG);
+        tft.drawString(b, 150, 176, 2);
+    }
+    if (st->fan_rpm >= 0) {
+        snprintf(b, sizeof b, "%d%%", st->fan_duty_pct);
+        tft.setTextColor(C_DIM, C_BG);
+        tft.drawString("FAN", 220, 176, 2);
+        tft.setTextColor(st->fan_duty_pct > 0 ? C_OK : C_DIM, C_BG);
+        tft.drawString(b, 250, 176, 2);
+    }
+
+    button(CYD_BTN_LEFT,  "DETAIL",  false);
+    button(CYD_BTN_MID,   "SET",     false);
+    button(CYD_BTN_RIGHT, "ACTIONS", false);
 }
 
 static void draw_detail(const cyd_status_t *st, uint32_t now)
@@ -457,7 +578,7 @@ void cyd_ui_draw(cyd_ui_t *ui, const cyd_status_t *st)
 
     switch (ui->screen) {
     case CYD_SCREEN_GLANCE:
-        header("AM01", st, ui->link_down);
+        header("", st, ui->link_down);
         draw_glance(st, ui->link_down);
         break;
     case CYD_SCREEN_DETAIL:

@@ -789,21 +789,32 @@ ili_window_off_mm = [0, 0];     // display IS centred on this module
 // width (Y). It fits: the lid is 115.2mm in Y, so 91 leaves 12mm either side,
 // and at 50mm in X it stays clear of the J11/J12/J13 lid cutouts at x>=90.
 //
-// The display is NOT centred on its PCB. There is 7mm of board beyond the
-// glass at one end and 9mm at the other, so the window is offset 1mm from the
+// The display is NOT centred on its PCB. The window is offset 1mm from the
 // module centre -- get this wrong and the bezel is visibly lopsided.
-//   91 - 7 - 9 = 75mm of glass, spanning the full 50mm width.
+//   91 - 10 - 12 = 69mm of glass, spanning the full 50mm width.
+//
+// CORRECTED 2026-09-03, measured off a printed lid: the glass is 69mm, not
+// the 75mm first recorded, so the aperture came out 76mm (75 + the 1.0mm fit
+// gap) against a 69mm screen and left 7mm of bare PCB showing. The window is
+// the GLASS size; screen_fit_gap_mm adds the tolerance, so this now cuts a
+// 70.0 x 50.5mm hole.
+//
+// The 6mm is assumed to be split evenly between the two ends, which keeps the
+// 2mm asymmetry that was actually observed. If the glass is really offset
+// some other way, these two margins are the numbers to change -- nothing else
+// needs touching, because everything downstream derives from them.
 cyd_module_mm     = [50, 91];
-cyd_window_mm     = [50, 75];
+cyd_window_mm     = [50, 69];
 // SWAPPED 2026-09-01 (was lo=7, hi=9). The 9mm end carries the light sensor,
 // so swapping these turns the module round in the pocket -- and the sensor
 // aperture MUST follow it. That is derived from these two values below rather
 // than written out separately, so the two cannot disagree: getting it wrong
 // puts the hole 91mm from the sensor and blinds it, which is a whole reprint
 // to discover.
-cyd_margin_lo_mm  = 9;          // low-Y end -- carries the light sensor
-cyd_margin_hi_mm  = 7;          // high-Y end
-// (9 - 7)/2, pushing the window toward the 7mm end.
+cyd_margin_lo_mm  = 12;         // low-Y end -- carries the light sensor
+cyd_margin_hi_mm  = 10;         // high-Y end
+// (12 - 10)/2, pushing the window toward the 10mm end. Unchanged at 1mm: the
+// glass shrank symmetrically, so the asymmetry -- and the offset -- survive.
 cyd_window_off_mm = [0, -(cyd_margin_hi_mm - cyd_margin_lo_mm)/2];
 // The PCB is what the ledges bear on, so the pocket is the PCB thickness and
 // the display fills the remaining 4mm of the 6mm lid -- landing flush.
@@ -851,6 +862,16 @@ cyd_center_mm     = [30, 45];
 // WHICH END ALONG Y is NOT a setting -- it is derived from the margins above,
 // because the sensor lives on the 9mm side by construction. Swap the margins
 // and the aperture follows on its own.
+// 4mm from the glass edge, and it TRACKS that edge.
+//
+// I briefly set this to 7 to hold the aperture at a fixed absolute position
+// when the window was corrected 75 -> 69, reasoning that the sensor itself had
+// not moved. Wrong, and corrected against the printed lid: the 4mm was
+// measured from the glass, so shrinking the glass moves the sensor's aperture
+// with it. The aperture now sits 3mm further in -- the same 3mm the cutout
+// edge moved at that end.
+//   before: window/2 + from_glass = 37.5 + 4 = 41.5 from the window centre
+//   now:    window/2 + from_glass = 34.5 + 4 = 38.5
 cyd_ldr_from_glass_mm = 4;
 cyd_ldr_band_mm       = [8, 14];   // measured, from the short edge
 cyd_ldr_clear_mm      = 1;         // each side, for print tolerance

@@ -862,13 +862,17 @@ cyd_center_mm     = [30, 45];
 // WHICH END ALONG Y is NOT a setting -- it is derived from the margins above,
 // because the sensor lives on the 9mm side by construction. Swap the margins
 // and the aperture follows on its own.
-// 7mm, not 4mm. The sensor has NOT moved -- but this is measured from the
-// GLASS edge, and the glass edge moved 3mm when the window was corrected from
-// 75 to 69. Leaving it at 4 would have walked the aperture 3mm inward and put
-// it over the bezel instead of the sensor.
-//   old: window/2 + from_glass = 37.5 + 4 = 41.5
-//   new: window/2 + from_glass = 34.5 + 7 = 41.5   <- same physical place
-cyd_ldr_from_glass_mm = 7;
+// 4mm from the glass edge, and it TRACKS that edge.
+//
+// I briefly set this to 7 to hold the aperture at a fixed absolute position
+// when the window was corrected 75 -> 69, reasoning that the sensor itself had
+// not moved. Wrong, and corrected against the printed lid: the 4mm was
+// measured from the glass, so shrinking the glass moves the sensor's aperture
+// with it. The aperture now sits 3mm further in -- the same 3mm the cutout
+// edge moved at that end.
+//   before: window/2 + from_glass = 37.5 + 4 = 41.5 from the window centre
+//   now:    window/2 + from_glass = 34.5 + 4 = 38.5
+cyd_ldr_from_glass_mm = 4;
 cyd_ldr_band_mm       = [8, 14];   // measured, from the short edge
 cyd_ldr_clear_mm      = 1;         // each side, for print tolerance
 cyd_ldr_both_ends     = false;     // one hole only
