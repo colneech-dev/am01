@@ -888,6 +888,91 @@ generated per device and is the multi-week part. Compounding risk: F4PGA's
 Xilinx flow historically had weak hard-block coverage, and this design is
 defined by 840 true-dual-port BRAMs at 94% occupancy.
 
+## Pre-mix pipelining (`--pipeline-premix`) -- 2026-09-04
+
+### Why the clock is the only lever left
+
+Hashrate is **proportional to BRAM consumed**, which rules out the whole
+miners-vs-throughput trade. `BRAM = miners * 20 * unrolling` and
+`hashrate = miners * clock / T`, with `unrolling ~ 84/T`, so the two terms
+cancel:
+
+| config | BRAM | hashrate @158 MHz |
+|---|---|---|
+| 2 miners, T=4 | 840 | **79.0** |
+| 1 miner, T=2 | 840 | **79.0** |
+| 1 miner, T=3 | 560 | 52.7 |
+| 1 miner, T=4 | 420 | 39.5 |
+
+2 miners at T=4 and 1 miner at T=2 are the SAME hashrate for the same BRAM.
+So T=3, though correct and verified, is strictly slower than the shipping
+2-miner build. At 840/890 = 94% occupancy only ~6% remains in that
+dimension. **The clock is the only meaningful lever.**
+
+`RESULTS.md` had already named the obstacle (see "Known remaining
+ceiling"): the critical path is `crypt.state[0] -> pre_mix ->
+crypt.state[1]` -- a 10-way 64-bit XOR reduction feeding all 640 output
+bits, combinational in one clock, ~6.4 ns, capping near 156 MHz. It was
+left undone because 133.33 MHz was already met with margin. That margin is
+now exactly what we want to spend.
+
+### What the flag does
+
+Registers the reduction, splitting the path:
+
+    state[0] -> 10-way XOR tree -> total_r     (long half)
+    total_r  -> 3-input XOR     -> state[1]    (short half)
+
+`in` is registered alongside as `in_r` so the halves stay aligned. Costs
+**one cycle of latency and zero throughput** -- the pre-mix sits outside
+`encrypt_loop`, so the round schedule and the
+`gcd(throughput, RoundCycles*unrolling + extra_delay)` constraint are
+untouched. The outer `progress` register grows 2 -> 3 stages and the
+crypter reads `progress[2]`. Default off; unflagged output is byte-identical.
+
+### Correctness: SOUND
+
+`tb_sched_equiv.v`, pipelined vs unpipelined T=4 (same feed cadence,
+latency differs by 1 so result SEQUENCES are compared):
+
+| | result |
+|---|---|
+| positive | **PASS -- 20 results identical** |
+| negative (`+brk=3`) | **FAIL -- 18 of 20 differ** |
+
+18 of 20 is exactly right: `brk=3` corrupts from the test core's 3rd block,
+so results 0-1 match and 3-19 differ. The extra stage and the progress
+realignment are correct.
+
+### Fmax: MEASUREMENT IN PROGRESS -- no number claimed yet
+
+Baseline to beat is the e2nbfix 1-miner T=4 median **155.79 MHz** (seeds
+145.14 152.44 155.79 174.98 197.43). `run_premix.sh` builds the same
+recipe with `--pipeline-premix` as the only variable and routes 3 seeds
+(tag `premix_afa4b22`).
+
+**Reading caution:** the `Max frequency` line in
+`out_premix/am01_qmtech_top.pnr.log` appears BEFORE the `iter=` lines at
+this stage -- it is the pre-route SA placement estimate, not a result. Only
+a `Max frequency` following a converged `iter= ... overuse=0` counts.
+
+**Expect this may not help.** RESULTS.md's own finding is that this design
+is **wire-limited, not logic-limited** -- routing is ~70% of `base`'s
+critical path and ~91% of `noabs`'s, and "adding registers does not shorten
+wires" (`noabs` traded 1.8 ns of logic for 2.2 ns of routing and lost).
+Cutting logic depth out of the pre-mix may therefore buy little. The
+measurement decides it.
+
+### And a gain would still need the MMCM retuned
+
+Real hashrate is `133.33 / THROUGHPUT` because `clk_gen_hash.v` hard-wires
+the MMCM to VCO 800/6. **Fmax is a pass/fail gate, not the operating
+speed.** Any Fmax headroom only materialises after retuning the MMCM, and
+800/(2n) yields only 200 / 133.33 / 100 MHz -- an intermediate target needs
+a fractional `CLKFBOUT_MULT_F`. The payoff, if the Fmax gain is real, is on
+the **Vivado 2-miner** build that actually delivers the current ~79 MH/s
+(2 x 158/4), not on the openXC7 single-miner numbers.
+
 ## Option B (PLANNED, NOT EXECUTED -- pick up after Option A): two `THROUGHPUT=3` miners
 
 Two independent `THROUGHPUT=3` wide miners (each 1.33x, 560 BRAM alone) for
