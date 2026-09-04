@@ -26,6 +26,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -140,152 +141,85 @@ static void touch_file(const char *path)
     if (f) fclose(f);
 }
 
-static void apply_set_pool(const cyd_cmd_t *c)
-{
-    /* Written to a TEMPORARY and renamed, so a power cut mid-write cannot
-     * leave a half-written pool config on the boot partition -- that file is
-     * read by am01-miner-provision at boot, and a truncated one is a miner
-     * that comes up misconfigured with no clue why. rename() within a
-     * filesystem is atomic. */
-    char tmp[256];
-    snprintf(tmp, sizeof tmp, "%s.tmp", CYD_POOL_CONF_PATH);
-
-    /* 0600 at CREATION, like apply_set_wifi. fopen(,"w") gives 0644 under the
-     * default umask, and this file contains the pool password. (On the vfat
-     * /boot the mount's fmask wins, but the temp file and any future ext4
-     * location are covered, and the asymmetry with the wifi writer was a
-     * defect in its own right.) */
-    int pfd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (pfd < 0) {
-        fprintf(stderr, "[cyd] set_pool: cannot create %s: %s\n",
-                tmp, strerror(errno));
-        return;
-    }
-    FILE *f = fdopen(pfd, "w");
-    if (!f) {
-        fprintf(stderr, "[cyd] set_pool: fdopen: %s\n", strerror(errno));
-        close(pfd);
-        unlink(tmp);
-        return;
-    }
-    /* DAEMON_OPTS, not POOL_*.
-     *
-     * This wrote POOL_HOST=/POOL_PORT=/POOL_WORKER=/POOL_PASS=, and NOTHING
-     * reads those keys: am01-miner-provision.service requires a ^DAEMON_OPTS=
-     * line and otherwise logs "has no DAEMON_OPTS= line -- ignoring it". So a
-     * pool change from the panel had no effect AND renamed over
-     * /boot/am01-miner.conf, destroying the hand-edited line that file exists
-     * to preserve across a reflash. Silently doing nothing while deleting the
-     * recovery config is about the worst combination available.
-     *
-     * odo-miner takes POSITIONAL arguments (host port worker pass) -- see
-     * miner_pipe_am01.c's main(), which has no option parser at all. */
-    fprintf(f, "# written by the CYD front panel\n");
-    fprintf(f, "DAEMON_OPTS=\"%s %d %s %s\"\n",
-            c->host, c->port, c->worker, c->pass);
-    /* fflush pushes to the OS; fsync pushes to the DEVICE. Only the second
-     * makes the rename() below meaningful: /boot is vfat on an SD card, and
-     * without it a power cut can leave the directory entry renamed and the
-     * data unwritten -- the exact truncated-config failure the temp-file
-     * dance was supposed to prevent. Claiming power-cut safety with only an
-     * fflush was worse than not claiming it.
-     *
-     * errno is captured BEFORE fclose(), which sets its own. */
-    int bad = (fflush(f) != 0) || (fsync(fileno(f)) != 0);
-    int err = errno;
-    fclose(f);
-
-    if (bad || rename(tmp, CYD_POOL_CONF_PATH) != 0) {
-        fprintf(stderr, "[cyd] set_pool: failed to install %s: %s\n",
-                CYD_POOL_CONF_PATH, strerror(bad ? err : errno));
-        unlink(tmp);
-        return;
-    }
-    /* Deliberately NOT logging the password. */
-    fprintf(stderr, "[cyd] pool set to %s:%d worker %s (takes effect on restart)\n",
-            c->host, c->port, c->worker);
-}
-
-/* Write wpa_supplicant's config and bounce the supplicant.
+/* ---- privileged requests ------------------------------------------------
  *
- * Same temp-file-and-rename dance as apply_set_pool(), for the same reason: a
- * half-written config is a board that cannot join any network, and on a
- * headless miner that is a trip to fetch a keyboard.
+ * THIS THREAD CANNOT DO ANY OF THIS ITSELF. odo-miner.service sets User=miner;
+ * /boot is root-owned vfat, /etc/wpa_supplicant is root-owned, and systemctl
+ * needs root. The previous version of this file called fopen() and system()
+ * directly and reported failure to stderr, so the panel drew Set Pool, WiFi
+ * Setup, Restart and Reboot -- and every one of them was a no-op on a real
+ * board.
  *
- * The file is created 0600 BEFORE anything is written to it -- creating it
- * world-readable and chmod'ing afterwards leaves a window where the PSK is
- * readable. The PSK is never logged, here or anywhere. */
-static void apply_set_wifi(const cyd_cmd_t *c)
+ * So we ASK. A request file goes into /run/odod/request/ (this service's own
+ * RuntimeDirectory, so no new permissions are needed anywhere), and
+ * am01-panel-helper.path notices and runs the helper as root. The helper
+ * re-validates everything from scratch: reaching this directory only takes the
+ * miner account, so the helper -- not this file -- is the privilege boundary.
+ *
+ * Written to a temp name and renamed, because the path unit watches for the
+ * file APPEARING. A half-written request must never be visible.
+ */
+#define CYD_REQ_DIR "/run/odod/request"
+
+static void request_write(const char *verb, const char *body)
 {
-    char tmp[256];
-    snprintf(tmp, sizeof tmp, "%s.tmp", CYD_WPA_CONF_PATH);
+    char dir_ok[] = CYD_REQ_DIR;
+    (void)mkdir(dir_ok, 0755);        /* EEXIST is the normal case */
 
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0) {
-        fprintf(stderr, "[cyd] set_wifi: cannot create %s: %s\n",
-                tmp, strerror(errno));
-        return;
-    }
-    FILE *f = fdopen(fd, "w");
+    char tmp[128], fin[128];
+    snprintf(tmp, sizeof tmp, "%s/.%s.tmp", CYD_REQ_DIR, verb);
+    snprintf(fin, sizeof fin, "%s/%s", CYD_REQ_DIR, verb);
+
+    FILE *f = fopen(tmp, "w");
     if (!f) {
-        fprintf(stderr, "[cyd] set_wifi: fdopen: %s\n", strerror(errno));
-        close(fd);
+        fprintf(stderr, "[cyd] %s: cannot write %s: %s\n",
+                verb, tmp, strerror(errno));
         return;
     }
-    /* country= IS REQUIRED. Without it the regdomain stays at world (00), the
-     * firmware refuses the channel, and -- in buildroot_cm4_defconfig's own
-     * words -- "wlan0 sits in SCANNING with the radio working perfectly".
-     * key_mgmt is spelled out for the same reason: the shipped config carries
-     * both, and this function replaces the whole file. */
-    fprintf(f, "# written by the CYD front panel\n");
-    fprintf(f, "ctrl_interface=/var/run/wpa_supplicant\n");
-    fprintf(f, "update_config=1\n");
-    fprintf(f, "country=%s\n", CYD_WIFI_COUNTRY);
-    fprintf(f, "network={\n");
-    fprintf(f, "\tssid=\"%s\"\n", c->ssid);
-    fprintf(f, "\tkey_mgmt=WPA-PSK\n");
-    fprintf(f, "\tpsk=\"%s\"\n", c->psk);
-    fprintf(f, "}\n");
-
+    if (body && *body)
+        fputs(body, f);
     if (fflush(f) != 0 || fsync(fileno(f)) != 0) {
         int e = errno;
         fclose(f);
         unlink(tmp);
-        fprintf(stderr, "[cyd] set_wifi: flush failed: %s\n", strerror(e));
+        fprintf(stderr, "[cyd] %s: flush failed: %s\n", verb, strerror(e));
         return;
     }
     if (fclose(f) != 0) {
-        fprintf(stderr, "[cyd] set_wifi: close failed: %s\n", strerror(errno));
+        unlink(tmp);
+        fprintf(stderr, "[cyd] %s: close failed: %s\n", verb, strerror(errno));
+        return;
+    }
+    if (rename(tmp, fin) != 0) {
+        fprintf(stderr, "[cyd] %s: rename failed: %s\n", verb, strerror(errno));
         unlink(tmp);
         return;
     }
-    if (rename(tmp, CYD_WPA_CONF_PATH) != 0) {
-        fprintf(stderr, "[cyd] set_wifi: rename failed: %s\n", strerror(errno));
-        unlink(tmp);
-        return;
-    }
+    fprintf(stderr, "[cyd] %s requested from the front panel\n", verb);
+}
 
-    /* SSID only. The PSK is deliberately absent from the log. */
-    fprintf(stderr, "[cyd] wifi configured for SSID \"%s\"\n", c->ssid);
+/* LINE ORIENTED, one field per line, so nothing in a field can be mistaken for
+ * a delimiter -- a WPA passphrase may contain spaces, and an SSID may too. */
+static void apply_set_pool(const cyd_cmd_t *c)
+{
+    /* host(64) + port + worker(96) + pass(32) + separators. Generous so the
+     * compiler can prove no truncation rather than merely being right. */
+    char body[384];
+    snprintf(body, sizeof body, "%s\n%d\n%s\n%s\n",
+             c->host, c->port, c->worker, c->pass);
+    request_write("set_pool", body);
+}
 
-    /* --no-block: this may be the interface carrying the ssh session that is
-     * watching, and a blocking restart of the supplicant can outlive the call.
-     * Failure is reported, not fatal -- the config is already on disk and will
-     * be picked up at boot regardless. */
-    /* am01-wifi.service, NOT wpa_supplicant@wlan0.
-     *
-     * This image runs its own unit and deliberately does not use the distro
-     * template -- which is NOT masked, so starting it would have put a SECOND
-     * supplicant on wlan0, contending with the running one for the same
-     * interface and flapping the association on a live miner.
-     *
-     * No --no-block: with it, systemctl returns 0 the moment the job is
-     * queued, so the check below could never fire and a refused restart was
-     * reported as success. Blocking here is safe -- this is a worker thread,
-     * not the mining loop. */
-    if (system("systemctl restart am01-wifi.service") != 0)
-        fprintf(stderr, "[cyd] set_wifi: could not restart am01-wifi; "
-                        "the config will apply at next boot\n");
+static void apply_set_wifi(const cyd_cmd_t *c)
+{
+    /* ssid(64) + psk(80) + two newlines, rounded up so the compiler can see
+     * it cannot truncate. */
+    char body[256];
+    snprintf(body, sizeof body, "%s\n%s\n", c->ssid, c->psk);
+    /* The PSK is in the request file, which is why the helper's directory is
+     * 0755 and the file itself is short-lived -- and why the helper writes
+     * wpa_supplicant.conf 0600 and never logs the passphrase. */
+    request_write("set_wifi", body);
 }
 
 static void apply(const cyd_cmd_t *c, am01_bus_t *bus)
@@ -306,26 +240,15 @@ static void apply(const cyd_cmd_t *c, am01_bus_t *bus)
         fprintf(stderr, "[cyd] session stats reset requested\n");
         break;
     case CYD_CMD_KIND_REBOOT:
-        /* The panel already required a CONFIRM screen for this -- two touches,
-         * proved by test_cyd_ui.c's exhaustive sweep. Logged loudly because a
-         * miner that reboots itself with no explanation in the journal is a
-         * genuinely nasty thing to debug. */
-        fprintf(stderr, "[cyd] REBOOT requested from the front panel\n");
-        sync();
-        if (system("systemctl reboot") != 0)
-            fprintf(stderr, "[cyd] reboot command failed\n");
+        /* Two touches on the panel already guard this (test_cyd_ui.c proves
+         * the confirm path exhaustively); the helper carries it out. */
+        request_write("reboot", NULL);
         break;
     case CYD_CMD_KIND_SET_POOL:
         apply_set_pool(c);
         break;
     case CYD_CMD_KIND_RESTART:
-        /* Restarting the miner means restarting the process this thread lives
-         * in. --no-block is not optional: a blocking `systemctl restart` on
-         * one's own unit waits for a stop that cannot complete until this call
-         * returns. Queue the job and let systemd do it. */
-        fprintf(stderr, "[cyd] miner restart requested from the front panel\n");
-        if (system("systemctl --no-block restart odo-miner") != 0)
-            fprintf(stderr, "[cyd] restart command failed\n");
+        request_write("restart", NULL);
         break;
     case CYD_CMD_KIND_SET_WIFI:
         apply_set_wifi(c);

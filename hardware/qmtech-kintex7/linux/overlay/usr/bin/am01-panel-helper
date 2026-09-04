@@ -1,0 +1,163 @@
+#!/bin/sh
+#
+# am01-panel-helper -- carry out the front panel's privileged requests.
+#
+# THIS FILE IS THE PRIVILEGE BOUNDARY. Treat every byte it reads as hostile.
+#
+# WHY IT EXISTS. odo-miner runs User=miner (odo-miner.service), and the CYD
+# panel thread lives inside it. So the panel could never actually do the things
+# its menu offered: /boot is root-owned vfat, /etc/wpa_supplicant is root-owned,
+# and systemctl needs root. Pool, WiFi, reboot and restart all failed silently
+# -- the panel drew the buttons, the daemon logged one line to stderr, and
+# nothing happened. Four buttons that lie are worse than four buttons that are
+# greyed out.
+#
+# WHY NOT THE OBVIOUS FIXES.
+#   - Running odo-miner as root would hand root to the whole mining daemon,
+#     including its network-facing stratum client, to fix four buttons.
+#   - setuid on a helper means writing a C program that is safe with an
+#     attacker-controlled environment. More rope than this needs.
+#   - sudo is not in the image.
+#
+# So: the panel writes a REQUEST FILE into /run/odod/request/ (already writable
+# by miner -- RuntimeDirectory=odod), a systemd .path unit notices, and this
+# runs as root and decides whether to obey. The unprivileged side can ask; only
+# this side can act.
+#
+# THE VALIDATION BELOW IS THE WHOLE POINT. Anything that reaches /run/odod/
+# already has the miner account, and this turns that into root if it is sloppy.
+# Every field is checked against an allow-list of characters, never a deny-list,
+# and anything unrecognised is dropped rather than guessed at.
+#
+# REQUEST FORMAT -- one file per request, named for the verb, LINE ORIENTED so
+# no delimiter can be smuggled inside a field:
+#
+#   reboot     (empty)
+#   restart    (empty)
+#   set_pool   host \n port \n worker \n pass
+#   set_wifi   ssid \n psk
+#
+set -u
+
+REQ_DIR=/run/odod/request
+POOL_CONF=/boot/am01-miner.conf
+WPA_CONF=/etc/wpa_supplicant/wpa_supplicant-wlan0.conf
+WIFI_COUNTRY=GB
+
+say()  { echo "am01-panel-helper: $*" >&2; }
+deny() { say "REFUSED $1: $2"; }
+
+# Allow-lists. `case` globs, so no regex engine and no surprises.
+ok_host()   { case "$1" in ''|*[!A-Za-z0-9.-]*) return 1;; esac; [ ${#1} -le 63 ]; }
+ok_port()   { case "$1" in ''|*[!0-9]*) return 1;; esac
+              [ "$1" -ge 1 ] 2>/dev/null && [ "$1" -le 65535 ]; }
+ok_worker() { case "$1" in ''|*[!A-Za-z0-9._-]*) return 1;; esac; [ ${#1} -le 95 ]; }
+# The pool password is conventionally "x" and is not a secret, but it still
+# lands in a shell-quoted DAEMON_OPTS line, so no quotes, no backslashes, no
+# spaces.
+ok_pass()   { case "$1" in ''|*[!A-Za-z0-9._-]*) return 1;; esac; [ ${#1} -le 31 ]; }
+# SSIDs may contain spaces. They may NOT contain the two characters that would
+# break out of ssid="..." in wpa_supplicant.conf.
+ok_ssid()   { case "$1" in ''|*'"'*|*'\'*) return 1;; esac; [ ${#1} -le 32 ]; }
+# WPA2: 8..63 characters, same quoting rule.
+ok_psk()    { case "$1" in *'"'*|*'\'*) return 1;; esac
+              [ ${#1} -ge 8 ] && [ ${#1} -le 63 ]; }
+
+# Read line N of a file, with no interpretation of backslashes and no trailing
+# newline surprises. `read -r` leaves the field exactly as written.
+line_of() { sed -n "${2}p" "$1" | tr -d '\r'; }
+
+apply_set_pool() {
+	f=$1
+	host=$(line_of "$f" 1); port=$(line_of "$f" 2)
+	worker=$(line_of "$f" 3); pass=$(line_of "$f" 4)
+
+	ok_host   "$host"   || { deny set_pool "host";   return; }
+	ok_port   "$port"   || { deny set_pool "port";   return; }
+	ok_worker "$worker" || { deny set_pool "worker"; return; }
+	ok_pass   "$pass"   || { deny set_pool "pass";   return; }
+
+	# DAEMON_OPTS is the ONLY key anything reads: am01-miner-provision.service
+	# requires ^DAEMON_OPTS= and ignores the file otherwise. odo-miner takes
+	# positional arguments -- its main() has no option parser at all.
+	tmp="${POOL_CONF}.tmp"
+	umask 077
+	{
+		echo "# written by the CYD front panel"
+		echo "DAEMON_OPTS=\"$host $port $worker $pass\""
+	} > "$tmp" || { deny set_pool "cannot write $tmp"; return; }
+	sync
+	mv -f "$tmp" "$POOL_CONF" || { deny set_pool "rename failed"; rm -f "$tmp"; return; }
+	sync
+	say "pool set to $host:$port worker $worker"
+}
+
+apply_set_wifi() {
+	f=$1
+	ssid=$(line_of "$f" 1); psk=$(line_of "$f" 2)
+
+	ok_ssid "$ssid" || { deny set_wifi "ssid"; return; }
+	ok_psk  "$psk"  || { deny set_wifi "psk";  return; }
+
+	tmp="${WPA_CONF}.tmp"
+	umask 077                    # 0600 at creation; this file holds a PSK
+	{
+		echo "# written by the CYD front panel"
+		echo "ctrl_interface=/var/run/wpa_supplicant"
+		echo "update_config=1"
+		# country= is NOT optional: without it the regdomain stays at world
+		# (00), the firmware refuses the channel, and wlan0 sits in SCANNING
+		# with the radio working perfectly.
+		echo "country=$WIFI_COUNTRY"
+		echo "network={"
+		echo "	ssid=\"$ssid\""
+		echo "	key_mgmt=WPA-PSK"
+		echo "	psk=\"$psk\""
+		echo "}"
+	} > "$tmp" || { deny set_wifi "cannot write $tmp"; return; }
+	sync
+	mv -f "$tmp" "$WPA_CONF" || { deny set_wifi "rename failed"; rm -f "$tmp"; return; }
+	sync
+	# SSID only. The PSK is never logged.
+	say "wifi configured for SSID \"$ssid\""
+	# am01-wifi.service, not wpa_supplicant@wlan0 -- this image runs its own
+	# unit, and the distro template is not masked, so starting it would put a
+	# SECOND supplicant on wlan0.
+	systemctl restart am01-wifi.service || say "am01-wifi restart failed; applies at next boot"
+}
+
+[ -d "$REQ_DIR" ] || exit 0
+
+for f in "$REQ_DIR"/*; do
+	[ -f "$f" ] || continue
+	verb=$(basename "$f")
+	case "$verb" in
+	reboot)
+		rm -f "$f"
+		say "REBOOT requested from the front panel"
+		sync
+		systemctl reboot
+		;;
+	restart)
+		rm -f "$f"
+		say "miner restart requested from the front panel"
+		# --no-block: the requester is a thread inside the unit being
+		# restarted, and a blocking restart waits for a stop that cannot
+		# finish until this returns.
+		systemctl --no-block restart odo-miner
+		;;
+	set_pool)
+		apply_set_pool "$f"; rm -f "$f"
+		;;
+	set_wifi)
+		# Removed FIRST, so a malformed request cannot be retried forever by
+		# the path unit re-triggering on a file that never goes away.
+		cp "$f" "$f.work" 2>/dev/null && rm -f "$f"
+		apply_set_wifi "$f.work"; rm -f "$f.work"
+		;;
+	*)
+		rm -f "$f"
+		say "REFUSED unknown request: $verb"
+		;;
+	esac
+done

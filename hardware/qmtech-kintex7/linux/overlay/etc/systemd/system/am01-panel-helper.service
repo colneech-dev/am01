@@ -1,0 +1,15 @@
+[Unit]
+Description=Apply privileged requests from the CYD front panel
+# Not Requires=: the helper is a convenience. If it cannot run, mining must be
+# unaffected.
+After=odo-miner.service
+
+[Service]
+Type=oneshot
+# ROOT ON PURPOSE, and the only thing in this design that is. Everything it
+# acts on is validated against a character allow-list in the script itself --
+# reaching /run/odod/request/ only requires the miner account, so this is the
+# step that turns that into root and has to earn it.
+ExecStart=/usr/bin/am01-panel-helper
+# A malformed request must not wedge the path unit into a restart loop.
+TimeoutStartSec=120

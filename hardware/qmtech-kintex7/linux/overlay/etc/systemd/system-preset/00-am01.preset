@@ -28,3 +28,9 @@ enable am01-ssh-provision.service
 enable odo-miner.service
 enable odo-webd.service
 enable odo-ui.service
+
+# The panel helper is a PATH unit, not a service: it must be enabled so that
+# systemd watches /run/odod/request/ from boot. The .service it triggers is
+# deliberately NOT enabled -- it is started by the path unit, and enabling it
+# would run the helper once at every boot for no reason.
+enable am01-panel-helper.path
