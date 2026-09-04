@@ -349,23 +349,24 @@ void OdoVerilog::Generate(int throughput, const char* prefix, FILE* f) const
         // a 3-input XOR remains between total_r and the consumer's register.
         // in_r carries the untouched operand across the same boundary so the
         // halves stay aligned.
-        fprintf(f, "module %spre_mix(clk, in, out);\n", prefix);
-        fprintf(f, "    input clk;\n");
+        // Split into the reduction (the long half, registered by the caller
+        // alongside state[0] so the two stay aligned with no 640-bit copy)
+        // and the application (the short half).
+        fprintf(f, "module %spre_mix_total(in, total);\n", prefix);
         fprintf(f, "    input [%d:0] in;\n", DIGEST_BITS-1);
-        fprintf(f, "    output [%d:0] out;\n", DIGEST_BITS-1);
-        fprintf(f, "    wire [%d:0] total;\n", WORD_BITS-1);
+        fprintf(f, "    output [%d:0] total;\n", WORD_BITS-1);
         fprintf(f, "    assign total = 0");
         for (int i = 0; i < STATE_SIZE; i++)
             fprintf(f, " ^ in[%d:%d]", WORD_BITS*(i+1)-1, WORD_BITS*i);
         fprintf(f, ";\n");
-        fprintf(f, "    reg [%d:0] total_r;\n", WORD_BITS-1);
-        fprintf(f, "    reg [%d:0] in_r;\n", DIGEST_BITS-1);
-        fprintf(f, "    always @(posedge clk) begin\n");
-        fprintf(f, "        total_r <= total;\n");
-        fprintf(f, "        in_r <= in;\n");
-        fprintf(f, "    end\n");
+        fprintf(f, "endmodule\n\n");
+
+        fprintf(f, "module %spre_mix_apply(in, total, out);\n", prefix);
+        fprintf(f, "    input [%d:0] in;\n", DIGEST_BITS-1);
+        fprintf(f, "    input [%d:0] total;\n", WORD_BITS-1);
+        fprintf(f, "    output [%d:0] out;\n", DIGEST_BITS-1);
         for (int i = 0; i < STATE_SIZE; i++)
-            fprintf(f, "    assign out[%d:%d] = in_r[%d:%d] ^ total_r ^ (total_r >> 32);\n",
+            fprintf(f, "    assign out[%d:%d] = in[%d:%d] ^ total ^ (total >> 32);\n",
                     WORD_BITS*(i+1)-1, WORD_BITS*i, WORD_BITS*(i+1)-1, WORD_BITS*i);
         fprintf(f, "endmodule\n\n");
     }
@@ -601,23 +602,31 @@ void OdoVerilog::Generate(int throughput, const char* prefix, FILE* f) const
     fprintf(f, "    input read;\n");
     fprintf(f, "    output [%d:0] out;\n", DIGEST_BITS-1);
     fprintf(f, "    output write;\n");
-    // The pipelined pre-mix inserts one cycle between state[0] and state[1],
-    // so the read pulse needs one more stage to stay aligned with the data.
-    const int pstages = g_pipeline_premix ? 3 : 2;
-    fprintf(f, "    reg [%d:0] progress;\n", pstages-1);
-    fprintf(f, "    initial progress = %d'h0;\n", pstages);
+    // v2 adds NO latency -- total_r is captured on the same edge as state[0]
+    // from the same source -- so the read pipeline is unchanged either way.
+    fprintf(f, "    reg [1:0] progress;\n");
+    fprintf(f, "    initial progress = 2'h0;\n");
     fprintf(f, "    reg [639:0] state[1:0];\n");
     fprintf(f, "    wire [639:0] next;\n");
     if (g_pipeline_premix)
-        fprintf(f, "    %spre_mix premixer(clk, state[0], next);\n", prefix);
+    {
+        // The reduction hangs off the PORT `in`, one cycle upstream of where
+        // it is consumed, and lands in a 64-bit register. state[0] captures
+        // the same `in` on the same edge, so `next` combines two views of one
+        // value -- no realignment and no 640-bit shadow copy needed.
+        fprintf(f, "    wire [%d:0] premix_total;\n", WORD_BITS-1);
+        fprintf(f, "    reg [%d:0] total_r;\n", WORD_BITS-1);
+        fprintf(f, "    %spre_mix_total totaler(in, premix_total);\n", prefix);
+        fprintf(f, "    %spre_mix_apply premixer(state[0], total_r, next);\n", prefix);
+    }
     else
         fprintf(f, "    %spre_mix premixer(state[0], next);\n", prefix);
-    fprintf(f, "    %sencrypt_loop crypter(clk, state[1], progress[%d], out, write);\n",
-            prefix, pstages-1);
+    fprintf(f, "    %sencrypt_loop crypter(clk, state[1], progress[1], out, write);\n", prefix);
     fprintf(f, "    always @(posedge clk) begin\n");
     fprintf(f, "        progress[0] <= read;\n");
-    for (int i = 1; i < pstages; i++)
-        fprintf(f, "        progress[%d] <= progress[%d];\n", i, i-1);
+    fprintf(f, "        progress[1] <= progress[0];\n");
+    if (g_pipeline_premix)
+        fprintf(f, "        total_r <= premix_total;\n");
     fprintf(f, "        state[0] <= in;\n");
     fprintf(f, "        state[1] <= next;\n");
     fprintf(f, "    end\n");

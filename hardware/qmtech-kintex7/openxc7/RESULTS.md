@@ -1000,3 +1000,50 @@ LUT-occupancy routability is known, not before), its own floorplan (two
 balanced-partition work than to Option A's single-region layout), and its
 own functional-equivalence run (same `tb_lutram_equiv.v` pattern, different
 `THROUGHPUT`/`--lutram` values). None of that exists yet.
+
+### v1 FAILED to route -- and why (measured, not predicted)
+
+The first implementation registered BOTH halves: `total_r` (64 bits) and
+`in_r` (640 bits), the latter a shadow copy of `state[0]` carried across the
+new boundary to keep the halves aligned. It bought a shorter logic path by
+adding **704 flops and 640 extra nets** to a design RESULTS.md already
+characterises as wire-limited. The router's verdict, against the e2nbfix
+baseline on the same recipe:
+
+| | baseline (e2nbfix) | premix v1 |
+|---|---|---|
+| overuse @ iter 9 | ~191 | ~1700 |
+| overuse @ iter 17 | ~35 | 1194 |
+| overuse @ iter 25-33 | **single digits** | ~980 |
+| overuse @ iter 41 | converged | **968, plateaued** |
+| wires | ~1,605,000 | **1,675,500 (+70k)** |
+
+It bottomed at 921 (iter 31) then oscillated back up -- it was not
+converging, it had stalled. Killed at iter 42; **no Fmax was ever obtained,
+and none should be quoted for v1.** This is the exact trade the `noabs`
+experiment already lost (1.8 ns of logic traded for 2.2 ns of routing):
+**adding registers does not shorten wires.**
+
+### v2: register the reduction, not the operand
+
+The 640-bit copy was never necessary. The encrypt top already registers the
+operand (`state[0] <= in`), so instead of duplicating it, hang the XOR tree
+off the PORT `in` -- one cycle upstream of where it is consumed -- and
+register only the 64-bit `total` on the SAME edge:
+
+    always @(posedge clk) begin
+        total_r  <= tree(in);       // 64 flops; the long half ends here
+        state[0] <= in;             // already existed
+    end
+    next = state[0] ^ mix(total_r); // the short half
+
+`total_r` and `state[0]` capture the same value on the same edge, so they are
+aligned for free. Same path split as v1, but **64 extra flops instead of 704,
+and zero added latency** -- so `progress` stays at 2 stages and the read-pulse
+alignment is untouched (v1 needed 3).
+
+Verified by `sim/tb_premix_equiv.v`, which additionally asserts the emission
+TIMES are identical -- value-only comparison would not catch a latency shift,
+since the sequences would still match with every result a cycle late.
+
+Status: routing (tag `premixv2_afa4b22`) and equivalence both in progress.
