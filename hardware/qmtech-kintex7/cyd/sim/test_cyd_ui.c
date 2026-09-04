@@ -543,6 +543,23 @@ int main(void)
         cyd_ui_pool_sync(&ui, &st);
         ok(!strcmp(ui.pool_host, "half-typed"),
            "nor while the pool screen is open");
+
+        /* THE ONE THAT COST MONEY. needs_release means CONFIRM is on screen
+         * for at least one status tick, and status arrives every second. With
+         * CONFIRM unguarded, that tick overwrote host and port with the
+         * miner's CURRENT values, so YES sent the OLD host with the NEW
+         * worker -- written to /boot, surviving a reflash, with nothing on
+         * screen to say so. */
+        ui.screen = CYD_SCREEN_CONFIRM;
+        ui.pending = CYD_ACTION_SET_POOL;
+        cyd_ui_pool_sync(&ui, &st);
+        ok(!strcmp(ui.pool_host, "half-typed"),
+           "and NOT while CONFIRM is showing a pending set_pool");
+
+        ui.screen = CYD_SCREEN_WIFI;
+        cyd_ui_pool_sync(&ui, &st);
+        ok(!strcmp(ui.pool_host, "half-typed"),
+           "nor while the wifi editor is open");
     }
 
     /* ---- keyboard bounds ------------------------------------------------ */

@@ -192,6 +192,38 @@ int main(void)
     ok(c.ssid[0] == '\0' && c.psk[0] == '\0',
        "a rejected set_wifi leaves no stale ssid or psk");
 
+    /* CONFIG-SYNTAX INJECTION. The daemon writes these as ssid="%s" / psk="%s"
+     * into wpa_supplicant.conf. A trailing backslash escapes the closing
+     * quote; a bare quote closes the string early. Either way the config does
+     * not parse, the supplicant exits, and a board reached over WiFi is gone
+     * until somebody walks to it. Refusing beats escaping: a passphrase that
+     * cannot be represented is better rejected while the user is at the panel.
+     *
+     * Note this is NOT shell injection -- every system() argument in the
+     * daemon is a compile-time literal. */
+    ok(cyd_cmd_parse("CMD set_wifi HomeNet pass\\word12", &c) == CYD_CMD_KIND_NONE,
+       "a passphrase containing a backslash is refused");
+    ok(cyd_cmd_parse("CMD set_wifi HomeNet trailingslash\\", &c) == CYD_CMD_KIND_NONE,
+       "a passphrase ENDING in a backslash is refused -- it would escape the quote");
+    ok(cyd_cmd_parse("CMD set_wifi HomeNet pa\"ssword12", &c) == CYD_CMD_KIND_NONE,
+       "a passphrase containing a quote is refused");
+    ok(cyd_cmd_parse("CMD set_wifi Home\"Net password12", &c) == CYD_CMD_KIND_NONE,
+       "an SSID containing a quote is refused");
+    ok(c.ssid[0] == '\0' && c.psk[0] == '\0',
+       "and each of those rejections clears the output");
+
+    /* Trailing whitespace is configured literally otherwise, and is never
+     * what anyone meant. */
+    ok(cyd_cmd_parse("CMD set_wifi HomeNet password123   ", &c)
+           == CYD_CMD_KIND_SET_WIFI &&
+       !strcmp(c.psk, "password123"),
+       "trailing spaces are trimmed from the passphrase");
+
+    /* Trimming must not turn a valid passphrase into a short one silently:
+     * "1234567 " is 7 real characters and must still be refused. */
+    ok(cyd_cmd_parse("CMD set_wifi HomeNet 1234567 ", &c) == CYD_CMD_KIND_NONE,
+       "a passphrase that is only 8 characters WITH the trailing space is refused");
+
     if (errors == 0) printf("=== ALL %d CHECKS PASSED ===\n", checks);
     else             printf("=== %d of %d CHECK(S) FAILED ===\n", errors, checks);
     return errors ? 1 : 0;

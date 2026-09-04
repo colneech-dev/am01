@@ -150,17 +150,39 @@ static void apply_set_pool(const cyd_cmd_t *c)
     char tmp[256];
     snprintf(tmp, sizeof tmp, "%s.tmp", CYD_POOL_CONF_PATH);
 
-    FILE *f = fopen(tmp, "w");
-    if (!f) {
-        fprintf(stderr, "[cyd] set_pool: cannot write %s: %s\n",
+    /* 0600 at CREATION, like apply_set_wifi. fopen(,"w") gives 0644 under the
+     * default umask, and this file contains the pool password. (On the vfat
+     * /boot the mount's fmask wins, but the temp file and any future ext4
+     * location are covered, and the asymmetry with the wifi writer was a
+     * defect in its own right.) */
+    int pfd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (pfd < 0) {
+        fprintf(stderr, "[cyd] set_pool: cannot create %s: %s\n",
                 tmp, strerror(errno));
         return;
     }
+    FILE *f = fdopen(pfd, "w");
+    if (!f) {
+        fprintf(stderr, "[cyd] set_pool: fdopen: %s\n", strerror(errno));
+        close(pfd);
+        unlink(tmp);
+        return;
+    }
+    /* DAEMON_OPTS, not POOL_*.
+     *
+     * This wrote POOL_HOST=/POOL_PORT=/POOL_WORKER=/POOL_PASS=, and NOTHING
+     * reads those keys: am01-miner-provision.service requires a ^DAEMON_OPTS=
+     * line and otherwise logs "has no DAEMON_OPTS= line -- ignoring it". So a
+     * pool change from the panel had no effect AND renamed over
+     * /boot/am01-miner.conf, destroying the hand-edited line that file exists
+     * to preserve across a reflash. Silently doing nothing while deleting the
+     * recovery config is about the worst combination available.
+     *
+     * odo-miner takes POSITIONAL arguments (host port worker pass) -- see
+     * miner_pipe_am01.c's main(), which has no option parser at all. */
     fprintf(f, "# written by the CYD front panel\n");
-    fprintf(f, "POOL_HOST=%s\n",   c->host);
-    fprintf(f, "POOL_PORT=%d\n",   c->port);
-    fprintf(f, "POOL_WORKER=%s\n", c->worker);
-    fprintf(f, "POOL_PASS=%s\n",   c->pass);
+    fprintf(f, "DAEMON_OPTS=\"%s %d %s %s\"\n",
+            c->host, c->port, c->worker, c->pass);
     /* fflush pushes to the OS; fsync pushes to the DEVICE. Only the second
      * makes the rename() below meaningful: /boot is vfat on an SD card, and
      * without it a power cut can leave the directory entry renamed and the
@@ -210,11 +232,18 @@ static void apply_set_wifi(const cyd_cmd_t *c)
         close(fd);
         return;
     }
+    /* country= IS REQUIRED. Without it the regdomain stays at world (00), the
+     * firmware refuses the channel, and -- in buildroot_cm4_defconfig's own
+     * words -- "wlan0 sits in SCANNING with the radio working perfectly".
+     * key_mgmt is spelled out for the same reason: the shipped config carries
+     * both, and this function replaces the whole file. */
     fprintf(f, "# written by the CYD front panel\n");
     fprintf(f, "ctrl_interface=/var/run/wpa_supplicant\n");
     fprintf(f, "update_config=1\n");
+    fprintf(f, "country=%s\n", CYD_WIFI_COUNTRY);
     fprintf(f, "network={\n");
     fprintf(f, "\tssid=\"%s\"\n", c->ssid);
+    fprintf(f, "\tkey_mgmt=WPA-PSK\n");
     fprintf(f, "\tpsk=\"%s\"\n", c->psk);
     fprintf(f, "}\n");
 
@@ -243,8 +272,19 @@ static void apply_set_wifi(const cyd_cmd_t *c)
      * watching, and a blocking restart of the supplicant can outlive the call.
      * Failure is reported, not fatal -- the config is already on disk and will
      * be picked up at boot regardless. */
-    if (system("systemctl --no-block restart wpa_supplicant@wlan0") != 0)
-        fprintf(stderr, "[cyd] set_wifi: could not restart the supplicant; "
+    /* am01-wifi.service, NOT wpa_supplicant@wlan0.
+     *
+     * This image runs its own unit and deliberately does not use the distro
+     * template -- which is NOT masked, so starting it would have put a SECOND
+     * supplicant on wlan0, contending with the running one for the same
+     * interface and flapping the association on a live miner.
+     *
+     * No --no-block: with it, systemctl returns 0 the moment the job is
+     * queued, so the check below could never fire and a refused restart was
+     * reported as success. Blocking here is safe -- this is a worker thread,
+     * not the mining loop. */
+    if (system("systemctl restart am01-wifi.service") != 0)
+        fprintf(stderr, "[cyd] set_wifi: could not restart am01-wifi; "
                         "the config will apply at next boot\n");
 }
 
@@ -313,7 +353,16 @@ static void drain_rx(am01_bus_t *bus, int may_apply)
         uint16_t d;
         if (am01_bus_read_reg(bus, CYD_REG_UART_DATA, &d) < 0)
             return;
+        /* PRINTABLE ASCII ONLY (plus the newline handled below).
+         *
+         * A raw byte was stored, including 0x00 -- which terminates the line
+         * early for every strcmp/at_end check downstream, so a UART framing
+         * glitch delivering "CMD reboot\0<junk>" parsed as a clean,
+         * argument-free reboot on a live miner. Framing glitches are exactly
+         * what produce 0x00, and the FIFO even counts them. */
         char ch = (char)(d & 0xFF);
+        if (ch != '\n' && ch != '\r' && (ch < 0x20 || ch == 0x7F))
+            continue;
 
         if (ch == '\n' || ch == '\r') {
             if (g_rx.len && !g_rx.overflow) {

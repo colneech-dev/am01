@@ -365,7 +365,12 @@ static void draw_glance(const cyd_status_t *st, bool link_down)
     tft.drawString("SHAPECHANGE IN", 14, 110, 2);
 
     int bar_full = CYD_LAYOUT_W - 28;
-    if (st->epoch && st->epoch_next > st->epoch) {
+    /* st->updated must be non-zero too. Without it a status missing "updated"
+     * (get_u32 leaves the field alone on a miss, and g_status starts zeroed)
+     * gives left ~= 1.7e9 and the panel proudly announces "20077d 0h 0m".
+     * cyd_fmt_epoch_left_at guards this and names the same symptom; DETAIL is
+     * correct because it uses the formatter, GLANCE reimplemented it. */
+    if (st->epoch && st->updated && st->epoch_next > st->epoch) {
         long left = (long)st->epoch_next - (long)st->updated;
         if (left < 0) left = 0;
         snprintf(b, sizeof b, "%ldd %ldh %ldm",
@@ -376,6 +381,10 @@ static void draw_glance(const cyd_status_t *st, bool link_down)
         long total = (long)st->epoch_next - (long)st->epoch;
         long done  = (long)st->updated - (long)st->epoch;
         if (done < 0) done = 0;
+        /* Clamp BEFORE multiplying. long is 32-bit here, so bar_full * done
+         * overflows once done passes ~7.35M seconds; the negative result was
+         * only hidden by the fill > 0 test below, which is luck, not a guard. */
+        if (done > total) done = total;
         int fill = (total > 0) ? (int)((long)bar_full * done / total) : 0;
         if (fill > bar_full) fill = bar_full;
         tft.fillRect(14, 148, bar_full, 7, C_PANEL);
@@ -395,6 +404,10 @@ static void draw_glance(const cyd_status_t *st, bool link_down)
         tft.setTextColor(C_TEXT, C_BAD);
         tft.drawString("! WRONG EPOCH - REBOOT !", CYD_LAYOUT_W / 2, 167, 2);
         tft.setTextDatum(TL_DATUM);
+        /* The hamburger MUST still be drawn. This branch returned before it,
+         * so in the one state where the panel is telling you to reboot, the
+         * only route to REBOOT was invisible -- GLANCE has no other control. */
+        hamburger();
         return;
     }
 
@@ -415,13 +428,16 @@ static void draw_glance(const cyd_status_t *st, bool link_down)
 
     /* Line 2: temp, accept rate, fan -- with odo_ui.c's own thresholds. */
     unsigned long long total = st->shares_accepted + st->shares_rejected;
-    if (st->temp_c >= -50 && st->temp_c <= 150) {
-        snprintf(b, sizeof b, "%dC", st->temp_c);
-        tft.setTextColor(C_DIM, C_BG);
-        tft.drawString("TEMP", 14, 176, 2);
-        tft.setTextColor(st->temp_c >= 65 ? C_WARN : C_TEXT, C_BG);
-        tft.drawString(b, 54, 176, 2);
-    }
+    /* Through cyd_fmt_temp, not inline. The inline guard accepted temp_c >=
+     * -50, so the documented -1 "unknown" sentinel passed it and rendered
+     * "-1C" -- which reads as a board fault rather than a missing sensor. The
+     * formatter is where -1 becomes "--", and this file's own header says
+     * values are never formatted inline. */
+    cyd_fmt_temp(st->temp_c, b, (int)sizeof b);
+    tft.setTextColor(C_DIM, C_BG);
+    tft.drawString("TEMP", 14, 176, 2);
+    tft.setTextColor(st->temp_c >= 65 ? C_WARN : C_TEXT, C_BG);
+    tft.drawString(b, 54, 176, 2);
     if (total > 0) {
         int pct = (int)(st->shares_accepted * 100ULL / total);
         snprintf(b, sizeof b, "%d%%", pct);
@@ -430,13 +446,15 @@ static void draw_glance(const cyd_status_t *st, bool link_down)
         tft.setTextColor(pct >= 90 ? C_OK : pct >= 70 ? C_WARN : C_BAD, C_BG);
         tft.drawString(b, 150, 176, 2);
     }
-    if (st->fan_rpm >= 0) {
-        snprintf(b, sizeof b, "%d%%", st->fan_duty_pct);
-        tft.setTextColor(C_DIM, C_BG);
-        tft.drawString("FAN", 220, 176, 2);
-        tft.setTextColor(st->fan_duty_pct > 0 ? C_OK : C_DIM, C_BG);
-        tft.drawString(b, 250, 176, 2);
-    }
+    /* Gated on fan_rpm but PRINTED fan_duty_pct -- backwards on both halves. A
+     * board with no tach pull-up fitted (rpm == -1, which was the real state
+     * until 2026-08-30) hid a perfectly good duty reading, and a -1 duty with
+     * a working tach printed "-1%". The formatter handles both sentinels. */
+    cyd_fmt_fan(st->fan_rpm, st->fan_duty_pct, b, (int)sizeof b);
+    tft.setTextColor(C_DIM, C_BG);
+    tft.drawString("FAN", 220, 176, 2);
+    tft.setTextColor(st->fan_duty_pct > 0 ? C_OK : C_DIM, C_BG);
+    tft.drawString(b, 250, 176, 2);
 
     hamburger();
 }
@@ -507,6 +525,10 @@ static void draw_settings(const cyd_ui_t *ui)
     button(CYD_BTN_LEFT, "BACK", false);
     /* MID, not RIGHT -- RIGHT sits under the hamburger. */
     button(CYD_BTN_MID,  "MORE", false);
+    /* SETTINGS is in the hamburger whitelist, so it must DRAW one. It did not,
+     * leaving x258..313 live and unpainted -- the same drawn-versus-hit-
+     * geometry defect as the strip beside it, in the other direction. */
+    hamburger();
 }
 
 /* A two-state button. Distinct from button()'s `hot`, which paints C_BAD:
@@ -530,6 +552,12 @@ static const char *field_value(const cyd_ui_t *ui, int i)
     case CYD_FIELD_PORT:   return ui->pool_port;
     case CYD_FIELD_WORKER: return ui->pool_worker;
     case CYD_FIELD_PASS:   return ui->pool_pass;
+    /* Missing until now, so the keyboard's value line rendered "" for every
+     * keystroke of an SSID or a 63-character WPA passphrase -- blind entry, on
+     * an uncalibrated resistive panel, for the one field whose failure mode is
+     * taking a headless board off the network. */
+    case CYD_FIELD_SSID:   return ui->wifi_ssid;
+    case CYD_FIELD_PSK:    return ui->wifi_psk;
     default:               return "";
     }
 }
@@ -543,6 +571,13 @@ static const char *field_value(const cyd_ui_t *ui, int i)
 static const char *elide(const char *v, char *buf, size_t cap, size_t maxch)
 {
     size_t n = strlen(v);
+    /* maxch < 3 would underflow (maxch - 2) in size_t arithmetic below and
+     * index far outside the string. Both callers pass 26 and 30 today; this is
+     * here so the third one cannot be the bug. */
+    if (maxch < 3) {
+        if (cap) buf[0] = 0;
+        return buf;
+    }
     if (n <= maxch) {
         snprintf(buf, cap, "%s", v);
         return buf;
@@ -551,6 +586,18 @@ static const char *elide(const char *v, char *buf, size_t cap, size_t maxch)
     return buf;
 }
 
+/* ONE label table covering EVERY field, indexed by cyd_field_t.
+ *
+ * This was POOL_LABELS[CYD_POOL_ROWS] -- four entries -- and the keyboard
+ * header indexed it with ui->edit_field, which is CYD_FIELD_SSID (4) or
+ * CYD_FIELD_PSK (5) whenever the keyboard was opened from WIFI SETUP. That
+ * read a const char * from past the end of the array and handed it to
+ * drawString: garbage at best, a LoadProhibited reboot in practice, on the
+ * first touch of the SSID row. Sized by CYD_FIELD_COUNT so adding a field
+ * without adding its label is a compile error, not a crash. */
+static const char *FIELD_LABELS[CYD_FIELD_COUNT] = {
+    "HOST", "PORT", "WORKER", "PASS", "SSID", "PSK"
+};
 static const char *POOL_LABELS[CYD_POOL_ROWS] = { "HOST", "PORT", "WORKER", "PASS" };
 
 /* WIFI SETUP. Two rows sharing the pool editor's keyboard, so the two feel
@@ -634,7 +681,7 @@ static void draw_keyboard(const cyd_ui_t *ui)
      * cursor would be. */
     tft.setTextDatum(TL_DATUM);
     tft.setTextColor(C_DIM, C_BG);
-    tft.drawString(POOL_LABELS[ui->edit_field], 8, 26, 2);
+    tft.drawString(FIELD_LABELS[ui->edit_field], 8, 26, 2);
 
     tft.setTextDatum(TR_DATUM);
     tft.setTextColor(C_TEXT, C_BG);
@@ -763,7 +810,7 @@ void cyd_ui_draw(cyd_ui_t *ui, const cyd_status_t *st)
         draw_pool(ui);
         break;
     case CYD_SCREEN_KEYBOARD:
-        header(POOL_LABELS[ui->edit_field], st, ui->link_down);
+        header(FIELD_LABELS[ui->edit_field], st, ui->link_down);
         draw_keyboard(ui);
         break;
     case CYD_SCREEN_CONFIRM:
@@ -779,7 +826,20 @@ void cyd_ui_draw(cyd_ui_t *ui, const cyd_status_t *st)
      * because it is how someone concludes the miner is fine while it is
      * down. The numbers stay visible underneath -- they were true once, and
      * the last known state is useful -- but they are unmistakably stale. */
-    if (ui->link_down) {
+    /* GLANCE and DETAIL ONLY.
+     *
+     * The banner is a full-width bar across the middle and touch geometry does
+     * not move under it, so on every other screen it sat on top of live
+     * controls: on MENU it covered WIFI SETUP entirely (CYD_AS_ROW(3) is
+     * y107..133) and clipped RESTART, so tapping the red bar FIRED one of
+     * them; on ACTIONS it buried most of both toggles, and fan boost returns
+     * without a confirm; on KEYBOARD it covered two character rows. link_down
+     * is precisely when someone reaches for RESTART or REBOOT.
+     *
+     * Nothing is lost by scoping it -- the header pill already reads MINER
+     * DOWN on every screen. */
+    if (ui->link_down && (ui->screen == CYD_SCREEN_GLANCE ||
+                          ui->screen == CYD_SCREEN_DETAIL)) {
         int by = CYD_LAYOUT_H / 2 - 18;
         tft.fillRect(0, by, CYD_LAYOUT_W, 36, C_BAD);
         tft.setTextDatum(MC_DATUM);

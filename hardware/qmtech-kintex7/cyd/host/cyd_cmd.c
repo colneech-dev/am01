@@ -90,15 +90,37 @@ cyd_cmd_kind_t cyd_cmd_parse(const char *line, cyd_cmd_t *out)
      * rather than half-read. */
     if (strcmp(verb, CYD_CMD_SET_WIFI) == 0) {
         p = token(p, out->ssid, sizeof out->ssid);
-        if (!p || !out->ssid[0]) return CYD_CMD_KIND_NONE;
-        while (*p == ' ') p++;
-        if (!*p) return CYD_CMD_KIND_NONE;   /* an open network is not this */
+        if (!p || !out->ssid[0]) goto bad;
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) goto bad;                  /* an open network is not this */
         snprintf(out->psk, sizeof out->psk, "%s", p);
+
+        /* REJECT " AND \ IN BOTH FIELDS.
+         *
+         * The daemon writes these into wpa_supplicant.conf as ssid="%s" and
+         * psk="%s". A passphrase ending in a backslash escapes the closing
+         * quote; a bare quote closes the string early. Either way the config
+         * does not parse, wpa_supplicant exits, and a board reached over WiFi
+         * is gone until someone walks to it. This is not shell injection --
+         * every system() argument here is a literal -- it is config-syntax
+         * injection, and the fix belongs at the parser, not the writer.
+         *
+         * Refusing beats escaping: a passphrase that cannot be represented is
+         * better rejected while the user is standing at the panel. */
+        for (const char *q = out->ssid; *q; q++)
+            if (*q == '"' || *q == '\\') goto bad;
+        for (const char *q = out->psk; *q; q++)
+            if (*q == '"' || *q == '\\') goto bad;
+
+        /* Trailing whitespace would be configured literally and is almost
+         * never intended. */
+        size_t pn = strlen(out->psk);
+        while (pn && (out->psk[pn - 1] == ' ' || out->psk[pn - 1] == '\t'))
+            out->psk[--pn] = '\0';
         /* WPA2 is 8..63 characters. Rejecting here means the daemon never
          * writes a config wpa_supplicant would refuse, which would drop a
          * headless board off the network with no way back in. */
-        size_t n = strlen(out->psk);
-        if (n < 8 || n > 63) return CYD_CMD_KIND_NONE;
+        if (pn < 8 || pn > 63) goto bad;
         out->kind = CYD_CMD_KIND_SET_WIFI;
         return out->kind;
     }

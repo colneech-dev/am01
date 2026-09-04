@@ -113,6 +113,11 @@
 #define CYD_POOL_CONF_PATH  "/boot/am01-miner.conf"
 /* wpa_supplicant's per-interface config. Holds a PSK, so it is written
  * 0600 and its contents are NEVER logged. */
+/* Regulatory domain written into wpa_supplicant.conf. NOT optional: without
+ * country= the regdomain stays at world (00), the firmware refuses the
+ * channel, and wlan0 sits in SCANNING with the radio working perfectly. Match
+ * this to the shipped overlay config if the board moves country. */
+#define CYD_WIFI_COUNTRY    "GB"
 #define CYD_WPA_CONF_PATH   "/etc/wpa_supplicant/wpa_supplicant-wlan0.conf"
 
 /*

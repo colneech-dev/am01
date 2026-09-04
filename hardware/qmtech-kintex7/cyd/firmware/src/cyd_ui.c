@@ -160,7 +160,17 @@ void cyd_ui_pool_sync(cyd_ui_t *ui, const cyd_status_t *st)
         return;
     /* NEVER while the user is editing. A status arrives once a second and
      * would otherwise overwrite half-typed input mid-keystroke. */
-    if (ui->screen == CYD_SCREEN_POOL || ui->screen == CYD_SCREEN_KEYBOARD)
+    /* CONFIRM TOO -- and that omission was the expensive one.
+     *
+     * needs_release forces the user to lift and re-press before YES, so CONFIRM
+     * is on screen for at least one status tick. That status arrived, this
+     * function ran, found a colon in st->pool and overwrote pool_host and
+     * pool_port with the miner's CURRENT values. YES then sent set_pool with
+     * the OLD host and port and the NEW worker -- written to /boot, surviving a
+     * reflash, with nothing on screen to say the host was not the one typed.
+     * Shares would go to the old pool under a worker that may not exist there. */
+    if (ui->screen == CYD_SCREEN_POOL || ui->screen == CYD_SCREEN_KEYBOARD ||
+        ui->screen == CYD_SCREEN_WIFI || ui->screen == CYD_SCREEN_CONFIRM)
         return;
 
     /* status carries "host:port" and no worker, so only these two can be
