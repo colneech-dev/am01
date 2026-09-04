@@ -1047,3 +1047,54 @@ TIMES are identical -- value-only comparison would not catch a latency shift,
 since the sequences would still match with every result a cycle late.
 
 Status: routing (tag `premixv2_afa4b22`) and equivalence both in progress.
+
+### v2 RESULT: pre-mix pipelining does NOT help. Line closed.
+
+All 5 seeds routed (v1 could not), and v2 used ~1,584,000-1,610,000 wires
+against a baseline of ~1,605,000-1,612,000 -- so removing the 640-bit shadow
+copy did fix the structural damage. It just did not buy any clock.
+
+Genuine post-route `clk_h`, each taken from the `Max frequency` line that
+FOLLOWS a converged `overuse=0` iteration (verified per seed, not the
+pre-route SA estimate):
+
+| | min | median | mean | max | pass |
+|---|---|---|---|---|---|
+| baseline (e2nbfix) | 145.14 | 155.79 | **165.16** | 197.43 | **5/5** |
+| premix v2 | 122.59 | 157.11 | **147.86** | 168.63 | **4/5** |
+
+    baseline  145.14 152.44 155.79 174.98 197.43
+    premix v2 122.59 133.51 157.11 157.48 168.63
+
+The median moves +1.32 MHz (+0.8%) -- noise, against a baseline spread of
+145-197. Every other statistic is worse: the **mean drops 17.30 MHz
+(-10.5%)**, the best seed loses 28.8 MHz, and the worst seed now **FAILS**
+the 133.33 MHz target at 122.59 MHz.
+
+**Conclusion: the pre-mix XOR was not the binding constraint.** This is the
+third independent confirmation that the design is WIRE-limited, not
+logic-limited (after `noabs`, and after v1's routing collapse): shortening
+the logic path by one XOR level changes nothing, because routing is 70-91%
+of the critical path. Cutting logic depth is a dead end here.
+
+`--pipeline-premix` is kept in odo_gen (default off, verified equivalent) as
+a documented negative result, so nobody re-runs this experiment. Do not
+enable it: it costs a seed and lowers the mean.
+
+Equivalence, for the record -- `sim/tb_premix_equiv.v`, T=4 `--bram-out-reg`:
+
+| | result |
+|---|---|
+| positive | **PASS -- 30 results identical, and no latency shift** |
+| negative (`+brk=3`) | **FAIL -- 28 of 30 differ** |
+
+28 of 30 is exactly right (brk=3 leaves results 0-1 intact). The latency
+assertion passing confirms v2 is cycle-neutral as designed.
+
+### Where speed can still come from
+
+With hashrate proportional to BRAM consumed, BRAM at 94%, and clock
+improvement via logic depth now empirically ruled out, the remaining honest
+levers are placement/routing quality -- seed choice alone swings 145-197 MHz,
+a far larger effect than any RTL change tried here -- and closing the
+openXC7-versus-Vivado gap. RTL micro-optimisation of the datapath is not it.
