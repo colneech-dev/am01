@@ -625,6 +625,57 @@ build.sh's hardcoded 6-column default via `run_throughput3_cols7.sh`).
 Results in `seed_ab_results.tsv`, tags `throughput3` (original 6-col) and
 `throughput3_cols7_yb40` (the fix).
 
+### THROUGHPUT=3 is FUNCTIONALLY VERIFIED (2026-09-04)
+
+Until now the 44.4 MH/s figure rested on a core whose arithmetic had never
+been checked. That mattered: T=3 is not merely a rate change --
+`unrolling` 21 -> 28, `periods` 4 -> 3, `extra_delay` 2 -> 1 (the
+`gcd(throughput, RoundCycles*unrolling + extra_delay) == 1` search lands
+elsewhere), latency 259 -> 255. An off-by-one there yields a core that runs
+at full speed and emits WRONG digests -- silent pool rejects, not a crash.
+This project has already been bitten by exactly that once: the round-key
+tap bug voided every `--bram-out-reg` measurement taken before discovery.
+
+`sim/tb_t3_equiv.v` compares the T=3 core against the verified T=4
+reference. The two consume input at different rates, so a cycle-wise diff
+would report mismatch on a correct pair; instead each core is fed its own
+cadence from the SAME value sequence (input is a function of that core's
+own feed index, never of the cycle) and the emitted result SEQUENCES are
+compared. Each core has its own input register so the negative control can
+corrupt the test core alone -- perturbing a shared input would change both
+equally and still agree, which is how an earlier control in this project
+was found to be inert.
+
+| | result |
+|---|---|
+| positive | **PASS -- 140 results byte-identical** |
+| negative control (`+brk=3`) | **FAIL -- 12 of 15 differ** |
+| verdict | **SOUND** |
+
+The negative count is exactly right, which is the strongest part: `brk=3`
+corrupts the test core from its 3rd block onward, so results 0-2 (clean
+blocks) match and 3-14 differ. 12 of 15 is precisely that -- the control
+fails in the specific place it was aimed at, not merely somewhere.
+
+**Bonus: the throughput claim is confirmed empirically, independent of
+static timing analysis.** In the same 800 cycles the T=4 reference emitted
+**140** results and the T=3 core emitted **188** -- a ratio of **1.343**
+against the theoretical 4/3 = 1.333. Up to this point +33% rested purely on
+`133.33 MHz / clocks-per-hash` arithmetic; this is the core actually
+emitting a third more blocks, with identical digests.
+
+So **44.4 MH/s now rests on a verified core.** Reproduce with:
+
+    odo_gen <epoch> 4 ref_4 --bram-out-reg > /tmp/v_t4.v
+    odo_gen <epoch> 3 tst_3 --bram-out-reg > /tmp/v_t3.v
+    iverilog -g2012 -o tb_t3 sim/tb_t3_equiv.v /tmp/v_t4.v /tmp/v_t3.v
+    ./tb_t3 +n=800            # must PASS
+    ./tb_t3 +n=300 +brk=3     # must FAIL
+
+Note the runtime: ~28.4 s/cycle for these 640-bit cores under iverilog, so
+n=800 is ~6h18m and n=300 ~2h30m. A FAIL is reported on ANY mismatch
+regardless of sample size, so the short negative is sufficient.
+
 ### Seed 3 does NOT converge without congestion awareness (2026-09-03)
 
 Completing the 7-column seed set honestly: seed 3 **failed to route** --
