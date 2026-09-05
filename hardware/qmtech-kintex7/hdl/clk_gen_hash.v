@@ -79,8 +79,14 @@
 //   MULT 19 -> 158.33MHz, 6.316ns, predicted slack +0.214ns
 //   MULT 20 -> 166.67MHz, 6.000ns, predicted slack -0.102ns   predicted fail
 //
-// SECOND BUMP, 2026-09-05: MULT 19 -> 21, clk_h 158.33 -> 175.00MHz (+10.5%).
-// Hashrate 2 * 175 / 4 = 87.5 MH/s, up from 79.2.
+// SECOND BUMP, 2026-09-05: MULT 19 -> 24, clk_h 158.33 -> 200.00MHz (+26.3%).
+// Hashrate 2 * 200 / 4 = 100.0 MH/s, up from 79.2.
+//
+// This catches the file up with reality rather than proposing anything new: a
+// MULT 24 / 200MHz bitstream is ALREADY built, flashed and earning
+// (vivado/artifacts/am01_VER0x0203_200.00MHz_epoch1788480000_OUTREG_MULT24.bit,
+// per build_mux4.tcl's header). The parameter here was simply never committed
+// alongside it, so the repo said 158.33MHz while the board ran 200MHz.
 //
 // THE PREDICTION ABOVE WAS WRONG, and the way it was wrong matters. It
 // extrapolated from a FIXED 6.102ns worst path (the 0x0202 build's 7.500ns
@@ -95,24 +101,36 @@
 //
 //   MULT 20        166.67MHz   WNS +0.508ns   (predicted to FAIL at -0.102)
 //   MULT 20.5      170.83MHz   WNS +0.427ns
-//   MULT 21        175.00MHz   WNS +0.194ns   <- chosen
+//   MULT 21        175.00MHz   WNS +0.194ns
 //   MULT 22 OUTREG 183.33MHz   WNS +0.930ns
-//   MULT 24 OUTREG 200.00MHz   WNS +0.763ns
+//   MULT 24 OUTREG 200.00MHz   WNS +0.763ns   <- chosen, and already flashed
 //
-// +0.194ns at 175MHz is 3.4% of the 5.714ns period -- real but thin. Hold is
-// fine (WHS +0.027ns). If any board proves marginal, MULT 20 gives back 8.3MHz
-// for 2.6x the setup margin; MULT 20.5 sits between them.
+// The first three rows are the pre-OUTREG core and are kept only for the
+// comparison. The OUTREG rows are the core this repo actually ships:
+// hdl/odocrypt/encrypt.v is generated `--bram-out-reg`, whose extra pipeline
+// stage (BRAM DO_REG buys clock-to-out 2.454ns -> 0.882ns) breaks the critical
+// path. That is why 200MHz there carries FOUR TIMES the margin of 175MHz on
+// the plain core, and why 200MHz rather than 175MHz is the right setting.
 //
-// The OUTREG rows are a DIFFERENT core (odo_gen --bram-out-reg, +11346
-// registers, same 420 BRAM tiles and same LUTs) whose extra pipeline stage
-// breaks the critical path -- which is why 200MHz there has 4x the margin of
-// 175MHz here. That is the bigger prize (200MHz = 100 MH/s, +26%), but it
-// changes the datapath schedule and so needs functional equivalence checking
-// before it can ship. This bump deliberately does NOT take it: MULT 21 is the
-// same core as today, only clocked faster.
+// Throughput is not traded away for that latency: rounds go 2 -> 3 cycles and
+// latency 171 -> 252, but THROUGHPUT is clocks-per-hash (keccak800.v:188),
+// fixed at 4 by miner.v:18, and `write` is self-reported via
+// progress[latency-1]. The deeper pipeline just holds more work in flight.
+// See openxc7/AUDIT-BUILT-VS-TESTED.md, "Throughput is NOT lost".
 //
-// VCO = 50 * 21 = 1050MHz, inside the -1 grade's 600-1200MHz range. clk_2x
-// becomes 350MHz but nothing consumes it (synthesis drops its BUFG), and
+// MULT 24 IS THE CEILING for this divider arrangement, not a free choice:
+// VCO = 50 * 24 = 1200MHz is exactly the -1 grade's maximum. MULT 25 would ask
+// for 1250MHz and is out of spec. Going faster would need CLKOUT_DIVIDE_2X = 2
+// (clk_h = VCO/4 = 300MHz), which puts clk_2x at 600MHz -- impossible. So
+// 200MHz is the end of the road for clk_h here; more hashrate has to come from
+// more instances, which is what the mux4 experiment is for.
+//
+// +0.763ns at 200MHz is 15.3% of the 5.000ns period, and hold is fine (WHS
+// +0.032ns). If a board proves marginal, MULT 22 gives back 16.7MHz for
+// slightly MORE margin (+0.930ns).
+//
+// VCO = 50 * 24 = 1200MHz, the -1 grade's maximum. clk_2x
+// becomes 400MHz but nothing consumes it (synthesis drops its BUFG), and
 // bus_clk is still sys_clk_50m straight through, so the UART baud and fan PWM
 // divider are untouched.
 //
@@ -130,8 +148,8 @@
 
 module clk_gen_hash #(
     parameter CLKIN_PERIOD_NS = 20.000, // 50MHz input
-    parameter CLKFBOUT_MULT   = 21,     // VCO = 50MHz * 21 = 1050MHz (7-series -1: 600-1200MHz range)
-    parameter CLKOUT_DIVIDE_2X = 3      // clk_2x = 1050/3 = 350.00MHz, clk_h = 1050/6 = 175.00MHz
+    parameter CLKFBOUT_MULT   = 24,     // VCO = 50MHz * 24 = 1200MHz (7-series -1: 600-1200MHz range)
+    parameter CLKOUT_DIVIDE_2X = 3      // clk_2x = 1200/3 = 400.00MHz, clk_h = 1200/6 = 200.00MHz
 )
 (
     input  wire clk_in,     // from sys_clk_50m (via IBUF upstream)
