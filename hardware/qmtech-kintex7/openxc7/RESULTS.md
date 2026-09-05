@@ -195,7 +195,7 @@ does not converge:
 | seed | iter=1 overuse | outcome |
 |---|---|---|
 | 1 | 307999 | ground down to 3034 by iter=31 (~15h), then **hard router failure**: `ERROR: Failed to route arc 174 of net odocrypt_gpio_wrapper_inst.g_miner[1]...midread, from SITEWIRE/SLICE_X88Y222/DQ to SITEWIRE/SLICE_X89Y220/C3` |
-| 3 | 320092 | tracking seed 1's trajectory closely at every matched iteration; still running |
+| 3 | 320092 | tracked seed 1's trajectory closely at every matched iteration (e.g. iter=11: 5608 vs seed 1's 5330); killed intentionally at iter=16 (overuse=3878, no error yet) to free RAM for the congestion-aware experiment below, which had become the higher-value run |
 
 Seed 1's failure is not a slow-convergence timeout -- router2 exhausted its
 search budget on one specific arc near the miner-1 boundary and aborted the
@@ -211,11 +211,1039 @@ redistributes the unconstrained LUT/FF logic around the BEL-pinned BRAMs; at
 94% occupancy there's no free area for that redistribution to drain
 congestion into).
 
-**Working conclusion:** 94% BRAM occupancy does not route to completion in
-this flow (yosys/nextpnr-xilinx/prjxray) on this device within a practical
-time budget, even with a floorplan tuned specifically for it. This is
-consistent with the placer/router having no congestion-aware placement step
-(see `am01-general-floorplanner-idea` memory) -- Vivado handles the same BRAM
-density because it spreads logic away from saturated columns *during*
-placement rather than discovering the jam during routing and fighting it with
-rip-up/reroute after the fact.
+**Working conclusion (superseded below):** 94% BRAM occupancy does not route
+to completion in this flow (yosys/nextpnr-xilinx/prjxray) on this device
+within a practical time budget, with a plain floorplan and no congestion
+awareness in placement. This was consistent with the placer/router having no
+congestion-aware placement step (see `am01-general-floorplanner-idea`
+memory) -- Vivado handles the same BRAM density because it spreads logic away
+from saturated columns *during* placement rather than discovering the jam
+during routing and fighting it with rip-up/reroute after the fact.
+
+## Congestion-aware placement: ~30x lower residual overuse, still does not fully route -- 2026-08-31
+
+`nextpnr-xilinx-heatmap` commit `42cecc26` (2026-08-23) already implements
+the missing congestion-aware placement step, gated behind env vars, unused
+and "unmeasured on any real design" until now:
+
+* `NEXTPNR_TILE_NETS=<w>` -- during strict legalisation, charges a cell for
+  each of its input nets that is not already entering the destination tile
+  (shared-driver cells are free; a genuinely new source costs `w`). Targets
+  the verified geometric-median hotspot mechanism directly (see
+  `am01-placement-hotspot-findings` memory).
+* `NEXTPNR_WIRE_DEMAND=<cap>` -- a RUDY estimate (each net spreads its
+  half-perimeter uniformly across its bounding box) feeding HeAP's spreader,
+  which is otherwise blind to routing demand on a design this lightly
+  occupied in LUTs/FFs.
+
+Tested together (`TILE_NETS=8 WIRE_DEMAND=5.0`) on the same balanced
+2-miner floorplan, seed 5:
+
+| iter | plain floorplan (seed 1/3) | congestion-aware |
+|---|---|---|
+| 1 | 307999 / 320092 | 301961 |
+| 2 | 45858 / 49770 | 39540 |
+| 11 | 5330 / 5608 | 687 |
+| 29 | (seed1 hadn't reached this low) | 262 |
+
+At matched iterations the congestion-aware run ran at roughly **8x lower
+overuse than the plain floorplan by iter=11**, and kept dropping to a floor
+around **96-140** by iter~76-108 -- a **~30x lower residual** than seed 1's
+terminal 3034.
+
+**FINAL for this attempt (2026-09-01):** it did not reach overuse=0. Best
+overuse was **96 at iter=76**, never beaten again; overuse then drifted
+upward (145 by iter=129, 219 by iter=164) rather than settling flat, so this
+was a genuine floor, not noise around a slow decline. Killed at iter=164 as
+no longer productive (~13h runtime). No stall-out or hard router error was
+reached -- it was still slowly getting worse when stopped, well before
+`NEXTPNR_ROUTER2_MAX_STALL=250` would have force-terminated it (~iter 326).
+
+**Revised conclusion:** placement-time congestion awareness is a real,
+large lever on this design -- not a marginal tweak. `TILE_NETS` and
+`WIRE_DEMAND` should be considered required, not optional, for any further
+94%-occupancy attempt, but this configuration alone (8, 5.0) is not
+sufficient to fully route.
+
+## Ground-truth congestion feedback -- phase 1 result, phase 2 launched -- 2026-09-01
+
+`run_2miner_congmap.sh`: the same `TILE_NETS=8 WIRE_DEMAND=5.0` placement,
+seed 5, forced through to completion via
+`NEXTPNR_SKIP_FAILED_ARCS=1 NEXTPNR_DUMP_CONGESTION=<path>` instead of
+hard-erroring on the first unroutable arc. Ran ~15h (574 iterations). The
+run was not monotonic -- it broke through its earlier plateau mid-way
+(new best: overused=59, unrouted=2 at iter=324, later briefly overused=61
+unrouted=0 at iter=385) before degrading again into a worse oscillation
+(peaked overused=258). Final accepted state at iter=574 (stall-out):
+
+    router2: SKIP_FAILED_ARCS - accepting partial route with 188 overused
+    wire(s) after 574 iterations; 319 net(s) left with unrouted arcs.
+
+Not a working design (319 unrouted nets is substantial), and the `clk_h`
+timing line reported was unchanged from the pre-route estimate (nextpnr
+can't compute real post-route delay through that many unrouted nets) --
+not a genuine result either way. But it exported
+`seedrun/2miner_congmap_s5_tn8_wd5.0/congestion.csv` (365 rows, 188KB): the
+REAL per-tile overuse this specific placement produced, not a proxy.
+
+**Phase 2** (`run_2miner_congmap2.sh`, launched immediately after, seed 7):
+same `TILE_NETS=8 WIRE_DEMAND=5.0` base plus
+`NEXTPNR_CONGESTION_MAP=<phase-1 congestion.csv> NEXTPNR_CONGESTION_W=2`
+(first-guess weight, not tuned) -- confirmed loading
+(`NEXTPNR_CONGESTION_MAP: loaded 365 rows`) and actively legalising against
+it. This is the design's first attempt guided by measured routing failure
+rather than a placement-time guess. Check the live log / a later update for
+the outcome.
+
+**If this does not fully route either:** retune `TILE_NETS`/`WIRE_DEMAND`
+magnitudes directly (e.g. `TILE_NETS=16` or `24`) as a cheaper, less
+targeted next bet, or fall back to BRAM->LUT conversion (see
+`am01-hashrate-scaling-options` memory) to reduce occupancy below whatever
+level this flow can actually route.
+
+**`CONGESTION_W=2` result (2026-09-01): killed at iter=10, consistently
+worse than the plain congestion-aware baseline (no map) at every matched
+iteration** -- iter=1: 305287 vs 301961, iter=3: 14003 vs 7021, iter=9: 5989
+vs 824, iter=10: 5847 vs 727 (baseline numbers). The gap widened rather than
+closed as iterations progressed.
+
+**`CONGESTION_W=0.5` result: also killed, also underperforming** -- iter=3:
+17948 (vs baseline 7021, vs cw=2's 14003 -- WORSE than both), iter=5: 11464
+(vs baseline 1761). Confounded by seed variance (seed 8 vs 7 vs 5), but
+across both weights tried, the ground-truth `CONGESTION_MAP` never beat the
+plain `TILE_NETS`/`WIRE_DEMAND` baseline at any matched iteration. Killed at
+iter=7 (overuse=10148) to redirect effort.
+
+## Discovered pre-existing research -- reframes the whole approach (2026-09-01)
+
+Found `CONGESTION-RESEARCH-PLAN.md`, `SESSIONS.md`, `TESTS-TO-RUN.md`, and
+`AUDIT-BUILT-VS-TESTED.md` in this same directory, dated 2026-08-22 through
+08-28 -- extensive prior work on these exact same placer knobs
+(`TILE_NETS`/`WIRE_DEMAND`/`CONGESTION_MAP`), not previously read this
+session. Key facts that change confidence in tonight's approach:
+
+* **`TESTS-TO-RUN.md` T16 confirms tonight is the first real 2-miner routing
+  attempt** -- "openXC7 has only ever built `nm1`." Not duplicated work.
+* **`SESSIONS.md` already flagged the exact regime tonight is fighting**:
+  "`NUM_MINERS=2` needs 840/890 BRAMs = 94% utilisation. Vivado does it; the
+  striping strategy has almost no room to distribute egress at that
+  density." Written before tonight, independently arrives at the same
+  conclusion reached the hard way over ~30h of nextpnr runs.
+* **`WIRE_DEMAND=5.0` (used all night) was never grounded.** The 1-miner
+  placer-knob screen in `AUDIT-BUILT-VS-TESTED.md` sec 2a found `WIRE_DEMAND`
+  has a real, non-monotonic optimum near **1.0** (2.0 too loose to trip any
+  tile, 0.5 tight enough to thin the whole die). Different regime (1-miner
+  Fmax vs 2-miner routability), so not guaranteed to transfer, but a far
+  better-grounded value than the blind guess used tonight.
+* **The single most decisive untried experiment is a 2-miner version of T5**
+  (Vivado's placement fed into nextpnr's own router). The 1-miner equivalent
+  already ran (`CONGESTION-RESEARCH-PLAN.md` "Step 1") and established
+  *"placement owns the gap, not routing"* -- nextpnr's own router beat
+  Vivado's router (89.30 vs 63.55 MHz) on the *same* nextpnr placement. That
+  result validates attacking placement rather than the router -- but only
+  for the 1-miner Fmax problem; nobody has run the 2-miner routability
+  version. Would need the existing `vivado_route_nextpnr_placement.tcl`
+  name-mapping pipeline extended to the 2-miner netlist. Bigger undertaking
+  than a parameter sweep; flagged as the real next investment, not
+  attempted tonight.
+
+**`TILE_NETS=8 WIRE_DEMAND=1.0` (seed 9) result: also killed, also
+underperforming** -- iter=1: 349740 (vs wd=5.0's 301961 -- WORSE), iter=3:
+27125 (vs 7021). The 1-miner-screened "optimum" of 1.0 does not transfer to
+this regime either. Across every weight/map combination tried tonight
+(`WIRE_DEMAND` 1.0/5.0, `CONGESTION_W` 0.5/2, with and without
+`CONGESTION_MAP`), the plain `TILE_NETS=8 WIRE_DEMAND=5.0` configuration
+(seed 5, best combined overuse 61 at iter=324) remains the best result
+found. Killed at iter=3 to redirect effort toward Option A (below), which
+sidesteps the BRAM-occupancy wall directly instead of continuing to search
+this parameter space.
+
+---
+
+# Option A / Option B: escape the BRAM wall instead of fighting it (2026-09-01)
+
+Every 2-miner attempt above fights the same 94% BRAM occupancy wall through
+placement/routing tricks. Two alternatives instead **reduce the resource
+demand directly** -- sized and one of them (A) launched tonight; the other
+(B) is planned, not executed, for pickup later. Both build on the "known
+good" recipe throughout this project: `odo_gen --bram-out-reg`,
+`BRAM_OUTREG=0` (register in fabric), `BRAM_FP=1 BRAM_YBASE=40` (starting
+point -- see caveat below), `CRIT_DIST=1.0` (build.sh default).
+
+## THROUGHPUT is discretized, not a dial
+
+`odo_gen`'s `THROUGHPUT` argument is literally clocks-per-hash, an integer.
+Internally `unrolling = (ROUNDS-1)/throughput + 1` (`ROUNDS=84`), and the
+*real* measured throughput is `periods = (ROUNDS-1)/unrolling + 1` --
+integer division, so hashrate only changes at specific `unrolling`
+thresholds. Checked exhaustively: `unrolling=21..27` all give `periods=4`
+(today's baseline, 1.00x), `unrolling=28..41` all give `periods=3` (1.33x,
+no better with more area), `unrolling=42` gives `periods=2` (2.00x). There
+is no resource-efficient point between these -- "THROUGHPUT=3.5" is not
+buildable; 28 is already the minimum-area point for 1.33x.
+
+BRAM per unrolled round, measured from the existing 1-miner design: exactly
+**20** (420 BRAM / unrolling=21). Scales linearly with unrolling.
+
+| `THROUGHPUT` | unrolling | BRAM | occupancy | hashrate (same Fmax) |
+|---|---|---|---|---|
+| 4 (current 1-miner) | 21 | 420 | 47% | 1.00x |
+| 3 | 28 | 560 | 63% | 1.33x |
+| 2 | 42 | 840 | 94% | 2.00x -- **same wall as 2 miners** |
+| 1 | 84 | 1680 | 189% | doesn't fit |
+
+`THROUGHPUT=2` alone is not an escape from the wall -- it's the *same*
+840/890 occupancy as `NUM_MINERS=2`, reached via one 42-stage pipeline
+instead of two 21-stage ones. Not obviously better (arguably worse: one
+long serial chain instead of two chains that can each occupy their own half
+of the die), and not attempted for that reason.
+
+## LUTRAM conversion: the direct fix for BRAM occupancy
+
+LUT occupancy is nowhere near its ceiling at any config tried (~10-21%
+typical). Xilinx SLICEM LUTs can implement small RAMs (`ram_style =
+"distributed"`) instead of block RAM (`"block"`) -- a per-module synthesis
+attribute, no schedule/latency change. 10 distinct large-sbox module types
+exist (`STATE_SIZE = DIGEST_BITS/WORD_BITS = 640/64 = 10`), each
+instantiated once per unrolled round, so converting N of 10 gives almost
+exactly N/10 of BRAM demand moved to LUT fabric. Cost model (measured
+elsewhere, see `am01-hashrate-scaling-options` memory): ~420 LUTs per
+converted instance.
+
+## Option A (LAUNCHED 2026-09-01): `THROUGHPUT=2` + `--lutram=3`
+
+Converts 3 of 10 sbox types to LUTRAM, bringing `THROUGHPUT=2`'s BRAM
+demand from the 94% wall down to the same 63% that `THROUGHPUT=3` reaches
+unaided -- while keeping the full 2.00x hashrate:
+
+| | BRAM | LUT | hashrate |
+|---|---|---|---|
+| computed | 560 (63%) | ~208k (51%, **never tested on this design**) | 2.00x |
+
+**Implementation, done tonight:**
+* `odo_gen` gained `--lutram=N`: marks the first N of the 10 large-sbox
+  module types `ram_style="distributed"` instead of `"block"`.
+* `hdl/odocrypt/miner_t2.v`: `THROUGHPUT=2` variant of the pinned `miner.v`
+  (THROUGHPUT and the encrypt module name are compiled-in, not
+  parameterised -- a separate file was cheaper and safer than making
+  miner.v itself parametric). Must never be compiled alongside `miner.v`
+  (duplicate module names -- fails loudly, not silently).
+* `run_option_a.sh`: the known-good build recipe with `miner.v` swapped for
+  `miner_t2.v` and the wider `--lutram=3` core. Asserts key taps (**1 4 7**,
+  unchanged -- `RoundKeyTap` depends on `RoundCycles()`, i.e.
+  `--bram-out-reg`, not on throughput) and the lutram split (3
+  distributed / 7 block) before spending hours on synthesis.
+* Functional equivalence (`--lutram=3` vs `--lutram=0`, both `THROUGHPUT=2`,
+  same schedule/latency -- verified identical at 254 cycles by inspecting
+  the generated RTL) is running via `run_lutram_equiv.sh` /
+  `tb_lutram_equiv.v`, same queue-compare + negative-control methodology as
+  `run_sched_equiv.sh`. **Check its verdict (`sched_pos.out`/`sched_neg.out`
+  equivalent: `lutram_pos.out`/`lutram_neg.out` in `/tmp`) before trusting
+  any Option A result** -- a `--lutram` bug would produce a fast-looking
+  netlist with wrong digests, the exact failure mode `RoundKeyTap` already
+  demonstrated once this session.
+* Synthesis launched (`run_option_a.sh`, tag `optionA_t2_lutram3`, out dir
+  `out_option_a/`). Check `option_a.console` and `seed_ab_results.tsv` for
+  the outcome.
+
+**Real, unproven risk:** 51% LUT occupancy is a new regime for this design
+-- everything measured so far tops out around 21-25%. `BRAM_YBASE=40` is
+carried over from the 420-BRAM 1-miner layout; this design needs 560, so it
+may spill past Y139 and need retuning -- watch the floorplan report for
+spills before trusting the routed number.
+
+## Option A synthesis FAILED -- `ram_style="distributed"` cannot map a pure ROM on this yosys (2026-09-02)
+
+**The build ran for ~12 hours** (started 22:16, crashed 05:35) under severe
+memory pressure -- yosys peaked at ~11.3 GB RSS / 20+ GB VSZ on a WSL box
+with an 11 GB RAM allocation, driving swap to ~13 GB and stalling the whole
+WSL VM unresponsive to new commands at least twice. It eventually failed at
+`MEMORY_LIBMAP`, not from resource exhaustion:
+
+    found attribute 'ram_style = distributed' on memory
+    ...round40.sboxes.sbox17inst.mem, forced mapping to distributed RAM
+    ERROR: no valid mapping found for memory
+    ...round40.sboxes.sbox17inst.mem
+
+**Root cause, confirmed with isolated <1-minute tests** (not the 12h full
+build) once the failure was understood:
+`techlibs/xilinx/lutrams_xcv.txt` -- the LUTRAM mapping rules this yosys
+build uses for `xc7` -- require every candidate memory to have **at least
+one write-capable port** (`port arsw "RW"`). The large-sbox tables are
+genuine ROMs: written only in an `initial` block, never at runtime, zero
+write ports by construction. Four workarounds tried, all fail the same way
+or worse:
+
+| approach | result |
+|---|---|
+| `ram_style="distributed"` (what Option A shipped) | `ERROR: no valid mapping found` -- reproduces the 12h crash in <15s isolated |
+| + a dummy write port, permanently disabled | Same error -- likely const-folded away before `memory_libmap` runs |
+| `ram_style="logic"` | **Silently drops the memory's read logic entirely** (only FDRE/IO cells in `stat`, no LUTs, no BRAM) -- a correctness bug, not a fix; never trust this value |
+| `case`-statement ROM, no array, clocked or purely combinational + separate register | Yosys's own `proc`/memory-inference still recognises the pattern and reinstates `RAMB18E1` regardless of coding style |
+
+**What survives:** the RTL mechanism itself is confirmed correct at the
+simulation level -- `run_lutram_equiv.sh` finished with the ideal verdict
+(`positive: PASS -- 32 results identical`, `negative: FAIL -- 30 of 32
+differ`, `=> SOUND`). `--lutram=N`'s Verilog output is byte-for-byte
+behaviour-neutral; the failure is purely a synthesis-tool limitation
+(`memory_libmap`'s LUTRAM rules), not a bug in `odo_gen` or in the
+generated RTL. If a working LUT-ROM technique is found later, the
+`--lutram=N` flag and `miner_t2.v` do not need to change.
+
+**What a real fix would need:** bypassing `memory_libmap` entirely for
+these tables -- most likely hand-building the address-decode mux tree from
+explicit LUT6 primitives via a `generate` block (the technique Vivado's
+`phys_opt_design`/XST use for ROM-shaped LUTRAM, and reportedly what some
+open designs do with an explicit `\$lut` instantiation per output bit
+group), rather than relying on any `ram_style` value. Substantially bigger
+and riskier than the attribute change tried here. **Not attempted --
+flagged for whoever picks this up next.**
+
+**Process/infrastructure lesson, independent of the RTL/synthesis
+question:** this WSL box needs either a larger memory allocation
+(`.wslconfig` `memory=` setting) or a smaller synthesis job before
+attempting a design this size again -- 11 GB was not enough headroom even
+for a build that would have succeeded on the RTL/logic side, and the
+resulting swap-thrash made WSL itself unresponsive for extended stretches,
+independent of whether the LUTRAM mapping issue existed.
+
+## `THROUGHPUT=3` alone (no LUTRAM): WORKS, but timing is marginal -- 2026-09-02
+
+The one member of this family that sidesteps the broken LUTRAM mechanism
+entirely: no `--lutram`, all 10 large-sbox types stay `ram_style=block`.
+**This is the first fully successful alternative build of the whole
+session** -- routes cleanly, unlike every 2-miner attempt and unlike Option
+A's crash.
+
+**Resource counts, confirmed exactly as sized:**
+
+| | measured | sized estimate |
+|---|---|---|
+| BRAM | **560 (62.9%)** | 560 (63%) -- exact |
+| LUT | **47,565 (11.7%)** | ~56k (14%) -- came in lower |
+
+**Synthesis and routing both comfortable.** Unlike Option A's 12h crisis,
+this design (only 1.33x baseline vs Option A's ~5x scale) synthesised in a
+few hours without a memory crisis, and every seed routed cleanly to
+`overuse=0 unrouted=0` in 8-19 iterations -- no congestion fight at all,
+consistent with 63% BRAM being comfortably inside the routable regime this
+whole session's 2-miner work never found for 90%+ occupancy.
+
+**But timing is marginal and seed-dependent, unlike the 1-miner baseline:**
+
+| source | clk_h | vs 133.33 MHz |
+|---|---|---|
+| `build.sh`'s own unseeded route | 141.74 | PASS |
+| seed 1 | 132.71 | **FAIL** (by 0.6 MHz) |
+| seed 2 | 121.95 | **FAIL** |
+| seed 3 | 143.88 | PASS |
+
+**Median (n=3): 132.71 MHz -- technically fails the target.** Relative
+hashrate at median: **1.14x** (vs the 1.33x ceiling and vs 2.00x for
+`THROUGHPUT=2`, which remains blocked on the LUTRAM issue). Two of four
+measured configurations fail outright. Contrast with the 1-miner baseline,
+where the *worst* of 5 seeds (145.14) still clears target with 9% margin --
+every seed there passes. A design that only sometimes meets timing is not a
+reliable win.
+
+**Not a floorplan-overflow bug** -- checked the floorplan report directly:
+all 28 rounds fit cleanly within Y40-139 (round 27 ends exactly at Y139,
+no spill).
+
+### y-base sweep (2026-09-02): 40 is already the best of what's testable in this geometry
+
+Reused the already-synthesised netlist (`BRAM_YBASE` only affects the
+floorplan step, not synthesis) to sweep candidates without a
+resynthesis -- `run_throughput3_ybase_sweep.sh`. Result: **nothing beats
+the original 40.**
+
+| y-base | seed 1 result | note |
+|---|---|---|
+| 0 | 107.70 MHz | **invalid** -- killed mid-route (68+ min stuck on iter=1, then slow iter=2; consistent with the historical finding that y-base=0 was the worst option for the smaller 420-BRAM case too) |
+| 20 | **118.41 MHz** | genuine, converged cleanly (iter=103, `overuse=0`) -- but worse than 40 |
+| **40** | **132.71 MHz** | unchanged from the original build -- remains the best found |
+| 53 | -- | **floorplan generation failed outright**: Y53-137 is 84 rows x 6 cols = 504 slots, doesn't fit 560 BRAM |
+
+So the marginal, seed-dependent timing at y-base=40 is not an easy
+misconfiguration -- it looks close to the actual ceiling for this specific
+**6-column** floorplan geometry (`--columns 0,1,2,3,4,5`, hardcoded in
+`build.sh`, also carried over unchanged from the 1-miner default) at 560
+BRAM.
+
+### Column-count fix (2026-09-02): adding X6 WORKS -- 134.86 MHz, real PASS
+
+Column count, not row range, was the right lever. Reused the synthesised
+netlist again, this time varying `--columns` instead of `--y-base`
+(`run_throughput3_cols7.sh`). `--columns 0,1,2,3,4,5,6` (adding X6, which
+only contributes ~20 rows at y-base=40 since it stops at Y59 -- not a full
+7th column, just extra room where the floorplanner needs it):
+
+| config | seed 1 | vs 133.33 MHz |
+|---|---|---|
+| 6 columns, y-base=40 (original) | 132.71 MHz | FAIL (by 0.6 MHz) |
+| **7 columns (+X6), y-base=40** | **134.86 MHz** | **PASS** (1.53 MHz / ~1.1% margin) |
+
+Confirmed as the genuine post-route result (line order checked directly:
+the reported `Max frequency` follows `iter=49 ... overuse=0`, not a
+pre-route estimate). Seeds 2-3 launched to confirm this isn't a lucky
+single seed before adopting it as the new default. **This is the first
+real, confirmed improvement found for THROUGHPUT=3's marginal timing.**
+
+### `rom_style` lead investigated and ruled out for yosys (2026-09-02)
+
+A parallel effort (memory: `am01-hashrate-scaling-options`, "MEASURED
+2026-09-02: --lutram=3 with 3 miners") building the same `--lutram`
+mechanism via **Vivado**, targeting `NUM_MINERS=3`, found Vivado silently
+falls back to raw combinational logic (~730 LUT/instance, not the ~420
+this project's cost model assumed) rather than hard-erroring like yosys
+does, and suspected `rom_style` (not `ram_style`) is the attribute Vivado
+actually needs for a write-less memory -- untested there as of that
+writing.
+
+**Tested on yosys, cheaply (isolated <1min test, not a full rebuild):
+`rom_style="distributed"` hits the identical `ERROR: no valid mapping
+found` as `ram_style`.** yosys's `MEMORY_LIBMAP` recognises the attribute
+name (`found attribute 'rom_style = distributed'...`) but applies the same
+write-port-required LUTRAM rule regardless of which attribute signals ROM
+intent. **Does not unblock Option A / `THROUGHPUT=2` on this toolchain.**
+Worth trying on the actual Vivado flow if that effort continues -- the two
+toolchains' `memory_libmap`/synthesis behaviour are unrelated, so a Vivado
+result doesn't transfer either direction.
+
+**Coordination note:** that same session left a comment in the memory file
+flagging `odo_gen.cpp`'s `--lutram` mechanism as uncommitted/not-theirs and
+asking to check with whoever wrote it -- that's this work (committed on
+`claude/option-a-wide-miner-lutram`, not yet merged anywhere they'd see it
+by default). Worth a heads-up to avoid duplicate or conflicting `--lutram`
+implementations landing independently.
+
+**Config used:** `odo_gen <epoch> 3 encrypt_3 --bram-out-reg` (no
+`--lutram`), `miner_t3.v` (THROUGHPUT=3 variant of the pinned miner.v),
+`BRAM_OUTREG=0 BRAM_FP=1 BRAM_YBASE=40 CRIT_DIST=1.0` (build.sh defaults,
+unchanged from the 1-miner recipe), `--columns 0,1,2,3,4,5,6` (fixed from
+build.sh's hardcoded 6-column default via `run_throughput3_cols7.sh`).
+Results in `seed_ab_results.tsv`, tags `throughput3` (original 6-col) and
+`throughput3_cols7_yb40` (the fix).
+
+### THROUGHPUT=3 is FUNCTIONALLY VERIFIED (2026-09-04)
+
+Until now the 44.4 MH/s figure rested on a core whose arithmetic had never
+been checked. That mattered: T=3 is not merely a rate change --
+`unrolling` 21 -> 28, `periods` 4 -> 3, `extra_delay` 2 -> 1 (the
+`gcd(throughput, RoundCycles*unrolling + extra_delay) == 1` search lands
+elsewhere), latency 259 -> 255. An off-by-one there yields a core that runs
+at full speed and emits WRONG digests -- silent pool rejects, not a crash.
+This project has already been bitten by exactly that once: the round-key
+tap bug voided every `--bram-out-reg` measurement taken before discovery.
+
+`sim/tb_t3_equiv.v` compares the T=3 core against the verified T=4
+reference. The two consume input at different rates, so a cycle-wise diff
+would report mismatch on a correct pair; instead each core is fed its own
+cadence from the SAME value sequence (input is a function of that core's
+own feed index, never of the cycle) and the emitted result SEQUENCES are
+compared. Each core has its own input register so the negative control can
+corrupt the test core alone -- perturbing a shared input would change both
+equally and still agree, which is how an earlier control in this project
+was found to be inert.
+
+| | result |
+|---|---|
+| positive | **PASS -- 140 results byte-identical** |
+| negative control (`+brk=3`) | **FAIL -- 12 of 15 differ** |
+| verdict | **SOUND** |
+
+The negative count is exactly right, which is the strongest part: `brk=3`
+corrupts the test core from its 3rd block onward, so results 0-2 (clean
+blocks) match and 3-14 differ. 12 of 15 is precisely that -- the control
+fails in the specific place it was aimed at, not merely somewhere.
+
+**Bonus: the throughput claim is confirmed empirically, independent of
+static timing analysis.** In the same 800 cycles the T=4 reference emitted
+**140** results and the T=3 core emitted **188** -- a ratio of **1.343**
+against the theoretical 4/3 = 1.333. Up to this point +33% rested purely on
+`133.33 MHz / clocks-per-hash` arithmetic; this is the core actually
+emitting a third more blocks, with identical digests.
+
+So **44.4 MH/s now rests on a verified core.** Reproduce with:
+
+    odo_gen <epoch> 4 ref_4 --bram-out-reg > /tmp/v_t4.v
+    odo_gen <epoch> 3 tst_3 --bram-out-reg > /tmp/v_t3.v
+    iverilog -g2012 -o tb_t3 sim/tb_t3_equiv.v /tmp/v_t4.v /tmp/v_t3.v
+    ./tb_t3 +n=800            # must PASS
+    ./tb_t3 +n=300 +brk=3     # must FAIL
+
+Note the runtime: ~28.4 s/cycle for these 640-bit cores under iverilog, so
+n=800 is ~6h18m and n=300 ~2h30m. A FAIL is reported on ANY mismatch
+regardless of sample size, so the short negative is sufficient.
+
+### Seed 3 does NOT converge without congestion awareness (2026-09-03)
+
+Completing the 7-column seed set honestly: seed 3 **failed to route** --
+600 router iterations, `overuse=82` residual, never reached 0. Its
+`129.20` row in `seed_ab_results.tsv` is therefore **not a routed result**;
+with overuse != 0 that figure is the stale pre-route SA estimate. Read
+correctly the set is **2 of 3 seeds pass, 1 of 3 fails to route at all** --
+so THROUGHPUT=3's real defect is convergence variance, not median Fmax.
+
+## Congestion-aware placement: measured, and it fixes the failing seed (2026-09-03)
+
+Implemented real congestion awareness in the HeAP placer (branch
+`congestion-aware-placement` in the nextpnr tree, commits `e317869a` and
+`ec7d4066`): a per-tile routing-capacity map built from `ctx->getWires()`
+using the same wire-location rule as `router2::setup_wires()`, congestion
+expressed as demand/capacity (`NEXTPNR_CONG_RATIO`), and congestion
+allowed to STEER the spreader -- tightening the region density target and
+weighting the cut objective (`NEXTPNR_CONG_SPREAD`) -- rather than merely
+triggering it. Both knobs default off and multiply by exactly 1.0 when
+off; verified bit-identical against the old binary over 4 placement
+iterations on an identical netlist and seed.
+
+**Two wrong hypotheses, both caught by measurement rather than reasoning,
+recorded because the reasoning looked sound each time:**
+
+1. *"`build_wire_demand()` is computed once and never refreshed."* Wrong --
+   `CutSpreader` is constructed per HeAP iteration, so the demand map
+   already tracked the placement. Only the capacity denominator was absent.
+2. *"RUDY demand must systematically exceed wire-count capacity (a units
+   mismatch)."* Wrong. Instrumenting it (`NEXTPNR_CONG_STATS=1`) over 78302
+   wired tiles gave capacity p50 249.0, demand p50 0.84, **ratio p50
+   0.016**, with only 7-17% of tiles above 1.0. Units are broadly sane.
+   The real defect was **aggregation**: `cong_max()` took the MAXIMUM over
+   a region against a distribution whose max is 1310, so one degenerate
+   tile (capacity p10 is a single wire) set an entire region's multiplier,
+   `overused()` could never be satisfied, and regions expanded until the
+   whole die was spread. Fixed by flooring the capacity denominator at
+   0.25x the device median, aggregating regions by MEAN, and clamping the
+   multiplier (`NEXTPNR_CONG_CLAMP`, default 2.0).
+
+**Measured effect, same netlist and seed throughout:**
+
+| | spread wirelen | router iters | routed `clk_h` |
+|---|---|---|---|
+| off (seed 1) | 5674942 | 49 | **134.86** PASS |
+| broken max-aggregation (seed 1) | 13547342 (+139%) | 49 | 54.84 FAIL |
+| fixed, `RATIO=1.0 SPREAD=0.5` (seed 1) | 6715551 (+18%) | **10** | 129.12 FAIL |
+| off (seed 3) | -- | 600 | **never converged** (overuse 82) |
+| **fixed (seed 3)** | -- | **35** | **139.66 PASS** |
+
+**Conclusion: it buys ROUTABILITY, not Fmax -- exactly as the literature
+says, and that is what this design needed.** On a seed that already routed
+it cost 4.3% of Fmax and cut router iterations 49 -> 10. On the seed that
+could not be routed at all it converged in 35 iterations and produced
+**139.66 MHz, the best of the three**. VPR's own published ablation has the
+same shape (routing failures 15 -> 1, route time 0.49x, critical path
+0.979x).
+
+So the "1 in 3 seeds fails to route" caveat above looks **fixable rather
+than intrinsic**. The open question is whether to apply congestion
+awareness always (costing a few percent on healthy seeds) or only as a
+rescue for seeds that fail to converge -- the latter is strictly better if
+the flow can retry, and needs no further tool work.
+
+Not yet done: an in-process place -> route -> re-place loop (step 4 of the
+plan). Deliberately not built -- it amplifies whatever the estimator does,
+so it should only follow evidence the estimator helps, which now exists but
+is a single data point.
+
+## Congestion awareness does NOT rescue 2 miners -- and the reason is structural (2026-09-03)
+
+Ran the validated congestion-aware placer (`CONG_RATIO=1.0
+CONG_SPREAD=0.5`) on the existing 2-miner 94%-BRAM netlist
+(`out_2miner/am01_qmtech_top.fp.json`), seed 1 -- the identical netlist and
+seed whose baseline hard-failed at iter=31 after ~15h. **It tracked worse
+than that failing baseline at every matched iteration:**
+
+| iter | baseline | congestion-aware |
+|---|---|---|
+| 1 | 307999 | 321924 |
+| 2 | 45858 | 59906 |
+| 3 | 14262 | 23338 |
+| 4 | 9409 | 15519 |
+| 5 | 7965 | 13100 |
+| 6 | 7136 | 12005 (+68%) |
+
+Stopped at iter=6 after 4h41m (~47 min/iteration by then; reaching the
+baseline's iter=31 failure point would have cost ~20 more hours to confirm
+what the trajectory already showed).
+
+**Why it fails here, when it rescued THROUGHPUT=3 seed 3:** the 2-miner
+floorplan **BEL-pins all 840 BRAMs** to fixed sites. The spreader cannot
+move them. So congestion-aware spreading can only redistribute the
+surrounding LUT/FF logic -- which sits at ~21% utilisation and was never
+the constraint -- while adding wirelength. The actual bottleneck is BRAM
+egress from 840 pinned sites, which is structurally out of reach of a cell
+spreader. On THROUGHPUT=3 seed 3 the placement was genuinely free, so
+improving it helped; here the thing that needs to move is nailed down.
+
+The congestion statistics said as much before the run and were
+under-weighted at the time: this design's distribution was only modestly
+hotter than the 12%-LUT design (ratio p50 0.040 vs 0.016; 9.9% vs 7.4% of
+tiles above 1.0). It is BRAM-**occupancy**-limited, not
+general-routing-limited, and RUDY measures wire demand, not BRAM site
+pressure. Right instrument, wrong bottleneck.
+
+### Standing conclusion on 2 miners
+
+**94% BRAM occupancy is beyond this flow on this part.** Everything tried
+has now failed: balanced floorplan partitioning, `--placer-heap-beta` in
+both directions, `TILE_NETS`/`WIRE_DEMAND` proxies, ground-truth
+`CONGESTION_MAP` feedback at two weights, `--lutram` BRAM->LUT conversion
+(dead on both yosys and Vivado -- no 1024-deep dual-port distributed
+primitive exists), and now real capacity-based congestion awareness.
+**Vivado routes it; openXC7 does not.**
+
+### Honest standing against Vivado
+
+| | miners | clock | clocks/hash | hashrate |
+|---|---|---|---|---|
+| **Vivado, measured on silicon** | 2 | 162 MHz | 4 | **~81 MH/s** |
+| openXC7 shipping today | 1 | 133.33 | 4 | 33.3 MH/s |
+| openXC7 best this work (`THROUGHPUT=3`) | 1 | 133.33 | 3 | **44.4 MH/s** |
+
+openXC7 is at **~55% of Vivado**, and the dominant term is the 2x from
+miner count, not clock speed. Note `clk_gen_hash.v` hard-wires clk_h to
+800/6 = 133.33 MHz, so **Fmax is a pass/fail gate, not the operating
+speed** -- real hashrate is 133.33/THROUGHPUT regardless of how much Fmax
+headroom a seed shows.
+
+**Nothing in the openXC7 column has been verified on hardware.** Vivado's
+80 MH/s is a silicon measurement; ours are static timing analysis.
+
+## Global routing tried too -- also worse than the failing baseline (2026-09-03)
+
+`nextpnr-globalroute` (a parallel tree, commits `3f50a59a` + `0c5efea5`)
+implements a coarse routing-capacity model, per-arc A* on a gcell grid,
+PathFinder-style negotiated congestion over that coarse graph, and a
+corridor constraint that filters router2's pips.
+`AUDIT-BUILT-VS-TESTED.md` lists `NEXTPNR_GLOBAL_ROUTE` under "built and
+never exercised" -- this is the first time it has run on a real design.
+
+The global router itself worked: **554141 arcs on a 237x365 gcell grid**.
+Detailed routing then tracked WORSE than the failing baseline:
+
+| iter | baseline | congestion-aware placer | global route |
+|---|---|---|---|
+| 1 | 307999 | 321924 | 348430 |
+| 2 | 45858 | 59906 | **110084** (2.4x baseline) |
+
+Stopped after 2 iterations / 3h18m (~1.6 h per iteration; iteration 6 would
+have cost ~6.4 h more).
+
+**The missing `CRIT_DIST_EXP` in that older tree is not an excuse.** Per
+this audit `CRIT_DIST_EXP=1.0` was *refuted on the routed metric* -- it
+stalled routing at ~1595 overuse where the baseline reached 6. So the
+baseline carried a knob that HURTS routing and still beat the global route
+by 2.4x.
+
+Likely mechanism: the corridor constraint confines detailed routing to the
+coarse path (`NEXTPNR_GR_MARGIN=2` gcells). At this congestion the router
+needs wide detours and the corridor denies them. It is advisory -- the
+`is_bb=false` retry remains an escape hatch -- but evidently not enough.
+
+### Tally: seven approaches, none routes 2 miners
+
+Balanced floorplan partition; `--placer-heap-beta` both directions;
+`TILE_NETS`/`WIRE_DEMAND` proxies; ground-truth `CONGESTION_MAP` at two
+weights; `--lutram` BRAM->LUT conversion (structurally dead on both yosys
+and Vivado -- no 1024-deep dual-port distributed primitive on 7-series);
+capacity-based congestion-aware placement; and now coarse global routing
+with corridor constraints. **Vivado routes it; openXC7 does not.**
+
+### RapidWright: assessed, not attempted
+
+Conceptually the best fit -- two identical miners, and pre-implemented
+module replication is RapidWright's flagship use case. Three blockers, the
+last fatal and device-specific:
+
+1. `RWRoute.SUPPORTED_SERIES = {UltraScale, UltraScale+, Versal}` --
+   Series7 absent, so its router cannot route the stitching.
+2. DCP-centric, so Vivado re-enters the loop for bitstream generation --
+   defeating the only reason to do this (independence from Vivado, which
+   already delivers ~79 MH/s).
+3. **The two regions are not congruent.** Relocation needs a structurally
+   identical target. BRAM columns here: cols 0-4 have 140 sites each, col 5
+   has 130 (ten gaps), col 6 has 60 (stops at Y59). 840 BRAMs need six
+   columns, so the second miner necessarily lands on differently-shaped
+   fabric; and 420 BRAMs in 3 columns is already the full 140-row column
+   height, so there is no vertical alternative either. **This defeats ANY
+   replication-based approach on this part**, not just RapidWright's.
+
+The tree already has a partial native version of the same idea --
+`--fixed-routes` dump (`xilinx/main.cc:56`), a loader binding pips at
+`STRENGTH_LOCKED`, and relocation logic at `xilinx/arch.cc:1191` -- but it
+was built to import golden Vivado clock routing, `NEXTPNR_FIXEDROUTES_HOOK`
+is likewise never-exercised, and the congruence problem blocks repurposing
+it regardless.
+
+### F4PGA / VPR: assessed, not attempted
+
+yosys -> **VPR** -> prjxray; swaps nextpnr for VPR, keeping synthesis and
+bitstream layers. VPR has a mature global-routing congestion model. Not
+installed here and never previously evaluated as a toolchain (VPR appears
+in `CONGESTION-RESEARCH-PLAN.md` only as a source of ideas). The blocker is
+that F4PGA's Xilinx support centres on Artix-7/Spartan-7; **Kintex-7
+(xc7k325t) support is unverified**, and prjxray having kintex7 data is NOT
+the same as F4PGA having a VPR architecture model for it -- that model is
+generated per device and is the multi-week part. Compounding risk: F4PGA's
+Xilinx flow historically had weak hard-block coverage, and this design is
+defined by 840 true-dual-port BRAMs at 94% occupancy.
+
+## Pre-mix pipelining (`--pipeline-premix`) -- 2026-09-04
+
+### Why the clock is the only lever left
+
+Hashrate is **proportional to BRAM consumed**, which rules out the whole
+miners-vs-throughput trade. `BRAM = miners * 20 * unrolling` and
+`hashrate = miners * clock / T`, with `unrolling ~ 84/T`, so the two terms
+cancel:
+
+| config | BRAM | hashrate @158 MHz |
+|---|---|---|
+| 2 miners, T=4 | 840 | **79.0** |
+| 1 miner, T=2 | 840 | **79.0** |
+| 1 miner, T=3 | 560 | 52.7 |
+| 1 miner, T=4 | 420 | 39.5 |
+
+2 miners at T=4 and 1 miner at T=2 are the SAME hashrate for the same BRAM.
+So T=3, though correct and verified, is strictly slower than the shipping
+2-miner build. At 840/890 = 94% occupancy only ~6% remains in that
+dimension. **The clock is the only meaningful lever.**
+
+`RESULTS.md` had already named the obstacle (see "Known remaining
+ceiling"): the critical path is `crypt.state[0] -> pre_mix ->
+crypt.state[1]` -- a 10-way 64-bit XOR reduction feeding all 640 output
+bits, combinational in one clock, ~6.4 ns, capping near 156 MHz. It was
+left undone because 133.33 MHz was already met with margin. That margin is
+now exactly what we want to spend.
+
+### What the flag does
+
+Registers the reduction, splitting the path:
+
+    state[0] -> 10-way XOR tree -> total_r     (long half)
+    total_r  -> 3-input XOR     -> state[1]    (short half)
+
+`in` is registered alongside as `in_r` so the halves stay aligned. Costs
+**one cycle of latency and zero throughput** -- the pre-mix sits outside
+`encrypt_loop`, so the round schedule and the
+`gcd(throughput, RoundCycles*unrolling + extra_delay)` constraint are
+untouched. The outer `progress` register grows 2 -> 3 stages and the
+crypter reads `progress[2]`. Default off; unflagged output is byte-identical.
+
+### Correctness: SOUND
+
+`tb_sched_equiv.v`, pipelined vs unpipelined T=4 (same feed cadence,
+latency differs by 1 so result SEQUENCES are compared):
+
+| | result |
+|---|---|
+| positive | **PASS -- 20 results identical** |
+| negative (`+brk=3`) | **FAIL -- 18 of 20 differ** |
+
+18 of 20 is exactly right: `brk=3` corrupts from the test core's 3rd block,
+so results 0-1 match and 3-19 differ. The extra stage and the progress
+realignment are correct.
+
+### Fmax: MEASUREMENT IN PROGRESS -- no number claimed yet
+
+Baseline to beat is the e2nbfix 1-miner T=4 median **155.79 MHz** (seeds
+145.14 152.44 155.79 174.98 197.43). `run_premix.sh` builds the same
+recipe with `--pipeline-premix` as the only variable and routes 3 seeds
+(tag `premix_afa4b22`).
+
+**Reading caution:** the `Max frequency` line in
+`out_premix/am01_qmtech_top.pnr.log` appears BEFORE the `iter=` lines at
+this stage -- it is the pre-route SA placement estimate, not a result. Only
+a `Max frequency` following a converged `iter= ... overuse=0` counts.
+
+**Expect this may not help.** RESULTS.md's own finding is that this design
+is **wire-limited, not logic-limited** -- routing is ~70% of `base`'s
+critical path and ~91% of `noabs`'s, and "adding registers does not shorten
+wires" (`noabs` traded 1.8 ns of logic for 2.2 ns of routing and lost).
+Cutting logic depth out of the pre-mix may therefore buy little. The
+measurement decides it.
+
+### And a gain would still need the MMCM retuned
+
+Real hashrate is `133.33 / THROUGHPUT` because `clk_gen_hash.v` hard-wires
+the MMCM to VCO 800/6. **Fmax is a pass/fail gate, not the operating
+speed.** Any Fmax headroom only materialises after retuning the MMCM, and
+800/(2n) yields only 200 / 133.33 / 100 MHz -- an intermediate target needs
+a fractional `CLKFBOUT_MULT_F`. The payoff, if the Fmax gain is real, is on
+the **Vivado 2-miner** build that actually delivers the current ~79 MH/s
+(2 x 158/4), not on the openXC7 single-miner numbers.
+
+## Option B (PLANNED, NOT EXECUTED -- pick up after Option A): two `THROUGHPUT=3` miners
+
+Two independent `THROUGHPUT=3` wide miners (each 1.33x, 560 BRAM alone) for
+a higher hashrate ceiling than Option A:
+
+| target | BRAM | LUT | hashrate |
+|---|---|---|---|
+| BRAM held at Option A's 63% margin, `--lutram` on both | 560 (63%) | ~359k (**88%**, high risk) | **2.67x** |
+| BRAM allowed to fill the device, `--lutram` on both | 890 (100%, no margin) | ~214k (53%) | 2.67x |
+
+Higher ceiling than Option A (2.67x vs 2.00x) but trades BRAM congestion for
+LUT congestion of similar severity (88%) at the safe-BRAM setting, or
+leaves zero BRAM margin at the LUT-safe setting -- neither is as clean as
+Option A's 63%/51% split. **Do not build until Option A's real routed
+result is in** -- if Option A's 51% LUT occupancy turns out to already be
+hard to route, Option B's 88% (or 53% LUT + 100% BRAM) is almost certainly
+worse, and the sizing above should be treated as illustrative rather than a
+target to build toward blindly.
+
+**To pick this up:** it needs its own `run_option_b.sh` (two
+`am01_qmtech_top`-style top levels or a `NUM_MINERS(2)`-style top wired to
+two `THROUGHPUT=3 --lutram=N` cores -- N to be chosen once Option A's real
+LUT-occupancy routability is known, not before), its own floorplan (two
+560-BRAM regions, closer in spirit to tonight's `floorplan_brams.py`
+balanced-partition work than to Option A's single-region layout), and its
+own functional-equivalence run (same `tb_lutram_equiv.v` pattern, different
+`THROUGHPUT`/`--lutram` values). None of that exists yet.
+
+### v1 FAILED to route -- and why (measured, not predicted)
+
+The first implementation registered BOTH halves: `total_r` (64 bits) and
+`in_r` (640 bits), the latter a shadow copy of `state[0]` carried across the
+new boundary to keep the halves aligned. It bought a shorter logic path by
+adding **704 flops and 640 extra nets** to a design RESULTS.md already
+characterises as wire-limited. The router's verdict, against the e2nbfix
+baseline on the same recipe:
+
+| | baseline (e2nbfix) | premix v1 |
+|---|---|---|
+| overuse @ iter 9 | ~191 | ~1700 |
+| overuse @ iter 17 | ~35 | 1194 |
+| overuse @ iter 25-33 | **single digits** | ~980 |
+| overuse @ iter 41 | converged | **968, plateaued** |
+| wires | ~1,605,000 | **1,675,500 (+70k)** |
+
+It bottomed at 921 (iter 31) then oscillated back up -- it was not
+converging, it had stalled. Killed at iter 42; **no Fmax was ever obtained,
+and none should be quoted for v1.** This is the exact trade the `noabs`
+experiment already lost (1.8 ns of logic traded for 2.2 ns of routing):
+**adding registers does not shorten wires.**
+
+### v2: register the reduction, not the operand
+
+The 640-bit copy was never necessary. The encrypt top already registers the
+operand (`state[0] <= in`), so instead of duplicating it, hang the XOR tree
+off the PORT `in` -- one cycle upstream of where it is consumed -- and
+register only the 64-bit `total` on the SAME edge:
+
+    always @(posedge clk) begin
+        total_r  <= tree(in);       // 64 flops; the long half ends here
+        state[0] <= in;             // already existed
+    end
+    next = state[0] ^ mix(total_r); // the short half
+
+`total_r` and `state[0]` capture the same value on the same edge, so they are
+aligned for free. Same path split as v1, but **64 extra flops instead of 704,
+and zero added latency** -- so `progress` stays at 2 stages and the read-pulse
+alignment is untouched (v1 needed 3).
+
+Verified by `sim/tb_premix_equiv.v`, which additionally asserts the emission
+TIMES are identical -- value-only comparison would not catch a latency shift,
+since the sequences would still match with every result a cycle late.
+
+Status: routing (tag `premixv2_afa4b22`) and equivalence both in progress.
+
+### v2 RESULT: pre-mix pipelining does NOT help. Line closed.
+
+All 5 seeds routed (v1 could not), and v2 used ~1,584,000-1,610,000 wires
+against a baseline of ~1,605,000-1,612,000 -- so removing the 640-bit shadow
+copy did fix the structural damage. It just did not buy any clock.
+
+Genuine post-route `clk_h`, each taken from the `Max frequency` line that
+FOLLOWS a converged `overuse=0` iteration (verified per seed, not the
+pre-route SA estimate):
+
+| | min | median | mean | max | pass |
+|---|---|---|---|---|---|
+| baseline (e2nbfix) | 145.14 | 155.79 | **165.16** | 197.43 | **5/5** |
+| premix v2 | 122.59 | 157.11 | **147.86** | 168.63 | **4/5** |
+
+    baseline  145.14 152.44 155.79 174.98 197.43
+    premix v2 122.59 133.51 157.11 157.48 168.63
+
+The median moves +1.32 MHz (+0.8%) -- noise, against a baseline spread of
+145-197. Every other statistic is worse: the **mean drops 17.30 MHz
+(-10.5%)**, the best seed loses 28.8 MHz, and the worst seed now **FAILS**
+the 133.33 MHz target at 122.59 MHz.
+
+**Conclusion: the pre-mix XOR was not the binding constraint.** This is the
+third independent confirmation that the design is WIRE-limited, not
+logic-limited (after `noabs`, and after v1's routing collapse): shortening
+the logic path by one XOR level changes nothing, because routing is 70-91%
+of the critical path. Cutting logic depth is a dead end here.
+
+`--pipeline-premix` is kept in odo_gen (default off, verified equivalent) as
+a documented negative result, so nobody re-runs this experiment. Do not
+enable it: it costs a seed and lowers the mean.
+
+Equivalence, for the record -- `sim/tb_premix_equiv.v`, T=4 `--bram-out-reg`:
+
+| | result |
+|---|---|
+| positive | **PASS -- 30 results identical, and no latency shift** |
+| negative (`+brk=3`) | **FAIL -- 28 of 30 differ** |
+
+28 of 30 is exactly right (brk=3 leaves results 0-1 intact). The latency
+assertion passing confirms v2 is cycle-neutral as designed.
+
+### Where speed can still come from
+
+With hashrate proportional to BRAM consumed, BRAM at 94%, and clock
+improvement via logic depth now empirically ruled out, the remaining honest
+levers are placement/routing quality -- seed choice alone swings 145-197 MHz,
+a far larger effect than any RTL change tried here -- and closing the
+openXC7-versus-Vivado gap. RTL micro-optimisation of the datapath is not it.
+
+## The `--freq` constraint does NOT drive placement or routing (2026-09-05)
+
+### Two facts about the clock that were not lined up
+
+`hdl/clk_gen_hash.v` was speed-bumped on 2026-09-01, `CLKFBOUT_MULT` 16 -> 19,
+taking `clk_h` from 133.33 to **158.33 MHz**. That bump is where the shipping
+~80 MH/s comes from: 2 miners * 158.33 / 4 = **79.2 MH/s**.
+
+The openXC7 flow never followed, because `rtl_sources.sh` pins the RTL at
+afa4b22 (2026-08-30), which predates the bump -- `gen/rtl_pinned/clk_gen_hash.v`
+is still MULT 16. **This is staleness, not a sign-off bug**: `FREQ=133.33` is
+correct for the pinned core (checked before claiming otherwise). But it means
+every openXC7 seed number was graded against a target 25 MHz below what master
+actually needs to hit.
+
+### The hypothesis, and its refutation
+
+`build.sh` documents that the XDC `create_clock` does not reach `bus_clk`/`clk_h`,
+so `common/timing.cc` falls back to `--freq` for every domain -- making `--freq`
+THE constraint. Since nextpnr's placer and router2 are timing-driven, asking for
+more should plausibly deliver more: the baseline's 145-197 MHz was achieved
+while only being asked for 133.33.
+
+It does not. Re-routing the SAME netlist (`out_e2nbfix_v15`) with `--freq` as
+the only variable gives **bit-identical results**:
+
+| seed | @133.33 | @158.33 | iters |
+|---|---|---|---|
+| 1 | 197.43 | 197.43 | 40 / 40 |
+| 2 | 145.14 | 145.14 | 60 / 60 |
+| 3 | 152.44 | 152.44 | 9 / 9 |
+| 4 | 174.98 | 174.98 | 20 / 20 |
+
+`diff` of the full `iter=` traces for seeds 1 and 3: **IDENTICAL**. Seed 5 was
+not run -- routing is demonstrably deterministic, so it returns 155.79.
+
+**Mechanism.** Both clock domains fall back to the same `target_freq`, so
+changing it scales every path's slack *uniformly*. The criticality *ranking* is
+therefore unchanged, and the router makes identical decisions. On a design where
+all domains share one fallback constraint, `--freq` is purely a **pass/fail
+grading threshold** -- it cannot buy Fmax. Do not try to tighten `--freq` to
+chase timing.
+
+### What this does establish
+
+The measured per-seed numbers stand, and can now be graded against the clock
+master actually uses. At **158.33 MHz**, of the five baseline seeds:
+
+| seed | Fmax | at 158.33 |
+|---|---|---|
+| 1 | **197.43** | **PASS, +24.7% margin** |
+| 4 | **174.98** | **PASS, +10.5% margin** |
+| 5 | 155.79 | FAIL |
+| 3 | 152.44 | FAIL |
+| 2 | 145.14 | FAIL |
+
+**Only 2 of 5 close.** Seed choice is not a tuning detail here -- on an
+IDENTICAL netlist it swings Fmax from 145.14 to 197.43, a **36% spread**, which
+is far larger than any RTL change attempted (pre-mix pipelining moved the median
+0.8%). Placement/routing luck, not logic, is what sets this design's clock.
+
+### Actionable
+
+1. **Re-pin the openXC7 RTL to master** to pick up MULT 19, and build with
+   **seed 1**. That would be the first openXC7 bitstream valid at master's
+   158.33 MHz clock, with ~25% margin.
+2. Seed 1's 197.43 nominally allows MULT 23 (191.67 MHz). Treat that as
+   UNVALIDATED: nextpnr's timing model is optimistic relative to Vivado (which
+   predicted MULT 20 / 166.67 MHz fails at -0.102 ns slack), and this is the
+   1-miner build, not the 2-miner configuration that produces the shipping
+   hashrate. It needs silicon or Vivado confirmation before any claim.
+3. Hunt more seeds -- the one lever that measurably works.
+
+## Where the open-source flow actually stands against Vivado (2026-09-05)
+
+This section exists because the two flows had drifted apart without anyone
+writing down by how much.
+
+### The shipping build is Vivado, at 200 MHz, on two miners
+
+`vivado/build_mux4.tcl`'s header records that a **MULT 24 / 200 MHz bitstream
+is flashed and earning**, built from `hdl/odocrypt/encrypt.v` -- which its own
+provenance comment shows is generated `--bram-out-reg`. So the OUTREG core is
+not an experiment awaiting sign-off; it is the shipping core.
+
+    2 miners * 200 MHz / 4 = 100.0 MH/s
+
+MULT 24 is also the CEILING, not a preference: VCO = 50 * 24 = 1200 MHz is
+exactly the -1 grade's maximum. MULT 25 would need 1250 MHz, and
+`CLKOUT_DIVIDE_2X = 2` would put clk_2x at 600 MHz. clk_h ends at 200 MHz, so
+further hashrate has to come from more instances.
+
+### openXC7 cannot reach that clock, and runs half the miners
+
+Measured Fmax across ten seeds on the same netlist (`out_e2nbfix_v15`, one
+miner, `--bram-out-reg`), every value taken after a converged `overuse=0`
+iteration:
+
+    197.43  176.68  174.98  169.49  155.79  152.44  148.04  147.38  145.14
+    (seed 9: UNCONVERGED -- diverged, overuse climbing 88 -> 220)
+
+**Zero of ten reach 200 MHz.** The best, 197.43, is 1.3% short. And openXC7
+routes only ONE miner: the two-miner configuration was closed as not
+achievable in this flow (see "2 miners at 94% BRAM"), because the floorplan
+BEL-pins all 840 BRAMs so the spreader cannot move them.
+
+So the honest comparison, at each flow's best:
+
+| flow | miners | clk_h | hashrate |
+|---|---|---|---|
+| Vivado (shipping) | 2 | 200.00 | **100.0 MH/s** |
+| openXC7 (best seed) | 1 | 197.43 | **49.4 MH/s** |
+
+openXC7 is at **~49% of Vivado**, and almost all of that gap is the miner
+count, not the clock -- the clock is within 1.3%.
+
+### Two corrections this exposed
+
+1. **`--freq` does not drive place-and-route in nextpnr on this design** (see
+   the section above): re-routing with `--freq` as the only variable gives
+   bit-identical traces. It is a pass/fail grading threshold only. So the
+   numbers above are a property of the netlist and seed, and cannot be
+   improved by asking for more.
+
+2. **The openXC7 pinned RTL predates the clock work entirely.**
+   `rtl_sources.sh` pins at afa4b22 (2026-08-30), whose `clk_gen_hash.v` is
+   still `CLKFBOUT_MULT = 16` -- 133.33 MHz. A bitstream built from the
+   openXC7 flow today would therefore run at **133.33 MHz**, not at the
+   197.43 MHz its own timing report certifies, wasting a third of the clock
+   the routing already achieves. This is NOT a sign-off bug (`FREQ=133.33` is
+   correct for the pinned core) but it does mean the flow understates itself
+   badly.
+
+   Deliberately NOT unpinned here: `rtl_sources.sh` requires re-measuring
+   every reference number after a pin bump, and bumping to a MULT 24 commit
+   would drag in all other RTL changes since 2026-08-30. Since MMCM
+   parameters do not touch the hash datapath, the seed Fmax numbers above
+   transfer unchanged -- only the emitted bitstream's MMCM config differs. The
+   pin bump plus re-measurement is the follow-up.
+
+### What would actually close the gap
+
+Not the clock -- it is already within 1.3% and cannot be pushed by
+constraining harder. The gap is the **second miner**, which is a
+placement/routing problem this flow has already failed on seven approaches.
+The mux4 direction (four instances sharing time-multiplexed BRAMs) is the
+structural answer, and it is being explored in Vivado because openXC7 cannot
+time paths adjacent to a block RAM at all.

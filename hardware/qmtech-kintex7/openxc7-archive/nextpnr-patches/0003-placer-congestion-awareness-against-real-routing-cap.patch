@@ -1,0 +1,330 @@
+From e317869a2581e57b8dd61dec94b7f31f153b15b5 Mon Sep 17 00:00:00 2001
+From: colneech-dev <colneech@gmail.com>
+Date: Thu, 3 Sep 2026 00:35:54 +0100
+Subject: [PATCH 3/4] placer: congestion awareness against real routing
+ capacity (steps 1-3)
+
+Three gaps, found by reading the source rather than assuming:
+
+1. NOTHING in the flow computed routing CAPACITY. The RUDY demand
+   estimate in CutSpreader could only be compared against an absolute
+   hand-tuned constant (NEXTPNR_WIRE_DEMAND), which does not transfer
+   between designs or devices. Adds a per-tile capacity map built from
+   ctx->getWires(), using the SAME wire-location rule as router2s
+   setup_wires() so placer demand and router overuse refer to the same
+   tile by construction rather than by coincidence.
+
+2. Congestion is now expressible as demand/capacity (NEXTPNR_CONG_RATIO),
+   a dimensionless ratio where 1.0 means the estimate expects to use
+   exactly the routing a tile has.
+
+3. Congestion could previously only TRIGGER spreading, never steer it:
+   once a region was flagged, the cut still balanced raw cell counts and
+   was free to leave half the cells on the hotspot. Congestion now
+   tightens the region density target (cell-area inflation, expressed in
+   the units this spreader already uses) and weights the cut objective so
+   the balance point moves cells off the congested side
+   (NEXTPNR_CONG_SPREAD).
+
+Corrects one thing I had assumed: build_wire_demand() is NOT computed
+once -- CutSpreader is constructed per HeAP iteration, so the demand map
+already tracked the placement. Only the capacity denominator was missing.
+
+Both knobs default off and multiply by exactly 1.0 when off, so an
+unflagged run is unchanged.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ common/placer_heap.cc | 194 ++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 185 insertions(+), 9 deletions(-)
+
+diff --git a/common/placer_heap.cc b/common/placer_heap.cc
+index 9e565dc2..458d4c51 100644
+--- a/common/placer_heap.cc
++++ b/common/placer_heap.cc
+@@ -332,6 +332,50 @@ class HeAPPlacer
+     PlacerHeapCfg cfg;
+ 
+     int max_x = 0, max_y = 0;
++
++    // Per-tile general-routing capacity, in wires, plus the mean over tiles
++    // that have any. Device geometry rather than placement state, so it is
++    // built once and reused for every spread.
++    //
++    // Deliberately uses the SAME wire-location rule as the router -- the
++    // midpoint of the wire's route bounding box, see setup_wires() in
++    // common/router2.cc -- so that a demand figure computed here and an
++    // overuse figure measured there refer to the same tile by construction,
++    // rather than by coincidence of two independently-chosen binning schemes.
++    //
++    // Nothing in this flow computed capacity before. Without the denominator,
++    // the RUDY demand estimate in CutSpreader can only be compared against an
++    // absolute constant (NEXTPNR_WIRE_DEMAND), which does not transfer between
++    // designs or devices: a sweep on one design found a narrow optimum, with
++    // half and double the best value both clearly worse.
++    std::vector<std::vector<float>> route_capacity;
++    float route_capacity_mean = 0.0f;
++
++    void build_route_capacity()
++    {
++        if (!route_capacity.empty())
++            return;
++        route_capacity.assign(max_x + 1, std::vector<float>(max_y + 1, 0.0f));
++        for (auto wire : ctx->getWires()) {
++            ArcBounds wl = ctx->getRouteBoundingBox(wire, wire);
++            int x = (wl.x0 + wl.x1) / 2, y = (wl.y0 + wl.y1) / 2;
++            if (x < 0 || y < 0 || x > max_x || y > max_y)
++                continue;
++            route_capacity.at(x).at(y) += 1.0f;
++        }
++        double total = 0;
++        int nonzero = 0;
++        for (int x = 0; x <= max_x; x++)
++            for (int y = 0; y <= max_y; y++)
++                if (route_capacity.at(x).at(y) > 0.0f) {
++                    total += route_capacity.at(x).at(y);
++                    ++nonzero;
++                }
++        route_capacity_mean = nonzero ? float(total / nonzero) : 0.0f;
++        log_info("routing capacity: %d tiles carry wires, mean %.1f wires/tile\n", nonzero,
++                 double(route_capacity_mean));
++    }
++
+     std::vector<std::vector<std::vector<std::vector<BelId>>>> fast_bels;
+     std::unordered_map<IdString, std::tuple<int, int>> bel_types;
+ 
+@@ -1480,8 +1524,23 @@ class HeAPPlacer
+         int id;
+         int x0, y0, x1, y1;
+         std::vector<int> cells, bels;
++        // Worst routing-congestion ratio over this region's extent, 1.0 when
++        // uncongested or when congestion awareness is off. Kept current by
++        // grow_region(), which every expansion and merge goes through.
++        float cong = 1.0f;
+         bool overused(float beta) const
+         {
++            // Routing congestion tightens the density target: a region whose
++            // estimated routing demand exceeds its capacity behaves as though
++            // it had proportionally fewer usable bels, so the existing spreader
++            // evacuates it. This is the standard cell-area-inflation response
++            // to congestion (Vivado, RippleFPGA, UTPlaceF all do a version of
++            // it), expressed in the units this spreader already works in
++            // rather than bolted on beside them.
++            //
++            // cong_d is exactly 1.0 when congestion awareness is off, so every
++            // comparison below is then unchanged.
++            const float cong_d = (cong > 1.0f) ? cong : 1.0f;
+             // AM01/openXC7 (env NEXTPNR_SMALL_BETA=<f>): density target for
+             // tiles with fewer than 4 bels.
+             //
+@@ -1504,13 +1563,13 @@ class HeAPPlacer
+             for (size_t t = 0; t < cells.size(); t++) {
+                 if (bels.at(t) < 4) {
+                     if (small_beta > 0.0f) {
+-                        if (cells.at(t) > small_beta * bels.at(t))
++                        if (cells.at(t) > small_beta * bels.at(t) / cong_d)
+                             return true;
+-                    } else if (cells.at(t) > bels.at(t)) {
++                    } else if (cells.at(t) > bels.at(t) / cong_d) {
+                         return true;
+                     }
+                 } else {
+-                    if (cells.at(t) > beta * bels.at(t))
++                    if (cells.at(t) > beta * bels.at(t) / cong_d)
+                         return true;
+                 }
+             }
+@@ -1641,6 +1700,32 @@ class HeAPPlacer
+         std::vector<std::vector<float>> wire_demand;
+         float wire_demand_cap = 0.0f;
+ 
++        // NEXTPNR_CONG_RATIO=<r>: treat a tile as congested when its estimated
++        // routing demand exceeds r times its actual capacity. Unlike the
++        // absolute NEXTPNR_WIRE_DEMAND cap, r is dimensionless and comparable
++        // across designs and devices -- r = 1.0 means "the estimate expects to
++        // use exactly the routing this tile has".
++        static float cong_ratio()
++        {
++            static const float v = [] {
++                const char *e = getenv("NEXTPNR_CONG_RATIO");
++                return e ? float(atof(e)) : 0.0f;
++            }();
++            return v;
++        }
++
++        // NEXTPNR_CONG_SPREAD=<w>: how hard congestion steers the spreader,
++        // as opposed to merely triggering it. 0 disables (the region density
++        // target and the cut objective are then exactly as before).
++        static float cong_spread()
++        {
++            static const float v = [] {
++                const char *e = getenv("NEXTPNR_CONG_SPREAD");
++                return e ? float(atof(e)) : 0.0f;
++            }();
++            return v;
++        }
++
+         // Estimate routing demand with RUDY: every net spreads its half-perimeter
+         // uniformly across its own bounding box. A net whose bbox is tight
+         // therefore loads those few tiles heavily, which is exactly the case that
+@@ -1649,10 +1734,14 @@ class HeAPPlacer
+         void build_wire_demand()
+         {
+             const char *v = getenv("NEXTPNR_WIRE_DEMAND");
+-            if (v == nullptr)
+-                return;
+-            wire_demand_cap = float(atof(v));
+-            if (!(wire_demand_cap > 0.0f))
++            if (v != nullptr)
++                wire_demand_cap = float(atof(v));
++            // Either knob needs the same demand map; they differ only in what
++            // the map is compared against. The capacity-relative mode also
++            // needs the capacity map, which is built once and cached.
++            if (cong_ratio() > 0.0f || cong_spread() > 0.0f)
++                p->build_route_capacity();
++            if (!(wire_demand_cap > 0.0f) && !(cong_ratio() > 0.0f) && !(cong_spread() > 0.0f))
+                 return;
+             wire_demand.assign(p->max_x + 1, std::vector<float>(p->max_y + 1, 0.0f));
+             for (auto &net_entry : p->ctx->nets) {
+@@ -1694,10 +1783,46 @@ class HeAPPlacer
+             }
+         }
+ 
++        // Congestion ratio at a tile: estimated routing demand over real
++        // routing capacity. Returns 1.0 (neutral) when the estimate or the
++        // capacity map is unavailable, so callers may multiply by it
++        // unconditionally.
++        float cong_at(int x, int y)
++        {
++            if (wire_demand.empty() || p->route_capacity.empty())
++                return 1.0f;
++            if (x < 0 || y < 0 || x > p->max_x || y > p->max_y)
++                return 1.0f;
++            float cap = p->route_capacity.at(x).at(y);
++            if (!(cap > 0.0f))
++                cap = p->route_capacity_mean; // tile has no wires of its own
++            if (!(cap > 0.0f))
++                return 1.0f;
++            return wire_demand.at(x).at(y) / cap;
++        }
++
++        // Worst congestion over a region's extent. Used as the region's
++        // density-target multiplier, so a region is judged by its hottest
++        // tile rather than by an average that a large cool area would dilute.
++        float cong_max(int x0, int y0, int x1, int y1)
++        {
++            float m = 1.0f;
++            if (wire_demand.empty() || p->route_capacity.empty())
++                return m;
++            for (int x = std::max(0, x0); x <= std::min(p->max_x, x1); x++)
++                for (int y = std::max(0, y0); y <= std::min(p->max_y, y1); y++)
++                    m = std::max(m, cong_at(x, y));
++            return m;
++        }
++
+         bool wire_congested(int x, int y)
+         {
+             if (wire_demand.empty())
+                 return false;
++            // Capacity-relative mode: congested when demand exceeds a fraction
++            // of what the tile can actually carry.
++            if (cong_ratio() > 0.0f)
++                return cong_at(x, y) > cong_ratio();
+             return wire_demand.at(x).at(y) > wire_demand_cap;
+         }
+ 
+@@ -1806,6 +1931,8 @@ class HeAPPlacer
+             if ((x0 >= r.x0 && y0 >= r.y0 && x1 <= r.x1 && y1 <= r.y1) || init)
+                 return;
+             int old_x0 = r.x0 + (init ? 1 : 0), old_y0 = r.y0, old_x1 = r.x1, old_y1 = r.y1;
++            // The extent is about to change, so the region's congestion figure
++            // is about to go stale. Recomputed at the end of this function.
+             r.x0 = std::min(r.x0, x0);
+             r.y0 = std::min(r.y0, y0);
+             r.x1 = std::max(r.x1, x1);
+@@ -1838,6 +1965,10 @@ class HeAPPlacer
+             for (int y = old_y1 + 1; y <= r.y1; y++)
+                 for (int x = r.x0; x <= r.x1; x++)
+                     process_location(x, y);
++            // Extent changed, so recompute the region's congestion figure.
++            // Every growth and every merge reaches this point, so a region's
++            // density target can never be judged against a stale figure.
++            r.cong = cong_max(r.x0, r.y0, r.x1, r.y1);
+         }
+ 
+         void find_overused_regions()
+@@ -1874,6 +2005,7 @@ class HeAPPlacer
+                         reg.bels.push_back(bels_at(x, y, t));
+                         reg.cells.push_back(occ_at(x, y, t));
+                     }
++                    reg.cong = cong_max(reg.x0, reg.y0, reg.x1, reg.y1);
+                     // Make sure we cover carries, etc
+                     grow_region(reg, reg.x0, reg.y0, reg.x1, reg.y1, true);
+ 
+@@ -2081,6 +2213,41 @@ class HeAPPlacer
+                 right_cells_v.at(type_index.at(cut_cells.at(i)->type)) +=
+                         p->chain_size.count(cut_cells.at(i)->name) ? p->chain_size.at(cut_cells.at(i)->name) : 1;
+ 
++            // Congestion-weighted cut (NEXTPNR_CONG_SPREAD=<w>). Scale each
++            // side's EFFECTIVE bel count down by that side's worst routing
++            // congestion, so that balancing utilisation places fewer cells on
++            // the congested side. Without this the cut equalises cell counts
++            // and is free to leave half the cells sitting on top of a routing
++            // hotspot -- congestion could previously only trigger spreading,
++            // never influence where the cells actually went.
++            //
++            // Prefix/suffix maxima over per-slice congestion keep this O(n)
++            // rather than O(n * area) across the candidate cuts.
++            const float cs = cong_spread();
++            std::vector<float> pre_cong, suf_cong;
++            if (cs > 0.0f) {
++                int n = trimmed_r - trimmed_l + 1;
++                std::vector<float> slice(n, 1.0f);
++                for (int i = trimmed_l; i <= trimmed_r; i++) {
++                    float m = 1.0f;
++                    for (int j = dir ? r.x0 : r.y0; j <= (dir ? r.x1 : r.y1); j++)
++                        m = std::max(m, dir ? cong_at(j, i) : cong_at(i, j));
++                    slice.at(i - trimmed_l) = m;
++                }
++                pre_cong.assign(n, 1.0f);
++                suf_cong.assign(n, 1.0f);
++                float run = 1.0f;
++                for (int k = 0; k < n; k++) {
++                    run = std::max(run, slice.at(k));
++                    pre_cong.at(k) = run;
++                }
++                run = 1.0f;
++                for (int k = n - 1; k >= 0; k--) {
++                    run = std::max(run, slice.at(k));
++                    suf_cong.at(k) = run;
++                }
++            }
++
+             int best_tgt_cut = -1;
+             double best_deltaU = std::numeric_limits<double>::max();
+             // std::pair<int, int> target_cut_bels;
+@@ -2100,10 +2267,19 @@ class HeAPPlacer
+                 if (((i - trimmed_l) + 1) >= clearance_l && ((trimmed_r - i) + 1) >= clearance_r) {
+                     // Solution is potentially valid
+                     double aU = 0;
++                    // 1.0 when the knob is off, so the objective is unchanged.
++                    double lcong = 1.0, rcong = 1.0;
++                    if (cs > 0.0f) {
++                        int k = i - trimmed_l;
++                        lcong = 1.0 + double(cs) * (double(pre_cong.at(k)) - 1.0);
++                        rcong = 1.0 + double(cs) *
++                                              ((k + 1 < int(suf_cong.size())) ? double(suf_cong.at(k + 1)) - 1.0 : 0.0);
++                    }
+                     for (size_t t = 0; t < beltype.size(); t++)
+                         aU += (left_cells_v.at(t) + right_cells_v.at(t)) *
+-                              std::abs(double(left_cells_v.at(t)) / double(std::max(left_bels_v.at(t), 1)) -
+-                                       double(right_cells_v.at(t)) / double(std::max(right_bels_v.at(t), 1)));
++                              std::abs(double(left_cells_v.at(t)) / (double(std::max(left_bels_v.at(t), 1)) / lcong) -
++                                       double(right_cells_v.at(t)) /
++                                               (double(std::max(right_bels_v.at(t), 1)) / rcong));
+                     if (aU < best_deltaU) {
+                         best_deltaU = aU;
+                         best_tgt_cut = i;
+-- 
+2.53.0
+

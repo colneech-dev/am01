@@ -1,0 +1,779 @@
+From 42cecc268af5f2c5bedfd3d3339fd4e742c8f71d Mon Sep 17 00:00:00 2001
+From: colneech-dev <colneech@gmail.com>
+Date: Sun, 23 Aug 2026 10:41:47 +0100
+Subject: [PATCH 1/4] Native floorplanning, congestion feedback, and a
+ global-net predicate
+
+Everything here is off unless explicitly enabled, so an unflagged run is
+unchanged.
+
+Floorplanning without an external script:
+
+  --floorplan-hierarchy   group cells by RTL scope from yosys hdlname
+                          attributes and confine each group to a region
+                          derived from its already-placed cells
+  --floorplan-pad         padding around each region (default 30)
+
+and apply_region_constraints() reads a floorplan out of the design file
+(design attr nextpnr_regions, cell attr REGION), so it can travel in the
+JSON rather than needing a --pre-place Python script -- those bindings are
+only a build option.
+
+Groups with no anchor are left FREE. An earlier version banded them across
+the device so that a design with nothing pre-placed still got regions; that
+turned "does nothing" into "fails", because a band sized by group count
+confines a cell without reference to where its own BRAMs are.
+
+placer_heap gains a router-fed congestion term (NEXTPNR_CONGESTION_MAP,
+NEXTPNR_CONGESTION_W) and a RUDY wire-demand estimate (NEXTPNR_WIRE_DEMAND).
+Both are experimental and unmeasured on any real design.
+
+Arch::isGlobalNet() exists because the congestion estimate must exclude nets
+on dedicated global routing: they consume no general routing and their
+bounding boxes span the die, so counting them buries the real signal.
+
+Caveat for anyone reading the region code as a recommendation: on the design
+this was written against, region constraints routed WORSE than no regions in
+every geometry tried. It is a mechanism, not a win.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ common/command.cc      |  12 ++
+ common/place_common.cc | 328 +++++++++++++++++++++++++++++++++++++++++
+ common/place_common.h  |  13 ++
+ common/placer_heap.cc  | 175 +++++++++++++++++++++-
+ xilinx/arch.cc         |  22 ++-
+ xilinx/arch.h          |   6 +
+ xilinx/arch_place.cc   |  23 +++
+ 7 files changed, 569 insertions(+), 10 deletions(-)
+
+diff --git a/common/command.cc b/common/command.cc
+index 4afd78a5..25a93b1b 100644
+--- a/common/command.cc
++++ b/common/command.cc
+@@ -38,6 +38,7 @@
+ #include "json_frontend.h"
+ #include "jsonwrite.h"
+ #include "log.h"
++#include "place_common.h"
+ #include "timing.h"
+ #include "util.h"
+ #include "version.h"
+@@ -156,6 +157,11 @@ po::options_description CommandHandler::getGeneralOptions()
+     // no effect at all on 2-bel-per-tile types such as RAMB18). On a design whose
+     // per-tile occupancy never exceeds 100% no region is ever seeded, so beta
+     // cannot reduce achieved density. See xilinx/arch.cc for the full note.
++    general.add_options()("floorplan-hierarchy",
++                          "derive a floorplan from yosys hdlname attributes and constrain each RTL scope "
++                          "to a region");
++    general.add_options()("floorplan-pad", po::value<int>(),
++                          "tiles of padding around each hierarchy region (default 30)");
+     general.add_options()("placer-heap-beta", po::value<float>(),
+                           "HeAP placer spreading trigger threshold (default 0.9; lower = more aggressive spreading)");
+     general.add_options()("placer-heap-alpha", po::value<float>(),
+@@ -364,6 +370,12 @@ int CommandHandler::executeMain(std::unique_ptr<Context> ctx)
+         print_utilisation(ctx.get());
+ 
+         if (do_place) {
++            // Regions declared in the design file, applied before the
++            // pre-place hook so a script can still override them.
++            apply_region_constraints(ctx.get());
++            if (vm.count("floorplan-hierarchy"))
++                derive_hierarchy_floorplan(ctx.get(),
++                                           vm.count("floorplan-pad") ? vm["floorplan-pad"].as<int>() : 30);
+             run_script_hook("pre-place");
+             if (!ctx->place() && !ctx->force)
+                 log_error("Placing design failed.\n");
+diff --git a/common/place_common.cc b/common/place_common.cc
+index 50a11880..bb5ede52 100644
+--- a/common/place_common.cc
++++ b/common/place_common.cc
+@@ -17,6 +17,12 @@
+  *
+  */
+ 
++#include <cstdio>
++#include <algorithm>
++#include <vector>
++#include <string>
++#include <climits>
++#include <unordered_map>
+ #include "place_common.h"
+ #include <cmath>
+ #include "log.h"
+@@ -622,4 +628,326 @@ bool check_cell_bel_region(const CellInfo *cell, BelId bel)
+         return true;
+ }
+ 
++// Apply region constraints carried in the design file.
++//
++// nextpnr has had a Region API for a long time (createRectangularRegion,
++// constrainCellToRegion) but no way to express one from JSON, so the only route
++// was a --pre-place Python script. Python bindings are a build option, so a
++// floorplan built that way cannot run on a stock nextpnr at all. This reads the
++// same information from attributes, mirroring how the BEL attribute already
++// pins a cell to a site -- REGION is the same idea one level coarser.
++//
++//   design attr:  nextpnr_regions = "name:x0,y0,x1,y1;name2:..."
++//   cell attr:    REGION          = "name"
++//
++// Malformed entries are reported and skipped rather than aborting: a floorplan
++// is an optimisation hint, and refusing to run at all because one box is
++// mistyped would be a poor trade.
++void apply_region_constraints(Context *ctx)
++{
++    auto defs = ctx->attrs.find(ctx->id("nextpnr_regions"));
++    if (defs == ctx->attrs.end())
++        return;
++
++    std::string spec = defs->second.as_string();
++    int created = 0, bad = 0;
++    size_t pos = 0;
++    while (pos < spec.size()) {
++        size_t end = spec.find(';', pos);
++        if (end == std::string::npos)
++            end = spec.size();
++        std::string entry = spec.substr(pos, end - pos);
++        pos = end + 1;
++        if (entry.empty())
++            continue;
++        size_t colon = entry.find(':');
++        if (colon == std::string::npos) {
++            ++bad;
++            continue;
++        }
++        std::string name = entry.substr(0, colon);
++        int v[4];
++        // Parse exactly four comma-separated integers; anything else is a
++        // malformed box and is skipped rather than half-applied.
++        if (std::sscanf(entry.c_str() + colon + 1, "%d,%d,%d,%d", &v[0], &v[1], &v[2], &v[3]) != 4) {
++            ++bad;
++            continue;
++        }
++        ctx->createRectangularRegion(ctx->id(name), v[0], v[1], v[2], v[3]);
++        ++created;
++    }
++
++    int constrained = 0, missing = 0;
++    for (auto &cell_entry : ctx->cells) {
++        CellInfo *cell = cell_entry.second.get();
++        auto it = cell->attrs.find(ctx->id("REGION"));
++        if (it == cell->attrs.end())
++            continue;
++        IdString rname = ctx->id(it->second.as_string());
++        if (!ctx->region.count(rname)) {
++            ++missing;
++            continue;
++        }
++        ctx->constrainCellToRegion(cell->name, rname);
++        ++constrained;
++    }
++
++    log_info("Applied %d region(s) from design attributes, constraining %d cell(s).\n", created, constrained);
++    if (bad)
++        log_warning("  %d malformed entr(ies) in nextpnr_regions were skipped.\n", bad);
++    if (missing)
++        log_warning("  %d cell(s) name a REGION that was never defined.\n", missing);
++}
++
++namespace {
++
++// Split a yosys hdlname attribute into its hierarchy components. yosys joins
++// them with spaces.
++std::vector<std::string> hdl_components(const std::string &s)
++{
++    std::vector<std::string> out;
++    size_t pos = 0;
++    while (pos < s.size()) {
++        size_t sp = s.find(' ', pos);
++        if (sp == std::string::npos)
++            sp = s.size();
++        if (sp > pos)
++            out.push_back(s.substr(pos, sp - pos));
++        pos = sp + 1;
++    }
++    return out;
++}
++
++std::string join_prefix(const std::vector<std::string> &parts, int depth)
++{
++    std::string out;
++    for (int i = 0; i < int(parts.size()) && i < depth; i++) {
++        if (i)
++            out += '.';
++        out += parts[i];
++    }
++    return out;
++}
++
++// min/max after discarding outliers by the 1.5*IQR rule.
++//
++// A plain min/max is at the mercy of one stray anchor. Measured on a real design:
++// a single clock/IO cell that happened to fall in a group -- those carry BEL
++// constraints from the pin constraints file and sit nowhere near the group's
++// logic -- stretched one region to 227 tiles tall against ~40 for its peers,
++// leaving that group effectively unconstrained while appearing handled.
++void robust_range(std::vector<int> v, int &lo, int &hi)
++{
++    std::sort(v.begin(), v.end());
++    size_t n = v.size();
++    lo = v.front();
++    hi = v.back();
++    if (n < 4)
++        return;
++    int q1 = v[n / 4], q3 = v[(3 * n) / 4];
++    double iqr = q3 - q1;
++    double flo = q1 - 1.5 * iqr, fhi = q3 + 1.5 * iqr;
++    bool first = true;
++    for (int x : v) {
++        if (x < flo || x > fhi)
++            continue;
++        if (first) {
++            lo = hi = x;
++            first = false;
++        } else {
++            lo = std::min(lo, x);
++            hi = std::max(hi, x);
++        }
++    }
++}
++
++} // namespace
++
++namespace {
++
++// Trailing integer in a scope name, for ordering pipeline stages.
++// "…crypter.round14" -> 14. Returns -1 when there is no trailing number, so
++// such groups sort before the numbered ones rather than interleaving with them.
++int trailing_index(const std::string &s)
++{
++    size_t e = s.size();
++    while (e > 0 && isdigit((unsigned char)s[e - 1]))
++        e--;
++    if (e == s.size())
++        return -1;
++    try {
++        return std::stoi(s.substr(e));
++    } catch (...) {
++        return -1;
++    }
++}
++
++} // namespace
++
++// Derive a floorplan from yosys hdlname attributes and constrain each group to a
++// region around the cells in it that are already placed.
++//
++// Cells with no hdlname, and groups with no already-placed cell to anchor to, are
++// left unconstrained: an invented box is a guess, and a wrong guess constrains
++// the placer harder than no constraint at all.
++void derive_hierarchy_floorplan(Context *ctx, int pad, double max_frac, int min_cells)
++{
++    IdString id_hdlname = ctx->id("hdlname");
++    IdString id_bel = ctx->id("BEL");
++
++    // cell -> hierarchy components
++    std::unordered_map<IdString, std::vector<std::string>> hier;
++    for (auto &ce : ctx->cells) {
++        auto it = ce.second->attrs.find(id_hdlname);
++        if (it == ce.second->attrs.end())
++            continue;
++        auto parts = hdl_components(it->second.as_string());
++        if (!parts.empty())
++            hier[ce.first] = std::move(parts);
++    }
++
++    if (hier.empty()) {
++        log_info("Hierarchy floorplan: no cells carry an hdlname attribute; nothing to do.\n");
++        return;
++    }
++    log_info("Hierarchy floorplan: %d of %d cells carry hdlname.\n", int(hier.size()), int(ctx->cells.size()));
++
++    // Choose the shallowest depth whose largest group is under max_frac of the
++    // design. Coverage cannot be the criterion -- every depth covers the same
++    // cells, including a depth that puts most of the design in one group.
++    int chosen = -1;
++    int max_depth = 1;
++    for (auto &h : hier)
++        max_depth = std::max<int>(max_depth, int(h.second.size()));
++    for (int d = 1; d <= max_depth; d++) {
++        std::unordered_map<std::string, int> count;
++        size_t biggest = 0;
++        for (auto &h : hier)
++            biggest = std::max<size_t>(biggest, ++count[join_prefix(h.second, d)]);
++        if (double(biggest) / double(hier.size()) < max_frac) {
++            chosen = d;
++            log_info("  depth %d: %d groups, largest %d (%.1f%%) -- chosen\n", d, int(count.size()), int(biggest),
++                     100.0 * biggest / hier.size());
++            break;
++        }
++    }
++    if (chosen < 0) {
++        log_info("  no depth yields groups below %.0f%% of the design; not constraining.\n", max_frac * 100);
++        return;
++    }
++
++    std::unordered_map<std::string, std::vector<IdString>> groups;
++    for (auto &h : hier)
++        groups[join_prefix(h.second, chosen)].push_back(h.first);
++
++    // Device extent, and the bel types this design actually uses, straight from
++    // the chipdb. No trial placement needed.
++    int device_x0 = INT_MAX, device_x1 = INT_MIN, device_y0 = INT_MAX, device_y1 = INT_MIN;
++    for (auto bel : ctx->getBels()) {
++        Loc l = ctx->getBelLocation(bel);
++        device_x0 = std::min(device_x0, l.x);
++        device_x1 = std::max(device_x1, l.x);
++        device_y0 = std::min(device_y0, l.y);
++        device_y1 = std::max(device_y1, l.y);
++    }
++    if (device_x1 < device_x0) {
++        device_x0 = device_y0 = 0;
++        device_x1 = device_y1 = -1; // signals "unknown", handled per group
++    } else {
++        log_info("  device extent from chipdb: x %d..%d, y %d..%d\n", device_x0, device_x1, device_y0,
++                 device_y1);
++    }
++
++    // Deterministic pipeline order: trailing integer where present, else name.
++    // Lexical order alone would place round10 between round1 and round2.
++    std::vector<std::string> ordered;
++    for (auto &g : groups)
++        if (int(g.second.size()) >= min_cells)
++            ordered.push_back(g.first);
++    std::sort(ordered.begin(), ordered.end(), [](const std::string &a, const std::string &b) {
++        int ia = trailing_index(a), ib = trailing_index(b);
++        if (ia != ib)
++            return ia < ib;
++        return a < b;
++    });
++    std::unordered_map<std::string, int> group_slot;
++    for (size_t i = 0; i < ordered.size(); i++)
++        group_slot[ordered[i]] = int(i);
++
++    int made = 0, constrained = 0, unanchored = 0, too_small = 0, derived_bands = 0;
++    for (auto &g : groups) {
++        int x0 = 0, x1 = 0, y0 = 0, y1 = 0;
++        if (int(g.second.size()) < min_cells) {
++            too_small += int(g.second.size());
++            continue;
++        }
++        // Anchors: cells already pinned by a BEL attribute. Read the attribute
++        // rather than cell->bel, because this runs before placement and nothing
++        // is bound yet.
++        std::vector<int> xs, ys;
++        for (IdString cn : g.second) {
++            CellInfo *ci = ctx->cells.at(cn).get();
++            auto it = ci->attrs.find(id_bel);
++            if (it == ci->attrs.end())
++                continue;
++            BelId b = ctx->getBelByName(ctx->id(it->second.as_string()));
++            if (b == BelId())
++                continue;
++            Loc l = ctx->getBelLocation(b);
++            xs.push_back(l.x);
++            ys.push_back(l.y);
++        }
++        if (xs.empty()) {
++            // No anchor: leave the group FREE.
++            //
++            // An earlier version banded such groups uniformly across the device,
++            // so that a design with nothing pre-placed would still get regions.
++            // That was a mistake, and it turned "does nothing" into "fails":
++            //
++            //   ERROR: Unable to find legal placement for cell
++            //          '$auto$abc_ops_reintegrate.cc:652:reintegrate$...'
++            //
++            // A band derived from the chipdb is still an invented box. It is
++            // sized by GROUP COUNT rather than by what the group's cells
++            // physically need, so a cell that must sit near its own BRAMs gets
++            // confined to a band chosen without reference to where they are.
++            //
++            // An invented box constrains the placer harder than no box at all,
++            // and an unconstrained placement plus a clear log line is a much
++            // better outcome than an error naming a cell that has nothing to do
++            // with the real problem.
++            //
++            // Deriving real anchors from a first unconstrained placement is the
++            // principled way to serve this case, and is deliberately not done
++            // here: it doubles placement time, and on the design this was
++            // measured against, region constraints routed worse than no regions
++            // in every configuration tried.
++            unanchored += int(g.second.size());
++            continue;
++        } else {
++            robust_range(xs, x0, x1);
++            robust_range(ys, y0, y1);
++        }
++        x0 = std::max(0, x0 - pad);
++        y0 = std::max(0, y0 - pad);
++        x1 += pad;
++        y1 += pad;
++
++        IdString rn = ctx->id("hier$" + std::to_string(made));
++        ctx->createRectangularRegion(rn, x0, y0, x1, y1);
++        for (IdString cn : g.second) {
++            ctx->constrainCellToRegion(cn, rn);
++            ++constrained;
++        }
++        ++made;
++    }
++
++    log_info("Hierarchy floorplan: %d region(s), %d cell(s) constrained.\n", made, constrained);
++
++    if (unanchored)
++        log_info("  %d cell(s) in groups with no anchor were left free.\n", unanchored);
++    if (too_small)
++        log_info("  %d cell(s) in groups below %d cells were left free.\n", too_small, min_cells);
++}
++
+ NEXTPNR_NAMESPACE_END
+diff --git a/common/place_common.h b/common/place_common.h
+index fa5ce4c2..36fe935f 100644
+--- a/common/place_common.h
++++ b/common/place_common.h
+@@ -53,6 +53,19 @@ int get_constraints_distance(const Context *ctx, const CellInfo *cell);
+ // Check that a Bel is within the region for a cell
+ bool check_cell_bel_region(const CellInfo *cell, BelId bel);
+ 
++// Apply region constraints declared in the design file:
++//   design attr  nextpnr_regions = "name:x0,y0,x1,y1;..."
++//   cell attr    REGION          = "name"
++// Lets a floorplan travel in the JSON instead of requiring a --pre-place
++// Python script, which needs bindings that are only a build option.
++void apply_region_constraints(Context *ctx);
++
++// Derive a floorplan from yosys hdlname attributes: group cells by RTL
++// scope at an automatically chosen depth, and confine each group to a region
++// around whichever of its cells are already placed. Requires a yosys that
++// preserves hdlname through synthesis.
++void derive_hierarchy_floorplan(Context *ctx, int pad = 30, double max_frac = 0.10, int min_cells = 64);
++
+ NEXTPNR_NAMESPACE_END
+ 
+ #endif
+diff --git a/common/placer_heap.cc b/common/placer_heap.cc
+index 40c6ca05..f21a9fe0 100644
+--- a/common/placer_heap.cc
++++ b/common/placer_heap.cc
+@@ -33,6 +33,8 @@
+ 
+ #ifdef WITH_HEAP
+ 
++#include <climits>
++#include <cstdlib>
+ #include "placer_heap.h"
+ #include <Eigen/Core>
+ #include <Eigen/IterativeLinearSolvers>
+@@ -781,15 +783,78 @@ class HeAPPlacer
+                     if (other == &port)
+                         return;
+                     int o_pos = cell_pos(other->cell);
+-                    double weight = 1.0 / (ni->users.size() *
+-                                           std::max<double>(1, (yaxis ? cfg.hpwl_scale_y : cfg.hpwl_scale_x) *
+-                                                                       std::abs(o_pos - this_pos)));
++                    // AM01/openXC7 (env-gated NEXTPNR_HPWL_SCALE_FIX=1): hpwl_scale is
++                    // applied INVERTED here relative to the objective it is meant to
++                    // optimise.
++                    //
++                    // total_hpwl(), the thing actually being measured, does:
++                    //     hpwl += hpwl_scale_x * dx + hpwl_scale_y * dy
++                    // so with hpwl_scale_y = 2 (set by xilinx/arch.cc) a vertical tile
++                    // costs DOUBLE a horizontal one.
++                    //
++                    // But bound2bound energy is w*d^2, and with w = 1/(N*k*d) that comes
++                    // out as d/(N*k) -- i.e. the y axis is weighted by 1/k = 0.5, not by
++                    // k = 2. A factor of k^2 = 4 in the wrong direction, on the axis the
++                    // arch's own delay model charges at 2x per tile.
++                    //
++                    // For energy to be k*d/N the weight must be k/(N*d), so the numerator
++                    // needs k^2: at large d, k^2/(N*k*d) = k/(N*d). The change of
++                    // variables was applied to the denominator but not the numerator.
++                    //
++                    // This is UPSTREAM, not a fork regression -- nextpnr 0.6
++                    // common/place/placer_heap.cc carries the identical expression.
++                    //
++                    // Left off by default: it rescales every y weight by 4, which shifts
++                    // the balance against the alpha legalisation anchor. Expect to
++                    // re-tune alpha alongside it.
++                    static const bool hpwl_fix = getenv("NEXTPNR_HPWL_SCALE_FIX") != nullptr;
++                    const double _scale = (yaxis ? cfg.hpwl_scale_y : cfg.hpwl_scale_x);
++                    double weight = (hpwl_fix ? (_scale * _scale) : 1.0) /
++                                    (ni->users.size() *
++                                     std::max<double>(1, _scale * std::abs(o_pos - this_pos)));
+ 
+                     if (user_idx != -1 && net_crit.count(ni->name)) {
+                         auto &nc = net_crit.at(ni->name);
+-                        if (user_idx < int(nc.criticality.size()))
+-                            weight *= (1.0 + cfg.timingWeight *
+-                                                     std::pow(nc.criticality.at(user_idx), cfg.criticalityExponent));
++                        if (user_idx < int(nc.criticality.size())) {
++                            float crit = nc.criticality.at(user_idx);
++                            weight *= (1.0 + cfg.timingWeight * std::pow(crit, cfg.criticalityExponent));
++
++                            // AM01/openXC7 (env-gated NEXTPNR_CRIT_DIST_EXP=<0..1>):
++                            // partially undo the 1/distance linearisation for critical nets.
++                            //
++                            // The base weight above is 1/(users * distance). That is the
++                            // standard bound2bound trick for approximating linear HPWL from a
++                            // quadratic solver -- but it means a LONG net gets LESS pull, not
++                            // more. Measured on this design:
++                            //
++                            //   375-tile critical net : 1/(7*375) * 11  ~= 0.0042
++                            //   5-tile slack net      : 1/(7*5)   *  1  ~= 0.029
++                            //
++                            // so the short net that does not matter has ~7x more weight than
++                            // the critical one crossing the die. The criticality boost caps at
++                            // (1 + timingWeight) = 11x and cannot overcome a 375x distance
++                            // discount. It compounds with hpwl_scale_y = 2 on this arch: our
++                            // critical net spans 268 tiles in y vs 107 in x, so the axis most
++                            // needing correction is discounted twice.
++                            //
++                            // The 1/distance term is a WIRELENGTH approximation. For timing we
++                            // want the opposite -- length penalised superlinearly. Scale the
++                            // weight back up by distance^(k*crit):
++                            //     crit = 0 -> unchanged, HPWL behaviour, wirelength-efficient
++                            //     crit = 1, k = 1 -> distance cancels entirely, i.e. quadratic
++                            //                        behaviour: aggressively shortened
++                            // k = 0 disables (bit-identical to before).
++                            static const float crit_dist_exp = []{
++                                const char *e = getenv("NEXTPNR_CRIT_DIST_EXP");
++                                return e ? float(atof(e)) : 0.0f;
++                            }();
++                            if (crit_dist_exp > 0.0f && crit > 0.0f) {
++                                double dist = std::max<double>(
++                                        1, (yaxis ? cfg.hpwl_scale_y : cfg.hpwl_scale_x) *
++                                                   std::abs(o_pos - this_pos));
++                                weight *= std::pow(dist, crit_dist_exp * crit);
++                            }
++                        }
+                     }
+ 
+                     // If cell 0 is not fixed, it will stamp +w on its equation and -w on the other end's equation,
+@@ -1000,6 +1065,29 @@ class HeAPPlacer
+                 int nx = ctx->rng(2 * rx + 1) + std::max(cell_locs.at(ci->name).x - rx, 0);
+                 int ny = ctx->rng(2 * ry + 1) + std::max(cell_locs.at(ci->name).y - ry, 0);
+ 
++                // Keep the sample INSIDE the region the cell is constrained to.
++                //
++                // Without this the window is centred on the cell's current
++                // location and merely has its RADIUS clamped by the region size,
++                // so a cell the spreader has moved outside its own region
++                // samples points that are then rejected below
++                // (!ci->region->bels.count(sz) -> continue) until the attempts
++                // budget runs out:
++                //
++                //   ERROR: Unable to find legal placement for cell '...'
++                //
++                // The radius clamp alone is inverted with respect to difficulty:
++                // the smaller the region, the narrower the window, so the harder
++                // it is to get back to it. Measured on a 21-region xc7k325t
++                // design, failure was strictly monotonic in region tightness --
++                // the signature of a search that cannot reach its target rather
++                // than of a utilisation limit.
++                if (ci->region != nullptr && ci->region->constr_bels) {
++                    const auto &rb = constraint_region_bounds[ci->region->name];
++                    nx = std::min(std::max(nx, rb.x0), rb.x1);
++                    ny = std::min(std::max(ny, rb.y0), rb.y1);
++                }
++
+                 iter++;
+                 iter_at_radius++;
+                 attempts++;
+@@ -1422,6 +1510,7 @@ class HeAPPlacer
+         {
+             auto startt = std::chrono::high_resolution_clock::now();
+             init();
++            build_wire_demand();
+             find_overused_regions();
+             for (auto &r : regions) {
+                 if (merged_regions.count(r.id))
+@@ -1521,6 +1610,71 @@ class HeAPPlacer
+             return int(fb.at(type)->at(x).at(y).size());
+         }
+ 
++        // Per-tile routing demand (RUDY), and the budget above which a tile counts
++        // as congested. Empty/zero when the feature is off.
++        std::vector<std::vector<float>> wire_demand;
++        float wire_demand_cap = 0.0f;
++
++        // Estimate routing demand with RUDY: every net spreads its half-perimeter
++        // uniformly across its own bounding box. A net whose bbox is tight
++        // therefore loads those few tiles heavily, which is exactly the case that
++        // makes a locally-dense placement unroutable while BEL occupancy stays
++        // low.
++        void build_wire_demand()
++        {
++            const char *v = getenv("NEXTPNR_WIRE_DEMAND");
++            if (v == nullptr)
++                return;
++            wire_demand_cap = float(atof(v));
++            if (!(wire_demand_cap > 0.0f))
++                return;
++            wire_demand.assign(p->max_x + 1, std::vector<float>(p->max_y + 1, 0.0f));
++            for (auto &net_entry : p->ctx->nets) {
++                NetInfo *ni = net_entry.second.get();
++                if (ni->driver.cell == nullptr)
++                    continue;
++                if (ni->users.empty())
++                    continue;
++                // Nets on dedicated global routing consume no general routing,
++                // and their bounding boxes span the die, so counting them would
++                // mark every tile congested. Ask the arch rather than guessing
++                // from fanout: a 300-fanout fabric net is real demand, and a
++                // lightly loaded clock net is not.
++                if (p->ctx->isGlobalNet(ni))
++                    continue;
++                int x0 = INT_MAX, y0 = INT_MAX, x1 = INT_MIN, y1 = INT_MIN;
++                auto acc = [&](CellInfo *ci) {
++                    if (ci == nullptr)
++                        return;
++                    auto it = p->cell_locs.find(ci->name);
++                    if (it == p->cell_locs.end())
++                        return;
++                    x0 = std::min(x0, it->second.x);
++                    x1 = std::max(x1, it->second.x);
++                    y0 = std::min(y0, it->second.y);
++                    y1 = std::max(y1, it->second.y);
++                };
++                acc(ni->driver.cell);
++                for (auto &u : ni->users)
++                    acc(u.cell);
++                if (x1 < x0 || y1 < y0)
++                    continue;
++                float w = float(x1 - x0 + 1), h = float(y1 - y0 + 1);
++                float hpwl = w + h;
++                float per_tile = hpwl / (w * h);
++                for (int x = x0; x <= x1; x++)
++                    for (int y = y0; y <= y1; y++)
++                        wire_demand.at(x).at(y) += per_tile;
++            }
++        }
++
++        bool wire_congested(int x, int y)
++        {
++            if (wire_demand.empty())
++                return false;
++            return wire_demand.at(x).at(y) > wire_demand_cap;
++        }
++
+         void init()
+         {
+             occupancy.resize(p->max_x + 1,
+@@ -1668,7 +1822,14 @@ class HeAPPlacer
+                     if (groups.at(x).at(y) != -1)
+                         continue;
+                     bool overutilised = false;
+-                    for (size_t t = 0; t < beltype.size(); t++) {
++                    // Routing demand counts as overutilisation. Without this the
++                    // spreader only ever reacts to BEL overflow, which on a
++                    // design at 9% LUT utilisation never happens -- so a
++                    // placement can be locally unroutable and the placer will
++                    // not notice, because nothing it measures has a problem.
++                    if (wire_congested(x, y))
++                        overutilised = true;
++                    for (size_t t = 0; t < beltype.size() && !overutilised; t++) {
+                         if (occ_at(x, y, t) > bels_at(x, y, t)) {
+                             overutilised = true;
+                             break;
+diff --git a/xilinx/arch.cc b/xilinx/arch.cc
+index 44eed32a..410d3c32 100644
+--- a/xilinx/arch.cc
++++ b/xilinx/arch.cc
+@@ -1870,9 +1870,9 @@ void Arch::routeClock()
+ 
+         // check if we have a global clock net, skip otherwise
+         bool is_global = false;
+-        if ((driver_type == id_BUFGCTRL    || driver_type == id_BUFCE_BUFG_PS ||
+-             driver_type == id_BUFCE_BUFCE || driver_type == id_BUFGCE_DIV_BUFGCE_DIV) &&
+-            clk_driver.port == id_O)
++        // Same condition as Arch::isGlobalNet(), called rather than repeated so
++        // the two cannot drift apart.
++        if (isGlobalNet(clk_net))
+             is_global = true;
+         else if (no_users == 1 && from_pll_or_mmcm &&
+                  (clk_net_user_type == id_BUFGCTRL || clk_net_user_type == id_BUFCE_BUFCE ||
+@@ -2719,4 +2719,20 @@ const std::vector<std::string> Arch::availablePlacers = {"sa",
+ const std::string Arch::defaultRouter = "router2";
+ const std::vector<std::string> Arch::availableRouters = {"router1", "router2"};
+ 
++// True if this net rides dedicated global routing rather than the general
++// fabric. The condition is the driver being a global buffer output; the global
++// router's other cases (PLL/MMCM feeds, IBUFDS->BUFG inputs) concern which nets
++// it must route through the dedicated backbone, not which nets consume general
++// routing, so they are deliberately not folded in here.
++bool Arch::isGlobalNet(const NetInfo *net) const
++{
++    if (net == nullptr || net->driver.cell == nullptr)
++        return false;
++    IdString dt = net->driver.cell->type;
++    return (dt == id_BUFGCTRL || dt == id_BUFCE_BUFG_PS || dt == id_BUFCE_BUFCE ||
++            dt == id_BUFGCE_DIV_BUFGCE_DIV) &&
++           net->driver.port == id_O;
++}
++
++
+ NEXTPNR_NAMESPACE_END
+diff --git a/xilinx/arch.h b/xilinx/arch.h
+index 49b1daf2..2d648839 100644
+--- a/xilinx/arch.h
++++ b/xilinx/arch.h
+@@ -918,6 +918,12 @@ struct Arch : BaseCtx
+         return range;
+     }
+ 
++    // True if this net is carried on dedicated global routing rather than the
++    // general fabric. Consumers that reason about routing demand (e.g. the HeAP
++    // spreader's congestion estimate) must exclude such nets: they use no
++    // general routing, and their bounding boxes span the die.
++    bool isGlobalNet(const NetInfo *net) const;
++
+     Loc getBelLocation(BelId bel) const
+     {
+         NPNR_ASSERT(bel != BelId());
+diff --git a/xilinx/arch_place.cc b/xilinx/arch_place.cc
+index 1e0100a4..17688f2d 100644
+--- a/xilinx/arch_place.cc
++++ b/xilinx/arch_place.cc
+@@ -22,6 +22,7 @@
+ #include "design_utils.h"
+ #include "log.h"
+ #include "nextpnr.h"
++#include "place_common.h"
+ #include "timing.h"
+ #include "util.h"
+ NEXTPNR_NAMESPACE_BEGIN
+@@ -1300,8 +1301,30 @@ void Arch::fixupPlacement()
+                             if (getBelType(rb) != root->type || !checkBelAvail(rb) ||
+                                 !isValidBelForCell(root, rb))
+                                 continue;
++                            // Respect region constraints. Without this, repair
++                            // silently relocates region-constrained cells out of
++                            // their regions -- measured at 13626 of 50972 cells
++                            // (27%) on a 21-region design, i.e. a quarter of the
++                            // floorplan undone immediately after it was built.
++                            // check_cell_bel_region() returns true for cells with
++                            // no region, so unconstrained designs are unaffected.
++                            if (!check_cell_bel_region(root, rb))
++                                continue;
+                             if (!cluster_bels(rb, mbels))
+                                 continue;
++                            // Members have their own regions, which need not be
++                            // the root's: a LUT/FF pair can straddle two RTL
++                            // scopes and therefore two regions.
++                            {
++                                bool region_ok = true;
++                                for (size_t i = 0; i < members.size(); i++)
++                                    if (!check_cell_bel_region(members[i], mbels[i])) {
++                                        region_ok = false;
++                                        break;
++                                    }
++                                if (!region_ok)
++                                    continue;
++                            }
+                             for (size_t i = 0; i < members.size(); i++)
+                                 bindBel(mbels[i], members[i], STRENGTH_STRONG);
+                             bool allok = true;
+-- 
+2.53.0
+
