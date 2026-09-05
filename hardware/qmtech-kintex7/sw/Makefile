@@ -116,6 +116,8 @@ SOURCES_DAEMON := \
 	thermal_am01.c \
 	$(CYD_HOST)/cyd_panel.c \
 	$(CYD_HOST)/cyd_cmd.c \
+	$(CYD_HOST)/cyd_ota_send.c \
+	$(CYD_HOST)/cyd_md5.c \
 	miner_io_gpio.c \
 	$(GPIO_BUS)/am01_gpio_bus.c \
 	$(GPIO_BUS)/am01_panel.c

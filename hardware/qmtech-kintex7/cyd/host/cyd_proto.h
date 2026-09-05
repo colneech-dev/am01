@@ -96,6 +96,71 @@
 #define CYD_CMD_SET_WIFI   "set_wifi"
 #define CYD_MSG_PING       "PING"
 
+/*
+ * CM4 -> CYD, firmware update:
+ *
+ *     OTABEGIN <bytes> <md5-hex>\n
+ *     OTA <base64 of up to CYD_OTA_CHUNK bytes>\n     ... many
+ *     OTAEND\n
+ *
+ * CYD -> CM4:
+ *
+ *     OTAOK <bytes-so-far>\n      after each chunk, and once after OTAEND
+ *     OTAERR <text>\n             aborted; the running firmware is untouched
+ *
+ * WHY THE APPLICATION AND NOT esptool. The ESP32 ROM bootloader listens on
+ * UART0 (GPIO1/GPIO3) and nowhere else. This link is Serial2 on CN1
+ * (GPIO27/22), chosen to escape the CH340C contention on UART0 documented in
+ * docs/JP5-WIRING.md. So no amount of EN/IO0 control or
+ * RTC_CNTL_FORCE_DOWNLOAD_BOOT can make the ROM listen here -- forcing
+ * download mode only parks the chip on the pins we deliberately abandoned.
+ * am01-uartd's PTY flash mode was designed before that move and cannot work
+ * as written.
+ *
+ * The application can do it, because the panel writes its own spare OTA slot:
+ * the image is 485KB against two 1.25MB slots in the default 4MB scheme.
+ *
+ * BASE64 rather than raw bytes, because this protocol is line-oriented and
+ * stays that way -- a length-prefixed binary frame would need every reader on
+ * both sides to learn a second framing. The 33% cost is affordable: 485KB
+ * becomes ~650KB, which at 115200 baud is under a minute, once per update.
+ *
+ * ACK PER CHUNK, not a blind stream. The panel writes each chunk to flash
+ * before acknowledging, so the host cannot outrun an erase; this is flow
+ * control that costs one short line per chunk.
+ *
+ * WHAT THIS CANNOT DO: recover a panel whose firmware does not BOOT. The
+ * receiver lives in the application, so it needs the application running.
+ * Rollback on a non-booting image needs bootloader support that the Arduino
+ * framework does not enable, so the protection here is to verify the MD5
+ * BEFORE the boot partition is switched -- a corrupt transfer can never be
+ * booted. A genuinely broken but valid image still needs USB.
+ */
+#define CYD_MSG_OTABEGIN "OTABEGIN "
+#define CYD_MSG_OTADATA  "OTA "
+#define CYD_MSG_OTAEND   "OTAEND"
+#define CYD_MSG_OTAOK    "OTAOK "
+#define CYD_MSG_OTAERR   "OTAERR "
+
+/* Raw bytes per chunk. 512 -> 684 base64 characters, comfortably inside
+ * CYD_LINE_MAX with the prefix, and a whole number of flash words. */
+#define CYD_OTA_CHUNK 512
+
+/* An erase can stall a write for a while; the host must not give up early. */
+#define CYD_OTA_ACK_TIMEOUT_MS 10000
+
+/* Refuse anything that cannot be a valid image for this board, before a
+ * single byte is written. Upper bound is the 1.25MB OTA slot. */
+#define CYD_OTA_MIN_BYTES 65536
+#define CYD_OTA_MAX_BYTES (1280 * 1024)
+
+/* The host writes the image here and touches the .req file; the panel thread
+ * inside odo-miner streams it. A file rather than a socket because the miner
+ * already owns the bus exclusively (libgpiod line requests are exclusive), so
+ * a separate flashing process cannot open the link while mining. */
+#define CYD_OTA_IMAGE_PATH "/run/odod/panel-ota.bin"
+#define CYD_OTA_REQ_PATH   "/run/odod/panel-ota.req"
+
 /* Bumped only for an INCOMPATIBLE change. Adding a status field is not one:
  * the payload is opaque JSON and an older panel ignores what it does not
  * know. HELLO carries this so a mismatch is visible on the panel rather than

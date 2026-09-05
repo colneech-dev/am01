@@ -1,0 +1,66 @@
+#!/bin/sh
+#
+# am01-panel-ota -- update the CYD front panel's firmware over the link.
+#
+# WHY NOT esptool. The ESP32 ROM bootloader listens on UART0 (GPIO1/GPIO3)
+# and nowhere else. This panel's link is Serial2 on CN1 (GPIO27/22), moved
+# there to escape the CH340C contention on UART0 that docs/JP5-WIRING.md
+# documents. Nothing -- not EN/IO0 control, not RTC_CNTL_FORCE_DOWNLOAD_BOOT
+# -- makes the ROM listen on CN1; forcing download mode only parks the chip on
+# the two pins we deliberately stopped using. So the running application
+# receives the image and writes the spare OTA slot itself.
+#
+# WHY THIS SCRIPT DOES NOT DO THE TRANSFER. libgpiod line requests are
+# exclusive and odo-miner holds all 25 lines while it runs, so nothing else
+# can open the bus without stopping the miner. This stages the image and asks
+# the panel thread INSIDE odo-miner to send it. Mining does not pause.
+#
+#   am01-panel-ota /path/to/firmware.bin
+#
+# Progress goes to the journal:  journalctl -fu odo-miner
+#
+set -eu
+
+RUN_DIR=/run/odod
+IMAGE=$RUN_DIR/panel-ota.bin
+REQ=$RUN_DIR/panel-ota.req
+
+die() { echo "am01-panel-ota: $*" >&2; exit 1; }
+
+[ $# -eq 1 ] || die "usage: am01-panel-ota <firmware.bin>"
+SRC=$1
+
+[ -f "$SRC" ] || die "$SRC: not a file"
+
+# Checked HERE as well as in the daemon, because a mistake caught before the
+# image is staged costs nothing, and one caught after needs the journal to
+# explain itself. 0xE9 is the ESP32 image magic; the commonest error by far is
+# handing over firmware.elf or the wrong project's .bin.
+MAGIC=$(od -An -tx1 -N1 "$SRC" | tr -d ' \n')
+[ "$MAGIC" = "e9" ] || \
+    die "$SRC does not start with 0xE9, so it is not an ESP32 image (got 0x$MAGIC).
+    You probably want .pio/build/cyd/firmware.bin, not firmware.elf."
+
+SIZE=$(wc -c < "$SRC")
+[ "$SIZE" -ge 65536 ]   || die "$SRC is only $SIZE bytes; that cannot be a panel image"
+[ "$SIZE" -le 1310720 ] || die "$SRC is $SIZE bytes; the OTA slot is 1310720"
+
+systemctl is-active --quiet odo-miner || \
+    die "odo-miner is not running, and it owns the link -- nothing can send
+    the image. Start it first: systemctl start odo-miner"
+
+mkdir -p "$RUN_DIR"
+
+# Image first, request second, and the request is created only after the copy
+# has been flushed. The daemon triggers on the REQUEST, so this ordering is
+# what stops it ever picking up a half-written image.
+cp "$SRC" "$IMAGE.tmp"
+sync
+mv -f "$IMAGE.tmp" "$IMAGE"
+sync
+: > "$REQ"
+
+echo "am01-panel-ota: staged $SIZE bytes; odo-miner is sending it now."
+echo "am01-panel-ota: watch it with:  journalctl -fu odo-miner"
+echo "am01-panel-ota: the panel reboots into the new image on success; on any"
+echo "                failure it keeps running the firmware it has."

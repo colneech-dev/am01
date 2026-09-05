@@ -19,6 +19,7 @@
 
 #include "cyd_panel.h"
 #include "cyd_cmd.h"
+#include "cyd_ota_send.h"
 #include "cyd_proto.h"
 
 #include "miner_io_gpio.h"
@@ -31,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>       /* clock_gettime, for the OTA ack timeout */
 #include <unistd.h>
 
 /* UART_STAT at VERSION >= 0x0203:
@@ -93,9 +95,29 @@ static int uart_write(am01_bus_t *bus, const char *buf, size_t len)
         if (am01_bus_read_reg(bus, CYD_REG_UART_STAT, &st) < 0)
             return (int)n;
 
+        /* DRAIN TO EMPTY, THEN WRITE AT MOST HALF THE FIFO.
+         *
+         * The obvious version -- room = DEPTH - tx_cnt, then write that many
+         * -- is what was here, and it silently truncated lines. tx_cnt is
+         * sampled ONCE and then up to `room` bytes are pushed in a tight loop
+         * with no re-read, so any latency in that count makes room an
+         * overestimate; uart_bridge.v drops a write into a full FIFO without
+         * complaining ("a drop here is a host bug", line 159) and the loss is
+         * invisible from this side.
+         *
+         * It cost 4 bytes off the end of one OTA chunk in ~986 on
+         * 2026-09-05 -- the transfer aborted on the byte-count check, having
+         * been fine for 58 chunks. The same race has been quietly corrupting
+         * the occasional 655-byte STATUS line all along; those just look like
+         * a panel that missed an update, which is why it was never chased.
+         *
+         * So: only write when the FIFO reads EMPTY, and then no more than
+         * half its depth. Even if the count is a read stale, 8 outstanding
+         * plus 8 written cannot exceed 16. This costs nothing real -- 8 bytes
+         * at 115200 is 694us, which is line rate, so the link is the limit
+         * either way. */
         unsigned cnt  = ST_TX_CNT(st);
-        unsigned room = ST_TX_FULL(st) ? 0
-                      : (cnt < TX_FIFO_DEPTH ? TX_FIFO_DEPTH - cnt : 0);
+        unsigned room = (ST_TX_FULL(st) || cnt != 0) ? 0 : (TX_FIFO_DEPTH / 2);
 
         if (!room) {
             if (++spins > 2000)          /* ~2s at 1ms */
@@ -319,12 +341,144 @@ static void drain_rx(am01_bus_t *bus, int may_apply)
     }
 }
 
+/* ---- panel firmware update ---------------------------------------------
+ *
+ * THE UPDATE HAPPENS HERE, INSIDE THE MINER, and not in a standalone tool,
+ * because libgpiod line requests are exclusive and odo-miner holds all 25
+ * lines while it runs. A separate flashing process cannot open the bus
+ * without the miner being stopped -- so the process that already owns the
+ * link does the transfer, and mining never pauses.
+ *
+ * The operator stages an image with am01-panel-ota, which writes
+ * CYD_OTA_IMAGE_PATH and then CYD_OTA_REQ_PATH. Seeing the .req is the
+ * trigger; it is created last precisely so a half-copied image can never be
+ * picked up.
+ */
+static int ota_write(void *ctx, const char *buf, size_t len)
+{
+    /* The control lines only -- there are ~1000 data chunks and logging those
+     * would bury the journal. These two are the ones worth being able to
+     * prove went out. */
+    if (strncmp(buf, CYD_MSG_OTABEGIN, strlen(CYD_MSG_OTABEGIN)) == 0 ||
+        strncmp(buf, CYD_MSG_OTAEND, strlen(CYD_MSG_OTAEND)) == 0)
+        fprintf(stderr, "[cyd] ota tx: %.*s", (int)len, buf);
+
+    int n = uart_write((am01_bus_t *)ctx, buf, len);
+    if (n != (int)len)
+        fprintf(stderr, "[cyd] ota tx SHORT: wrote %d of %zu\n", n, len);
+    return n;
+}
+
+static uint64_t now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)(ts.tv_nsec / 1000000);
+}
+
+/*
+ * One line from the panel, or 0 on timeout.
+ *
+ * Deliberately NOT drain_rx: that one parses commands and can apply them, and
+ * applying a reboot in the middle of writing the panel's flash is precisely
+ * the wrong moment. Here every line goes to the OTA state machine, which
+ * skips what it does not recognise.
+ */
+static int ota_readline(void *ctx, char *buf, size_t cap, int timeout_ms)
+{
+    am01_bus_t *bus = (am01_bus_t *)ctx;
+    uint64_t deadline = now_ms() + (uint64_t)timeout_ms;
+    size_t   n = 0;
+
+    for (;;) {
+        uint16_t st;
+        if (am01_bus_read_reg(bus, CYD_REG_UART_STAT, &st) < 0)
+            return -1;
+
+        if (ST_RX_EMPTY(st)) {
+            if (now_ms() >= deadline)
+                return 0;
+            usleep(1000);
+            continue;
+        }
+
+        uint16_t d;
+        if (am01_bus_read_reg(bus, CYD_REG_UART_DATA, &d) < 0)
+            return -1;
+
+        char ch = (char)(d & 0xFF);
+        if (ch == '\n' || ch == '\r') {
+            if (n == 0)
+                continue;            /* CRLF, or a blank line */
+            buf[n] = '\0';
+            /* Every line seen during an update is logged. An OTA is rare,
+             * manual, and watched; when one fails the question is always
+             * "did the panel say anything at all", and without this the
+             * answer is a timeout with no evidence either way. */
+            fprintf(stderr, "[cyd] ota rx: '%s'\n", buf);
+            return (int)n;
+        }
+        /* Same printable-only rule as drain_rx: a framing glitch delivering
+         * 0x00 would otherwise truncate the line for every strcmp below. */
+        if (ch < 0x20 || ch == 0x7F)
+            continue;
+        if (n + 1 < cap)
+            buf[n++] = ch;
+    }
+}
+
+static void ota_progress(void *ctx, size_t done, size_t total)
+{
+    (void)ctx;
+    static int last_pct = -1;
+    int pct = total ? (int)((done * 100u) / total) : 0;
+    /* Every 10%, not every chunk: there are ~1000 chunks and the journal is
+     * not a progress bar. */
+    if (pct / 10 != last_pct / 10) {
+        last_pct = pct;
+        fprintf(stderr, "[cyd] panel update %d%% (%zu/%zu)\n", pct, done, total);
+    }
+}
+
+static void ota_run_if_requested(am01_bus_t *bus)
+{
+    struct stat st;
+    if (stat(CYD_OTA_REQ_PATH, &st) != 0)
+        return;
+
+    /* Consume the request FIRST. If this update kills the panel thread or the
+     * miner restarts, the image must not be retried forever. */
+    unlink(CYD_OTA_REQ_PATH);
+
+    fprintf(stderr, "[cyd] panel firmware update requested\n");
+
+    cyd_ota_io_t io = { ota_write, ota_readline, ota_progress, bus };
+    char err[256] = "";
+
+    if (cyd_ota_send_file(CYD_OTA_IMAGE_PATH, &io, err, sizeof err) == 0) {
+        fprintf(stderr, "[cyd] panel update complete; the panel is "
+                        "rebooting into the new image\n");
+    } else {
+        /* The panel's RUNNING firmware is untouched by any failure path --
+         * only the spare slot was being written. Say so, because "update
+         * failed" otherwise reads as "the panel is now bricked". */
+        fprintf(stderr, "[cyd] panel update FAILED: %s\n", err);
+        fprintf(stderr, "[cyd] the panel is still running its previous "
+                        "firmware; nothing was switched\n");
+    }
+    unlink(CYD_OTA_IMAGE_PATH);
+}
+
 static void *panel_thread(void *arg)
 {
     am01_bus_t *bus = (am01_bus_t *)arg;
     int tick = 0;
 
     while (!g_stop) {
+        /* Before drain_rx, so a queued command cannot be applied between the
+         * request appearing and the transfer starting. */
+        ota_run_if_requested(bus);
+
         drain_rx(bus, 1);
 
         /* Anything held back during a transmission runs here, where it cannot

@@ -52,6 +52,7 @@
 #include <Arduino.h>
 
 #include "cyd_link.h"
+#include "cyd_ota.h"
 #include "cyd_status_parse.h"
 
 /* CN1's two free GPIOs. Explicit because Serial2 would otherwise default to
@@ -76,6 +77,20 @@ cyd_link_t *cyd_link_uart_open(int baud)
     memset(&g_link, 0, sizeof g_link);
 
     /* Pins given explicitly: Serial2 defaults to GPIO16/17, the RGB LED. */
+    /* BEFORE begin(), which is the only time it can be set.
+     *
+     * The default is 256 bytes and that is too small for this protocol. An
+     * OTA chunk line is 689 bytes ("OTA " + 684 base64 + newline), and while
+     * an update is running every pass of the loop also does a flash write and
+     * a screen repaint -- so the driver's ring has to hold a whole line while
+     * the application is busy elsewhere. At 256 it does not: measured on
+     * hardware 2026-09-05, the panel received 414 of the first 512-byte chunk
+     * and the transfer was refused on the spot by the byte-count check.
+     *
+     * 4096 is ~355ms of slack at 115200, far longer than any flash erase, and
+     * costs 4KB of the 320KB the panel barely uses (7.5%). */
+    LINK.setRxBufferSize(4096);
+
     LINK.begin(baud > 0 ? baud : CYD_BAUD_DEFAULT, SERIAL_8N1,
                CYD_LINK_RX_PIN, CYD_LINK_TX_PIN);
 
@@ -92,6 +107,17 @@ cyd_link_t *cyd_link_uart_open(int baud)
 /* One complete line. Returns true if `out` was updated by a STATUS. */
 static bool handle_line(cyd_link_t *l, char *line, cyd_status_t *out)
 {
+    /* OTA FIRST. During an update the chunks are the only traffic that
+     * matters and by far the highest rate on the link, and cyd_ota_handle_line
+     * answers each one itself. It returns true only for OTA messages, so
+     * nothing else is affected when no update is running.
+     *
+     * Returning false, not true: an OTA line never updates `out`, and
+     * claiming it did would make the caller redraw a status that has not
+     * changed. */
+    if (cyd_ota_handle_line(line, LINK))
+        return false;
+
     if (strncmp(line, CYD_MSG_STATUS, strlen(CYD_MSG_STATUS)) == 0) {
         if (cyd_status_parse(line + strlen(CYD_MSG_STATUS), out)) {
             l->last_rx_ms = millis();
@@ -123,7 +149,12 @@ bool cyd_link_poll(cyd_link_t *link, cyd_status_t *out)
     /* Bounded per call. The UI loop has to keep running: draining an
      * unbounded backlog here would stall redraws and touch handling for as
      * long as the miner cared to talk. */
-    int budget = 512;
+    /* Raised from 512 with the RX buffer, and for the same reason: a single
+     * OTA line is 689 bytes, so a 512-byte budget could not consume one in a
+     * pass however much the driver had buffered. It only ever reads what is
+     * actually available -- in normal running that is one ~700-byte status a
+     * second, so this changes nothing there. */
+    int budget = 2048;
     while (LINK.available() > 0 && budget-- > 0) {
         int c = LINK.read();
         if (c < 0)

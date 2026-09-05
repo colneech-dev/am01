@@ -199,6 +199,12 @@ cyd_touch_ev_t cyd_touch_edge_update(cyd_touch_edge_t *e, bool down,
  * is sitting on top of a miner where the power budget is not free. */
 void cyd_ui_draw(cyd_ui_t *ui, const cyd_status_t *st);
 
+/* The firmware-update screen. `err` NULL or "" while the transfer is running;
+ * set it to show the failure instead of the bar. Takes over the display
+ * because the normal screen would otherwise sit frozen for the minute the
+ * update takes, which is exactly when someone reaches for the power. */
+void cyd_ui_draw_ota(int pct, const char *err);
+
 /* Touch. Returns the action to carry out, or CYD_ACTION_NONE. Deliberately
  * does NOT call the link itself -- the caller owns that, so this stays
  * testable off-hardware and the UI cannot quietly acquire side effects. */

@@ -761,6 +761,67 @@ static void draw_confirm(const cyd_ui_t *ui)
 
 /* ---- entry point ------------------------------------------------------ */
 
+/*
+ * The update screen.
+ *
+ * Worth the code: an OTA takes about a minute, and for that minute the panel
+ * would otherwise sit showing a frozen hashrate while the miner appears to
+ * have stopped talking to it. Someone WILL pull the power on that. Saying
+ * "UPDATING 43%" is the difference between a quiet minute and a bricked
+ * panel -- and the one thing that must not happen during a flash write is a
+ * power cut.
+ *
+ * Drawn incrementally: only the bar and the number change, so this cannot
+ * become the thing that slows the transfer down.
+ */
+void cyd_ui_draw_ota(int pct, const char *err)
+{
+    static int  last_pct = -1;
+    static bool framed;
+
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+
+    if (!framed) {
+        framed = true;
+        last_pct = -1;
+        tft.fillScreen(C_BG);
+
+        tft.setTextDatum(MC_DATUM);
+        tft.setTextColor(C_TEXT, C_BG);
+        tft.drawString("UPDATING PANEL", 160, 78, 4);
+
+        tft.setTextColor(C_DIM, C_BG);
+        tft.drawString("do not remove power", 160, 108, 2);
+
+        tft.drawRect(40, 130, 240, 26, C_DIM);
+    }
+
+    if (err && *err) {
+        tft.setTextDatum(MC_DATUM);
+        tft.setTextColor(C_BAD, C_BG);
+        tft.drawString("UPDATE FAILED", 160, 180, 4);
+        tft.setTextColor(C_DIM, C_BG);
+        tft.drawString(err, 160, 205, 2);
+        framed = false;          /* next call repaints from scratch */
+        return;
+    }
+
+    if (pct != last_pct) {
+        last_pct = pct;
+        int w = (236 * pct) / 100;
+        tft.fillRect(42, 132, w, 22, C_ACCENT);
+        if (w < 236)
+            tft.fillRect(42 + w, 132, 236 - w, 22, C_PANEL);
+
+        char buf[8];
+        snprintf(buf, sizeof buf, "%d%%", pct);
+        tft.setTextDatum(MC_DATUM);
+        tft.setTextColor(C_TEXT, C_BG);
+        tft.drawString(buf, 160, 178, 4);
+    }
+}
+
 void cyd_ui_draw(cyd_ui_t *ui, const cyd_status_t *st)
 {
     if (!ui || !st)

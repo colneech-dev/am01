@@ -20,6 +20,7 @@
 #include <stdlib.h>      /* millis(), and the Arduino entry points */
 
 #include "cyd_link.h"
+#include "cyd_ota.h"
 #include "cyd_ui.h"
 
 static cyd_link_t  *g_link;
@@ -47,6 +48,28 @@ void loop(void)
      * the panel sits on top of a miner that is already drawing ~12A on the
      * core rail; a free-running repaint loop spends power to display nothing
      * new. odo-ui takes the same approach. */
+    /* AN UPDATE OWNS THE PANEL. While one is running, the normal screen is
+     * both wrong (the status stops arriving) and dangerous to show: a frozen
+     * hashrate for a minute is how someone decides the panel has hung and
+     * pulls the power, mid flash-write. Touch is ignored for the same reason.
+     *
+     * The poll still runs -- that is what feeds the OTA chunks in. */
+    if (cyd_ota_active()) {
+        cyd_link_poll(g_link, &g_status);
+        cyd_ui_draw_ota(cyd_ota_percent(), NULL);
+        return;
+    }
+    {
+        /* Drawn ONCE -- take_error clears it -- and then the next status
+         * redraws the normal screen over the top. A failed update must not be
+         * silent, but it must not become the permanent display either: the
+         * panel is still running its old firmware and still has a miner to
+         * report on. */
+        const char *ota_err = cyd_ota_take_error();
+        if (ota_err[0] != '\0')
+            cyd_ui_draw_ota(0, ota_err);
+    }
+
     if (cyd_link_poll(g_link, &g_status)) {
         /* Prefill the pool editor from what the miner reports, so a pool
          * change is an edit rather than typing a host from memory. It
