@@ -61,17 +61,77 @@
 // this is the first setting here grounded in a number from this part
 // rather than from another vendor's.
 //
-// STATUS: clk_2x at 266.67MHz has NOT been shown to close timing on
-// real place-and-route. The block RAM itself has margin (ds182 rates
-// FMAX_BRAM at 458MHz for -1), so the path to watch is the address
-// muxing in sbox_large_mux2, not the memory.
+// STATUS: clk_2x at 2x clk_h has NOT been shown to close timing on real
+// place-and-route. The block RAM itself has margin (ds182 rates FMAX_BRAM
+// at 458MHz for -1), so the path to watch is the address muxing in
+// sbox_large_mux2, not the memory. Moot at present: nothing consumes
+// clk_2x, synthesis drops its BUFG, and it appears in no clock table.
+//
+// SPEED BUMP, 2026-09-01: MULT 16 -> 19, clk_h 133.33 -> 158.33MHz (+18.75%).
+//
+// Grounded in a measurement rather than a guess. The 0x0202 build closed at
+// WNS +1.398ns against a 7.500ns period, so the worst path takes 6.102ns and
+// the design is good for at least 163.9MHz. "At least" is the important part:
+// the tool stops optimising once it meets the constraint, so 163.9 is a lower
+// bound, and constraining tighter usually buys more.
+//
+//   MULT 18 -> 150.00MHz, 6.667ns, predicted slack +0.565ns
+//   MULT 19 -> 158.33MHz, 6.316ns, predicted slack +0.214ns
+//   MULT 20 -> 166.67MHz, 6.000ns, predicted slack -0.102ns   predicted fail
+//
+// SECOND BUMP, 2026-09-05: MULT 19 -> 21, clk_h 158.33 -> 175.00MHz (+10.5%).
+// Hashrate 2 * 175 / 4 = 87.5 MH/s, up from 79.2.
+//
+// THE PREDICTION ABOVE WAS WRONG, and the way it was wrong matters. It
+// extrapolated from a FIXED 6.102ns worst path (the 0x0202 build's 7.500ns
+// period minus its +1.398ns WNS) and concluded MULT 20 fails by -0.102ns. But
+// that path length was itself a product of a loose constraint: Vivado stops
+// optimising once it meets the target, so a path measured under 7.500ns says
+// nothing about what the same design does when asked for 6.000ns. Constraining
+// tighter really does buy more, exactly as the note above suspected.
+//
+// Measured, not predicted -- post-route Design Timing Summary, all with
+// TNS 0.000 and ZERO failing endpoints of 75076 (86478 for the OUTREG pair):
+//
+//   MULT 20        166.67MHz   WNS +0.508ns   (predicted to FAIL at -0.102)
+//   MULT 20.5      170.83MHz   WNS +0.427ns
+//   MULT 21        175.00MHz   WNS +0.194ns   <- chosen
+//   MULT 22 OUTREG 183.33MHz   WNS +0.930ns
+//   MULT 24 OUTREG 200.00MHz   WNS +0.763ns
+//
+// +0.194ns at 175MHz is 3.4% of the 5.714ns period -- real but thin. Hold is
+// fine (WHS +0.027ns). If any board proves marginal, MULT 20 gives back 8.3MHz
+// for 2.6x the setup margin; MULT 20.5 sits between them.
+//
+// The OUTREG rows are a DIFFERENT core (odo_gen --bram-out-reg, +11346
+// registers, same 420 BRAM tiles and same LUTs) whose extra pipeline stage
+// breaks the critical path -- which is why 200MHz there has 4x the margin of
+// 175MHz here. That is the bigger prize (200MHz = 100 MH/s, +26%), but it
+// changes the datapath schedule and so needs functional equivalence checking
+// before it can ship. This bump deliberately does NOT take it: MULT 21 is the
+// same core as today, only clocked faster.
+//
+// VCO = 50 * 21 = 1050MHz, inside the -1 grade's 600-1200MHz range. clk_2x
+// becomes 350MHz but nothing consumes it (synthesis drops its BUFG), and
+// bus_clk is still sys_clk_50m straight through, so the UART baud and fan PWM
+// divider are untouched.
+//
+// (Of the 2026-09-01 bump, superseded above: its VCO was 950MHz, and its
+// fallback advice was MULT 18. Both are obsolete now that MULT 20-24 have
+// been measured rather than extrapolated -- fall back per the measured table,
+// not to MULT 18.)
+//
+// The bus_clk point from that bump still holds and is worth repeating: bus_clk
+// is sys_clk_50m straight through and is NOT affected by any MULT change, so
+// uart_bridge's CLK_HZ=50_000_000 and the fan PWM divider stay correct. A
+// clock change that silently rebauds the panel would otherwise be found late.
 //
 `timescale 1ns / 1ps
 
 module clk_gen_hash #(
     parameter CLKIN_PERIOD_NS = 20.000, // 50MHz input
-    parameter CLKFBOUT_MULT   = 16,     // VCO = 50MHz * 16 = 800MHz (7-series -1: 600-1200MHz range)
-    parameter CLKOUT_DIVIDE_2X = 3      // clk_2x = 800/3 = 266.67MHz, clk_h = 800/6 = 133.33MHz
+    parameter CLKFBOUT_MULT   = 21,     // VCO = 50MHz * 21 = 1050MHz (7-series -1: 600-1200MHz range)
+    parameter CLKOUT_DIVIDE_2X = 3      // clk_2x = 1050/3 = 350.00MHz, clk_h = 1050/6 = 175.00MHz
 )
 (
     input  wire clk_in,     // from sys_clk_50m (via IBUF upstream)
