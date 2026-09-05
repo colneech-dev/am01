@@ -87,12 +87,44 @@
 // If this does not close, fall back to MULT 18 before anything else: it is
 // still +12.5% and has more than twice the predicted margin.
 //
+// SPEED BUMP, 2026-09-05: MULT 24 -> 18, DIVIDE_2X 3 -> 2,
+// clk_h 200.00 -> 225.00MHz (+12.5%).
+//
+// Note the starting point: the bitstream actually FLASHED and earning is
+// MULT 24 / DIVIDE_2X 3 = 200MHz, which is ahead of what this file said
+// (MULT 19 = 158.33MHz). The 158.33 entry above was superseded on the board
+// before it was superseded here.
+//
+// Grounded the same way as the entry above. The flashed 200MHz build closed
+// at WNS +0.763ns against a 5.000ns period, so its worst path takes 4.237ns
+// and the design is good for at least 236MHz -- again a LOWER bound, because
+// the tool stops optimising once it meets the constraint.
+//
+//   MULT 17.5 -> 218.75MHz, 4.571ns, predicted slack +0.334ns
+//   MULT 18   -> 225.00MHz, 4.444ns, predicted slack +0.207ns   <- chosen
+//   MULT 18.5 -> 231.25MHz, 4.324ns, predicted slack +0.087ns   too tight
+//
+// +0.207ns matches the margin accepted for the MULT 19 bump, so this is the
+// same risk appetite, not a new one. If it closes with room, MULT 18.5 is
+// the next rung.
+//
+// DIVIDE_2X HAS TO DROP TO 2 TO GET ABOVE 200MHz. With DIVIDE_2X=3 clk_h is
+// VCO/6, and the -1 grade's 1200MHz VCO ceiling makes 200MHz the hard maximum
+// -- which is exactly where the flashed build sits. It is not a coincidence:
+// that build is already against the wall for this divider. VCO/4 lifts it.
+//
+// VCO 900MHz is inside the 600-1200MHz range. clk_2x becomes 450MHz but
+// NOTHING CONSUMES IT in the 2-instance design -- synthesis drops its BUFG
+// and it appears in no clock table, as in the flashed build. bus_clk is
+// sys_clk_50m straight through and is unaffected, so uart_bridge's
+// CLK_HZ=50_000_000 and the fan PWM divider stay correct.
+//
 `timescale 1ns / 1ps
 
 module clk_gen_hash #(
     parameter CLKIN_PERIOD_NS = 20.000, // 50MHz input
-    parameter CLKFBOUT_MULT   = 19,     // VCO = 50MHz * 19 = 950MHz (7-series -1: 600-1200MHz range)
-    parameter CLKOUT_DIVIDE_2X = 3      // clk_2x = 950/3 = 316.67MHz, clk_h = 950/6 = 158.33MHz
+    parameter CLKFBOUT_MULT   = 18,     // VCO = 50MHz * 18 = 900MHz (7-series -1: 600-1200MHz range)
+    parameter CLKOUT_DIVIDE_2X = 2      // clk_2x = 900/2 = 450MHz, clk_h = 900/4 = 225MHz
 )
 (
     input  wire clk_in,     // from sys_clk_50m (via IBUF upstream)
