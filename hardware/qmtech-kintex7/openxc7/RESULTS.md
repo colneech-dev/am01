@@ -1171,3 +1171,79 @@ is far larger than any RTL change attempted (pre-mix pipelining moved the median
    1-miner build, not the 2-miner configuration that produces the shipping
    hashrate. It needs silicon or Vivado confirmation before any claim.
 3. Hunt more seeds -- the one lever that measurably works.
+
+## Where the open-source flow actually stands against Vivado (2026-09-05)
+
+This section exists because the two flows had drifted apart without anyone
+writing down by how much.
+
+### The shipping build is Vivado, at 200 MHz, on two miners
+
+`vivado/build_mux4.tcl`'s header records that a **MULT 24 / 200 MHz bitstream
+is flashed and earning**, built from `hdl/odocrypt/encrypt.v` -- which its own
+provenance comment shows is generated `--bram-out-reg`. So the OUTREG core is
+not an experiment awaiting sign-off; it is the shipping core.
+
+    2 miners * 200 MHz / 4 = 100.0 MH/s
+
+MULT 24 is also the CEILING, not a preference: VCO = 50 * 24 = 1200 MHz is
+exactly the -1 grade's maximum. MULT 25 would need 1250 MHz, and
+`CLKOUT_DIVIDE_2X = 2` would put clk_2x at 600 MHz. clk_h ends at 200 MHz, so
+further hashrate has to come from more instances.
+
+### openXC7 cannot reach that clock, and runs half the miners
+
+Measured Fmax across ten seeds on the same netlist (`out_e2nbfix_v15`, one
+miner, `--bram-out-reg`), every value taken after a converged `overuse=0`
+iteration:
+
+    197.43  176.68  174.98  169.49  155.79  152.44  148.04  147.38  145.14
+    (seed 9: UNCONVERGED -- diverged, overuse climbing 88 -> 220)
+
+**Zero of ten reach 200 MHz.** The best, 197.43, is 1.3% short. And openXC7
+routes only ONE miner: the two-miner configuration was closed as not
+achievable in this flow (see "2 miners at 94% BRAM"), because the floorplan
+BEL-pins all 840 BRAMs so the spreader cannot move them.
+
+So the honest comparison, at each flow's best:
+
+| flow | miners | clk_h | hashrate |
+|---|---|---|---|
+| Vivado (shipping) | 2 | 200.00 | **100.0 MH/s** |
+| openXC7 (best seed) | 1 | 197.43 | **49.4 MH/s** |
+
+openXC7 is at **~49% of Vivado**, and almost all of that gap is the miner
+count, not the clock -- the clock is within 1.3%.
+
+### Two corrections this exposed
+
+1. **`--freq` does not drive place-and-route in nextpnr on this design** (see
+   the section above): re-routing with `--freq` as the only variable gives
+   bit-identical traces. It is a pass/fail grading threshold only. So the
+   numbers above are a property of the netlist and seed, and cannot be
+   improved by asking for more.
+
+2. **The openXC7 pinned RTL predates the clock work entirely.**
+   `rtl_sources.sh` pins at afa4b22 (2026-08-30), whose `clk_gen_hash.v` is
+   still `CLKFBOUT_MULT = 16` -- 133.33 MHz. A bitstream built from the
+   openXC7 flow today would therefore run at **133.33 MHz**, not at the
+   197.43 MHz its own timing report certifies, wasting a third of the clock
+   the routing already achieves. This is NOT a sign-off bug (`FREQ=133.33` is
+   correct for the pinned core) but it does mean the flow understates itself
+   badly.
+
+   Deliberately NOT unpinned here: `rtl_sources.sh` requires re-measuring
+   every reference number after a pin bump, and bumping to a MULT 24 commit
+   would drag in all other RTL changes since 2026-08-30. Since MMCM
+   parameters do not touch the hash datapath, the seed Fmax numbers above
+   transfer unchanged -- only the emitted bitstream's MMCM config differs. The
+   pin bump plus re-measurement is the follow-up.
+
+### What would actually close the gap
+
+Not the clock -- it is already within 1.3% and cannot be pushed by
+constraining harder. The gap is the **second miner**, which is a
+placement/routing problem this flow has already failed on seven approaches.
+The mux4 direction (four instances sharing time-multiplexed BRAMs) is the
+structural answer, and it is being explored in Vivado because openXC7 cannot
+time paths adjacent to a block RAM at all.
