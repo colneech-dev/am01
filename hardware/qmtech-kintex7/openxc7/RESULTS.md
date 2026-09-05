@@ -1098,3 +1098,76 @@ improvement via logic depth now empirically ruled out, the remaining honest
 levers are placement/routing quality -- seed choice alone swings 145-197 MHz,
 a far larger effect than any RTL change tried here -- and closing the
 openXC7-versus-Vivado gap. RTL micro-optimisation of the datapath is not it.
+
+## The `--freq` constraint does NOT drive placement or routing (2026-09-05)
+
+### Two facts about the clock that were not lined up
+
+`hdl/clk_gen_hash.v` was speed-bumped on 2026-09-01, `CLKFBOUT_MULT` 16 -> 19,
+taking `clk_h` from 133.33 to **158.33 MHz**. That bump is where the shipping
+~80 MH/s comes from: 2 miners * 158.33 / 4 = **79.2 MH/s**.
+
+The openXC7 flow never followed, because `rtl_sources.sh` pins the RTL at
+afa4b22 (2026-08-30), which predates the bump -- `gen/rtl_pinned/clk_gen_hash.v`
+is still MULT 16. **This is staleness, not a sign-off bug**: `FREQ=133.33` is
+correct for the pinned core (checked before claiming otherwise). But it means
+every openXC7 seed number was graded against a target 25 MHz below what master
+actually needs to hit.
+
+### The hypothesis, and its refutation
+
+`build.sh` documents that the XDC `create_clock` does not reach `bus_clk`/`clk_h`,
+so `common/timing.cc` falls back to `--freq` for every domain -- making `--freq`
+THE constraint. Since nextpnr's placer and router2 are timing-driven, asking for
+more should plausibly deliver more: the baseline's 145-197 MHz was achieved
+while only being asked for 133.33.
+
+It does not. Re-routing the SAME netlist (`out_e2nbfix_v15`) with `--freq` as
+the only variable gives **bit-identical results**:
+
+| seed | @133.33 | @158.33 | iters |
+|---|---|---|---|
+| 1 | 197.43 | 197.43 | 40 / 40 |
+| 2 | 145.14 | 145.14 | 60 / 60 |
+| 3 | 152.44 | 152.44 | 9 / 9 |
+| 4 | 174.98 | 174.98 | 20 / 20 |
+
+`diff` of the full `iter=` traces for seeds 1 and 3: **IDENTICAL**. Seed 5 was
+not run -- routing is demonstrably deterministic, so it returns 155.79.
+
+**Mechanism.** Both clock domains fall back to the same `target_freq`, so
+changing it scales every path's slack *uniformly*. The criticality *ranking* is
+therefore unchanged, and the router makes identical decisions. On a design where
+all domains share one fallback constraint, `--freq` is purely a **pass/fail
+grading threshold** -- it cannot buy Fmax. Do not try to tighten `--freq` to
+chase timing.
+
+### What this does establish
+
+The measured per-seed numbers stand, and can now be graded against the clock
+master actually uses. At **158.33 MHz**, of the five baseline seeds:
+
+| seed | Fmax | at 158.33 |
+|---|---|---|
+| 1 | **197.43** | **PASS, +24.7% margin** |
+| 4 | **174.98** | **PASS, +10.5% margin** |
+| 5 | 155.79 | FAIL |
+| 3 | 152.44 | FAIL |
+| 2 | 145.14 | FAIL |
+
+**Only 2 of 5 close.** Seed choice is not a tuning detail here -- on an
+IDENTICAL netlist it swings Fmax from 145.14 to 197.43, a **36% spread**, which
+is far larger than any RTL change attempted (pre-mix pipelining moved the median
+0.8%). Placement/routing luck, not logic, is what sets this design's clock.
+
+### Actionable
+
+1. **Re-pin the openXC7 RTL to master** to pick up MULT 19, and build with
+   **seed 1**. That would be the first openXC7 bitstream valid at master's
+   158.33 MHz clock, with ~25% margin.
+2. Seed 1's 197.43 nominally allows MULT 23 (191.67 MHz). Treat that as
+   UNVALIDATED: nextpnr's timing model is optimistic relative to Vivado (which
+   predicted MULT 20 / 166.67 MHz fails at -0.102 ns slack), and this is the
+   1-miner build, not the 2-miner configuration that produces the shipping
+   hashrate. It needs silicon or Vivado confirmation before any claim.
+3. Hunt more seeds -- the one lever that measurably works.
