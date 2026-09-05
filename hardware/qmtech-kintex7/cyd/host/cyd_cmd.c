@@ -75,6 +75,12 @@ cyd_cmd_kind_t cyd_cmd_parse(const char *line, cyd_cmd_t *out)
         return out->kind;
     }
 
+    if (strcmp(verb, CYD_CMD_WIFI_SCAN) == 0) {
+        if (!at_end(p)) return CYD_CMD_KIND_NONE;   /* takes no arguments */
+        out->kind = CYD_CMD_KIND_WIFI_SCAN;
+        return out->kind;
+    }
+
     if (strcmp(verb, CYD_CMD_RESTART) == 0) {
         if (!at_end(p)) return CYD_CMD_KIND_NONE;   /* takes no arguments */
         out->kind = CYD_CMD_KIND_RESTART;

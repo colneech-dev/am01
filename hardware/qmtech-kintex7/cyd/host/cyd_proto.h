@@ -95,6 +95,7 @@
 #define CYD_CMD_RESTART    "restart"
 #define CYD_CMD_SET_WIFI   "set_wifi"
 #define CYD_MSG_PING       "PING"
+#define CYD_CMD_WIFI_SCAN  "wifi_scan"
 
 /*
  * CM4 -> CYD, firmware update:
@@ -141,6 +142,34 @@
 #define CYD_MSG_OTAEND   "OTAEND"
 #define CYD_MSG_OTAOK    "OTAOK "
 #define CYD_MSG_OTAERR   "OTAERR "
+
+/*
+ * CM4 -> CYD, in reply to "CMD wifi_scan":
+ *
+ *     SCANBEGIN\n
+ *     SCAN <dbm> <ssid>\n     ... strongest first, at most CYD_SCAN_MAX
+ *     SCANEND\n
+ *
+ * THE MINER SCANS. The panel has a radio of its own and could do this
+ * unaided, but it is the CM4 that associates -- offering a list the panel can
+ * hear and the miner cannot join would be worse than offering no list. The
+ * two are inches apart and will nearly always agree; nearly is the problem.
+ *
+ * SSIDs may contain spaces, so the SSID is the REST OF THE LINE after the
+ * dbm field and is not tokenised further. They may also contain almost
+ * anything else, which is why the panel treats one only as a string to
+ * display and to copy into its SSID field -- never as anything to execute.
+ */
+#define CYD_MSG_SCANBEGIN "SCANBEGIN"
+#define CYD_MSG_SCAN      "SCAN "
+#define CYD_MSG_SCANEND   "SCANEND"
+
+/* Twelve is what fits on the picker without scrolling, and more than anyone
+ * needs to find their own network. */
+#define CYD_SCAN_MAX 12
+
+/* Where the helper leaves the results for the panel thread to forward. */
+#define CYD_WIFI_SCAN_PATH "/run/odod/wifi_scan.txt"
 
 /* Raw bytes per chunk. 512 -> 684 base64 characters, comfortably inside
  * CYD_LINE_MAX with the prefix, and a whole number of flash words. */
@@ -198,6 +227,13 @@
 #define CYD_REG_UART_DATA 0x19  /* w: push TX byte   r: pop RX byte        */
 #define CYD_REG_UART_STAT 0x1A  /* r: tx_free, rx_avail, FIFO depths       */
 #define CYD_REG_ESP_CTRL  0x1B  /* w: [0] EN, [1] IO0 -- ESP32 boot select */
+/* r: RX FIFO occupancy, exact, 16 bits.
+ *
+ * UART_STAT carries a 5-bit rx_cnt that saturates at 31 -- fine for
+ * "is there anything", useless for "how much" once the FIFO grew to
+ * 256 bytes. This is the honest number, and having it here means the
+ * FIFO can be resized again without touching a bitfield or a host. */
+#define CYD_REG_UART_RXCNT 0x1C
 
 /* Bit positions within CYD_REG_ESP_CTRL. Two plain output bits on purpose:
  * the ROM bootloader is entered by a specific EN/IO0 sequence with timing that

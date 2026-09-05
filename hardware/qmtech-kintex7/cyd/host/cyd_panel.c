@@ -35,14 +35,19 @@
 #include <time.h>       /* clock_gettime, for the OTA ack timeout */
 #include <unistd.h>
 
-/* UART_STAT at VERSION >= 0x0203:
- *   {rx_err[3:0], tx_cnt[4:0], rx_cnt[4:0], tx_full, rx_empty} */
+/* UART_STAT, unchanged since 0x0203:
+ *   {rx_err[3:0], tx_cnt[4:0], rx_cnt[4:0], tx_full, rx_empty}
+ *
+ * The RX FIFO is 256 bytes as of 0x0204, but this layout did NOT change: the
+ * 5-bit rx_cnt here simply saturates at 31, and nothing in this file reads it
+ * -- the RX side drains until rx_empty. The exact occupancy has its own
+ * 16-bit register (CYD_REG_UART_RXCNT) for anyone who wants it. */
 #define ST_RX_EMPTY(v)  ((v) & 0x1u)
 #define ST_TX_FULL(v)   (((v) >> 1) & 0x1u)
 #define ST_TX_CNT(v)    (((v) >> 7) & 0x1Fu)
 #define TX_FIFO_DEPTH   16
 
-#define PANEL_MIN_VERSION 0x0203
+#define PANEL_MIN_VERSION 0x0204
 
 static volatile int g_stop;
 static pthread_t    g_thread;
@@ -72,6 +77,11 @@ static int       g_deferred_valid;
 /* ---- UART, over the register bus -------------------------------------- */
 
 static void drain_rx(am01_bus_t *bus, int may_apply);
+
+/* Declared here because apply() sets the deadline and the forwarder below
+ * reads it, and apply() comes first in the file. */
+static uint64_t now_ms(void);
+static uint64_t g_scan_wait_until;
 
 /* Write the WHOLE line, waiting for the FIFO to drain as needed.
  *
@@ -272,6 +282,19 @@ static void apply(const cyd_cmd_t *c, am01_bus_t *bus)
     case CYD_CMD_KIND_RESTART:
         request_write("restart", NULL);
         break;
+
+    case CYD_CMD_KIND_WIFI_SCAN:
+        /* The helper does the scanning -- it needs CAP_NET_ADMIN and this
+         * thread does not have it. Any stale result is removed first, so the
+         * reply that goes back is unambiguously the answer to THIS request
+         * rather than whatever the last scan found. */
+        unlink(CYD_WIFI_SCAN_PATH);
+        /* 3.5s is a measured scan on this board; 20s covers a slow one
+         * and a busy helper without leaving the panel waiting for ever
+         * on a request that was dropped. */
+        g_scan_wait_until = now_ms() + 20000;
+        request_write("wifi_scan", NULL);
+        break;
     case CYD_CMD_KIND_SET_WIFI:
         apply_set_wifi(c);
         break;
@@ -312,6 +335,13 @@ static void drain_rx(am01_bus_t *bus, int may_apply)
         if (ch == '\n' || ch == '\r') {
             if (g_rx.len && !g_rx.overflow) {
                 g_rx.buf[g_rx.len] = '\0';
+                /* The panel says one DIAG line at boot. Logged rather than
+                 * dropped: it is the only way to see what the firmware did on
+                 * hardware, because the case leaves only CN1 attached and the
+                 * USB console unreachable. */
+                if (strncmp(g_rx.buf, "DIAG ", 5) == 0)
+                    fprintf(stderr, "[cyd] panel %s\n", g_rx.buf);
+
                 cyd_cmd_t c;
                 if (cyd_cmd_parse(g_rx.buf, &c) != CYD_CMD_KIND_NONE) {
                     if (may_apply) {
@@ -440,6 +470,67 @@ static void ota_progress(void *ctx, size_t done, size_t total)
     }
 }
 
+/*
+ * Ship the scan result to the panel, once the helper has written it.
+ *
+ * POLLED, not waited on: this runs in the same thread that pushes status, and
+ * blocking here would stall the display for as long as the scan takes. A scan
+ * is a few seconds of radio time, so the panel is told to expect a wait and
+ * this checks each pass.
+ *
+ * The deadline matters as much as the result. If the helper never runs -- not
+ * installed, no wlan0, iw missing -- the panel must not sit on "scanning..."
+ * for ever, so it is sent an empty list and can say so.
+ */
+static void scan_forward_if_ready(am01_bus_t *bus)
+{
+    if (!g_scan_wait_until)
+        return;
+
+    FILE *f = fopen(CYD_WIFI_SCAN_PATH, "r");
+    if (!f) {
+        if (now_ms() < g_scan_wait_until)
+            return;                       /* still within the window */
+        fprintf(stderr, "[cyd] wifi scan produced nothing in time\n");
+        g_scan_wait_until = 0;
+        uart_write(bus, CYD_MSG_SCANBEGIN "\n", strlen(CYD_MSG_SCANBEGIN) + 1);
+        uart_write(bus, CYD_MSG_SCANEND "\n", strlen(CYD_MSG_SCANEND) + 1);
+        return;
+    }
+    g_scan_wait_until = 0;
+
+    uart_write(bus, CYD_MSG_SCANBEGIN "\n", strlen(CYD_MSG_SCANBEGIN) + 1);
+
+    char line[256];
+    int  sent = 0;
+    while (sent < CYD_SCAN_MAX && fgets(line, sizeof line, f)) {
+        /* "<dbm>\t<ssid>". The SSID is the rest of the line -- they may
+         * contain spaces, so it is never tokenised. */
+        char *tab = strchr(line, '\t');
+        if (!tab)
+            continue;
+        *tab = '\0';
+        char *ssid = tab + 1;
+        char *nl = strchr(ssid, '\n');
+        if (nl) *nl = '\0';
+        if (!*ssid)
+            continue;
+
+        char out[CYD_LINE_MAX];
+        int n = snprintf(out, sizeof out, "%s%d %s\n",
+                         CYD_MSG_SCAN, (int)strtod(line, NULL), ssid);
+        if (n > 0 && (size_t)n < sizeof out) {
+            uart_write(bus, out, (size_t)n);
+            sent++;
+        }
+    }
+    fclose(f);
+    unlink(CYD_WIFI_SCAN_PATH);
+
+    uart_write(bus, CYD_MSG_SCANEND "\n", strlen(CYD_MSG_SCANEND) + 1);
+    fprintf(stderr, "[cyd] wifi scan: %d network(s) sent to the panel\n", sent);
+}
+
 static void ota_run_if_requested(am01_bus_t *bus)
 {
     struct stat st;
@@ -478,6 +569,7 @@ static void *panel_thread(void *arg)
         /* Before drain_rx, so a queued command cannot be applied between the
          * request appearing and the transfer starting. */
         ota_run_if_requested(bus);
+        scan_forward_if_ready(bus);
 
         drain_rx(bus, 1);
 
@@ -546,7 +638,22 @@ static void *panel_thread(void *arg)
             }
         }
 
-        usleep(100000);   /* 10 Hz: responsive to touch, cheap on the bus */
+        /* SLEEP IN 1ms SLICES, DRAINING RX EACH TIME.
+         *
+         * This used to be one usleep(100000). The FPGA's RX FIFO is 16 bytes
+         * -- 1.4ms at 115200 -- so a 100ms nap lost everything after the
+         * first 16 bytes of any burst, newlines included, and the fragments
+         * merged into lines nothing could parse. A command sent on its own
+         * survived; one sent near anything else did not.
+         *
+         * 1ms keeps up with line rate (11.5 bytes/ms into a 16-byte FIFO) and
+         * costs one register read per millisecond. The proper fix is a deeper
+         * FIFO in uart_bridge.v, which needs a bitstream; this needs a
+         * restart. */
+        for (int i = 0; i < 100 && !g_stop; i++) {
+            drain_rx(bus, 1);
+            usleep(1000);
+        }
     }
     return NULL;
 }

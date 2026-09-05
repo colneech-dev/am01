@@ -35,7 +35,10 @@ typedef enum {
     CYD_CMD_KIND_REBOOT,
     CYD_CMD_KIND_SET_POOL,
     CYD_CMD_KIND_RESTART,
-    CYD_CMD_KIND_SET_WIFI
+    CYD_CMD_KIND_SET_WIFI,
+    /* Ask the miner to scan for networks. Carries no arguments --
+     * the panel is asking a question, not supplying anything. */
+    CYD_CMD_KIND_WIFI_SCAN
 } cyd_cmd_kind_t;
 
 /* Sized to match what the miner's own config accepts. Deliberately generous
