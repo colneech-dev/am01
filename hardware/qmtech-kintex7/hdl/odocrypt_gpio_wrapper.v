@@ -220,6 +220,14 @@ module odocrypt_gpio_wrapper #(
                                                 //     rx_cnt[4:0], tx_full,
                                                 //     rx_empty}
     localparam [4:0] ADDR_ESP_CTRL    = 5'h1B;  // w: [0] EN  [1] IO0
+    /* The RX FIFO occupancy, EXACT and 16 bits wide.
+     *
+     * Its own register so the FIFO depth and the register layout stop
+     * constraining each other: UART_STAT's 5-bit rx_cnt saturates at
+     * 31 and always did, and this is the honest number for anyone who
+     * wants it. Address space is 5 bits and the map ended at 0x1B, so
+     * this costs one of four spares. */
+    localparam [4:0] ADDR_UART_RXCNT  = 5'h1C;  // r: rx_count[15:0]
 
     // v1.1 adds SEED_LO/SEED_HI. The daemon treats a VERSION below this as
     // "seed unreadable" rather than misreading 0 as a real epoch.
@@ -640,7 +648,8 @@ module odocrypt_gpio_wrapper #(
     // behavioural difference at all.
     wire [7:0] uart_rx_data;
     wire       uart_tx_full, uart_rx_empty;
-    wire [4:0] uart_tx_cnt, uart_rx_cnt;
+    wire [4:0]  uart_tx_cnt;
+    wire [15:0] uart_rx_cnt;
     wire [7:0] uart_rx_err;
     reg        uart_tx_wr, uart_rx_rd;
 
@@ -671,7 +680,12 @@ module odocrypt_gpio_wrapper #(
     uart_bridge #(
         .CLK_HZ (50_000_000),   // bus_clk, sys_clk_50m straight through
         .BAUD   (115200),
-        .FIFO_AW(4)
+        .FIFO_AW(4),
+        /* 256-byte RX. See uart_bridge.v: 16 bytes is 1.4ms at 115200 and the
+         * host cannot promise to read that often while it is also pushing
+         * status and running an OTA -- losing bytes there merged whole
+         * protocol lines into one another. 22ms of slack instead. */
+        .RX_FIFO_AW(8)
     ) uart_i (
         .clk     (bus_clk),
         .rst_n   (bus_rst_n),
@@ -1203,6 +1217,19 @@ module odocrypt_gpio_wrapper #(
                         // {rx_err[3:0], tx_cnt[4:0], rx_cnt[4:0],
                         //  tx_full, rx_empty}  -- 4+5+5+1+1 = 16.
                         //
+                        // UNCHANGED at 0x0204, deliberately. The RX FIFO grew
+                        // from 16 to 256 bytes, but rx_cnt stays here at 5
+                        // bits and simply SATURATES at 31 -- it was always
+                        // advisory (the host drains until rx_empty) and every
+                        // existing reader keeps working untouched.
+                        //
+                        // The exact count lives in ADDR_UART_RXCNT, which is
+                        // 16 bits and costs one of the four spare addresses.
+                        // Widening it here would have meant stealing bits
+                        // from rx_err and breaking both hosts, or shrinking
+                        // the FIFO to fit the field -- letting the register
+                        // map size the hardware, which is backwards.
+                        //
                         // CHANGED AT 0x0203, because the previous layout
                         // could not answer the one question the host has to
                         // ask before writing. It was
@@ -1222,8 +1249,11 @@ module odocrypt_gpio_wrapper #(
                         // still saturates -- it is a "framing errors are
                         // happening" flag, and 15 says that as well as 255.
                         ADDR_UART_STAT: rdata_reg <=
-                            {uart_rx_err[3:0], uart_tx_cnt, uart_rx_cnt,
+                            {uart_rx_err[3:0], uart_tx_cnt,
+                             (uart_rx_cnt > 16'd31) ? 5'd31 : uart_rx_cnt[4:0],
                              uart_tx_full, uart_rx_empty};
+                        /* The WHOLE count, exact, in its own register. */
+                        ADDR_UART_RXCNT: rdata_reg <= uart_rx_cnt;
                         ADDR_FIFO_STAT: rdata_reg <=
                             {lost_sync2_bus, 4'h0, fifocnt_sync2_bus};
                         default: rdata_reg <= 16'h0;

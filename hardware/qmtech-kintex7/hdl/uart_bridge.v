@@ -30,7 +30,23 @@ module uart_bridge #(
     // 16 deep each way. The Pi writes in bursts over a bus whose per-access
     // cost is a syscall, so a FIFO is what stops it having to babysit the line
     // a byte at a time; 16 covers a burst without being worth more BRAM.
-    parameter integer FIFO_AW = 4
+    parameter integer FIFO_AW = 4,
+    /* RX IS DEEPER THAN TX, and deliberately so.
+     *
+     * The host WRITES the TX FIFO, so it knows what it has put in and depth
+     * buys it nothing. It does not control when bytes ARRIVE, and at 115200 a
+     * 16-byte RX FIFO overflows after 1.4ms of not being read -- which is a
+     * deadline no software thread that also does other work can honour. 8 ->
+     * 256 bytes -> 22ms, which it can.
+     *
+     * THE DEPTH IS CHOSEN FOR THE DEADLINE, not to fit a bitfield. An earlier
+     * version picked 128 so the count would fit 8 spare bits in the status
+     * register -- letting the register map size the hardware, which is
+     * backwards. rx_count now has a register of its own and is 16 bits, so
+     * this can be whatever the timing argument says it should be.
+     *
+     * Costs 256 bytes of distributed RAM. */
+    parameter integer RX_FIFO_AW = 8
 ) (
     input  wire       clk,
     input  wire       rst_n,
@@ -45,7 +61,10 @@ module uart_bridge #(
     output wire       rx_empty,
 
     output wire [FIFO_AW:0] tx_count,
-    output wire [FIFO_AW:0] rx_count,
+    /* 16 bits, and exact for any depth this FIFO will ever have. It has its
+     * own register (ADDR_UART_RXCNT), so it is not competing for space with
+     * anything and never needs to saturate. */
+    output wire [15:0]      rx_count,
     // Framing errors seen. Saturating, and exposed rather than silently
     // dropped: a link that is quietly corrupting bytes looks exactly like a
     // panel with a software bug, and telling those apart afterwards is
@@ -59,7 +78,9 @@ module uart_bridge #(
 
     localparam integer DIVISOR   = CLK_HZ / BAUD;      // 434 at 50MHz/115200
     localparam integer DIV_W     = $clog2(DIVISOR + 1);
-    localparam integer FIFO_DEPTH = (1 << FIFO_AW);
+    localparam integer FIFO_DEPTH    = (1 << FIFO_AW);
+    localparam integer RX_FIFO_DEPTH = (1 << RX_FIFO_AW);
+
 
     // =====================================================================
     // TX FIFO
@@ -75,14 +96,15 @@ module uart_bridge #(
     // =====================================================================
     // RX FIFO
     // =====================================================================
-    reg  [7:0]        rx_mem [0:FIFO_DEPTH-1];
-    reg  [FIFO_AW:0]  rx_wr_ptr, rx_rd_ptr;
-    wire [FIFO_AW:0]  rx_fill  = rx_wr_ptr - rx_rd_ptr;
-    wire              rx_full  = (rx_fill == FIFO_DEPTH[FIFO_AW:0]);
+    reg  [7:0]           rx_mem [0:RX_FIFO_DEPTH-1];
+    reg  [RX_FIFO_AW:0]  rx_wr_ptr, rx_rd_ptr;
+    wire [RX_FIFO_AW:0]  rx_fill  = rx_wr_ptr - rx_rd_ptr;
+    wire                 rx_full  = (rx_fill == RX_FIFO_DEPTH[RX_FIFO_AW:0]);
 
     assign rx_empty = (rx_wr_ptr == rx_rd_ptr);
-    assign rx_count = rx_fill;
-    assign rx_data  = rx_mem[rx_rd_ptr[FIFO_AW-1:0]];
+    /* Zero-extended into 16 bits. Exact for any RX_FIFO_AW up to 15. */
+    assign rx_count = {{(16-(RX_FIFO_AW+1)){1'b0}}, rx_fill};
+    assign rx_data  = rx_mem[rx_rd_ptr[RX_FIFO_AW-1:0]];
 
     // =====================================================================
     // Transmitter: start bit, 8 data bits LSB first, one stop bit.
@@ -241,7 +263,7 @@ module uart_bridge #(
                         // worse than losing it -- the panel would act on it.
                         if (rx_err != 8'hFF) rx_err <= rx_err + 1'b1;
                     end else if (!rx_full) begin
-                        rx_mem[rx_wr_ptr[FIFO_AW-1:0]] <= rx_sr;
+                        rx_mem[rx_wr_ptr[RX_FIFO_AW-1:0]] <= rx_sr;
                         rx_wr_ptr <= rx_wr_ptr + 1'b1;
                     end else begin
                         // Overrun. Same counter: from the host's point of view

@@ -35,8 +35,12 @@ module tb_uart_bridge;
     reg        rx_rd   = 1'b0;
     wire [7:0] rx_data;
     wire       rx_empty;
-    wire [FIFO_AW:0] tx_count, rx_count;
+    wire [FIFO_AW:0] tx_count;
+    /* 8 bits: rx_count is EXACT for the 128-deep RX FIFO, and wider than
+     * tx_count because the RX side is the one the host does not control. */
+    wire [15:0]      rx_count;
     wire [7:0] rx_err;
+
     wire       uart_tx;
 
     // LOOPBACK by default: the transmitter drives the receiver, so a byte
