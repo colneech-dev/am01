@@ -1,0 +1,42 @@
+# WIP -- copied verbatim from a scratch/debug location for safekeeping,
+# NOT yet cleaned up or confirmed to fully work. TODO before relying on
+# this:
+#   - paths below are absolute and machine-specific (from an interactive
+#     debug session) -- rewrite relative to this script's own location,
+#     matching build.sh's conventions, before anyone else can run it
+#   - confirm the P&R run using this JSON actually clears the
+#     'control-set contention' error with zero FDCE/FDPE/FDSE remaining
+#     (was still running, unconfirmed, as of when this copy was made)
+#   - fold into build.sh (e.g. an FDRE_ONLY=1 env var swapping the plain
+#     synth_xilinx one-liner for this scripted version) rather than
+#     shipping as a second, divergent entry point
+#
+# FDRE-only legalization, done entirely at the dfflegalize level -- no RTL
+# edits to keccak800.v/encrypt.v needed. Builds on the earlier RTL fix
+# (odocrypt_gpio_wrapper.v's async resets removed) which is a prerequisite:
+# dfflegalize can invert a sync reset-to-1 into reset-to-0 (documented
+# transform: "adding inverters on the D and Q pins ... due to unsupported
+# reset value"), but it CANNOT convert async set/reset into sync -- that
+# is genuinely unsupported (confirmed earlier: "dffs with async set or
+# reset are not supported"). So the RTL fix and this dfflegalize
+# restriction are both required, in that order.
+#
+# The key fix vs the earlier failed attempt: $_SDFFE_?P?P_'s third
+# position is the RESET VALUE (0 or 1), not a don't-care -- leaving it as
+# `?` (as synth_xilinx's own default does) is exactly why FDSE cells kept
+# appearing despite already being sync-only. Pinning it to `0` forces
+# dfflegalize to invert every reset-to-1 flop into reset-to-0 instead of
+# leaving it alone.
+read_verilog -sv /mnt/c/Users/Colin/AppData/Local/Temp/claude/c--Users-Colin-Documents-GitHub-am01/057d0e04-8974-418d-8c78-e3f71a81f301/scratchpad/am01_qmtech_top_nm1.v
+read_verilog -sv /mnt/c/Users/Colin/Documents/GitHub/am01/hardware/qmtech-kintex7/hdl/clk_gen_hash.v
+read_verilog -sv /mnt/c/Users/Colin/Documents/GitHub/am01/hardware/qmtech-kintex7/hdl/odocrypt_gpio_wrapper.v
+read_verilog -sv /mnt/c/Users/Colin/Documents/GitHub/am01/hdl/odocrypt/encrypt.v
+read_verilog -sv /mnt/c/Users/Colin/Documents/GitHub/am01/hdl/odocrypt/keccak800.v
+read_verilog -sv /mnt/c/Users/Colin/Documents/GitHub/am01/hdl/odocrypt/miner.v
+read_verilog -sv /mnt/c/Users/Colin/Documents/GitHub/am01/hdl/odocrypt/atomminer_misc.v
+
+synth_xilinx -run begin:map_ffs -top am01_qmtech_top -family xc7 -flatten
+
+dfflegalize -cell $_SDFFE_?P0P_ 01 -cell $_DLATCH_?P?_ 01 -minsrst 999999999 -mince 999999999
+
+synth_xilinx -run map_luts: -top am01_qmtech_top -family xc7 -flatten -json /mnt/c/Users/Colin/Documents/GitHub/am01/hardware/qmtech-kintex7/openxc7/out_nm1_fdreonly/am01_qmtech_top.json

@@ -1,0 +1,263 @@
+From 846ac6a3acba52296525f5f69c777d056dc15455 Mon Sep 17 00:00:00 2001
+From: colneech-dev <colneech@gmail.com>
+Date: Thu, 3 Sep 2026 00:27:36 +0100
+Subject: [PATCH 2/4] Preserve pre-existing uncommitted AM01 patches before
+ congestion work
+
+SMALL_BETA density target for <4-bel tiles, the congestion-map strtof
+parse fix (atoi collapsed the float map to a 0/1 mask), and the
+arch/arch_place changes that were already built into the binary in use
+(built Aug 25, sources Aug 24). Committed unchanged, as a base to build
+on rather than silently carrying dirty state into new work.
+---
+ common/placer_heap.cc | 30 ++++++++++++++++++++++++++++--
+ common/router2.cc     | 29 +++++++++++++++++++++++++++--
+ xilinx/arch.cc        | 35 +++++++++++++++++++++++++++++++----
+ xilinx/arch_place.cc  | 35 +++++++++++++++++++++++++++++++++--
+ 4 files changed, 119 insertions(+), 10 deletions(-)
+
+diff --git a/common/placer_heap.cc b/common/placer_heap.cc
+index f21a9fe0..9e565dc2 100644
+--- a/common/placer_heap.cc
++++ b/common/placer_heap.cc
+@@ -1282,7 +1282,10 @@ class HeAPPlacer
+                                         std::istringstream ss(line);
+                                         while (std::getline(ss, cell, ','))
+                                             if (!cell.empty())
+-                                                row.push_back(atoi(cell.c_str()));
++                                                // The writer accumulates floats; atoi() truncated fractional
++                                        // values to 0 and parsed 1.23457e+06 as 1,
++                                        // collapsing the map to a 0/1 mask.
++                                        row.push_back(strtof(cell.c_str(), nullptr));
+                                         m.push_back(row);
+                                     }
+                                     log_info("NEXTPNR_CONGESTION_MAP: loaded %d rows from %s\n", int(m.size()), f);
+@@ -1479,10 +1482,33 @@ class HeAPPlacer
+         std::vector<int> cells, bels;
+         bool overused(float beta) const
+         {
++            // AM01/openXC7 (env NEXTPNR_SMALL_BETA=<f>): density target for
++            // tiles with fewer than 4 bels.
++            //
++            // The `bels < 4` branch below bypasses beta entirely, so a BRAM
++            // tile -- 2 RAMB18E1 bels -- has an effective density target of
++            // 100% at EVERY value of beta. Block RAM is packed to full density
++            // in whichever columns the solver favoured and never relaxes, and
++            // no amount of beta tuning touches it.
++            //
++            // On this design that is the shape of the measured critical path:
++            // a BRAM output reaching its consumer LUT across (19,343) ->
++            // (50,151), 8.8 ns on one net. With 420 RAMB18E1 against 445 BRAM
++            // tiles there is room to spread to one per tile.
++            //
++            // Unset leaves the strict-overflow behaviour bit-identical.
++            static const float small_beta = []{
++                const char *e = getenv("NEXTPNR_SMALL_BETA");
++                return e ? float(atof(e)) : 0.0f;
++            }();
+             for (size_t t = 0; t < cells.size(); t++) {
+                 if (bels.at(t) < 4) {
+-                    if (cells.at(t) > bels.at(t))
++                    if (small_beta > 0.0f) {
++                        if (cells.at(t) > small_beta * bels.at(t))
++                            return true;
++                    } else if (cells.at(t) > bels.at(t)) {
+                         return true;
++                    }
+                 } else {
+                     if (cells.at(t) > beta * bels.at(t))
+                         return true;
+diff --git a/common/router2.cc b/common/router2.cc
+index 8142a8cc..5bb5a3d1 100644
+--- a/common/router2.cc
++++ b/common/router2.cc
+@@ -1096,6 +1096,14 @@ struct Router2
+                 }
+             }
+             NPNR_ASSERT(cursor_fwd == dst_wire_idx);
++            // AM01/openXC7: keep the delay of the path we just committed, as the
++            // constant-net path already does at the equivalent site above.
++            //
++            // Without this, routed_delay stays at its -1 initialiser for every
++            // arc routed by the ordinary forward A*, and the NEXTPNR_LOG_CRIT_GAP
++            // comparison -- which skips arcs with routed_delay < 0 -- has nothing
++            // to compare and prints nothing at all.
++            ad.routed_delay = flat_wires.at(dst_wire_idx).visit.score.delay;
+             ad.routed = true;
+             t.processed_sinks.insert(dst_wire);
+             reset_wires(t);
+@@ -1625,7 +1633,16 @@ struct Router2
+         // raised the per-arc budget instead all regressed or stalled.
+         unrouted_arcs = 0;
+         static const bool requeue_unrouted = getenv("NEXTPNR_REQUEUE_UNROUTED") != nullptr;
+-        if (requeue_unrouted) {
++        // Count ALWAYS; requeue only when asked.
++        //
++        // This loop used to sit entirely inside `if (requeue_unrouted)`, while
++        // the per-iteration log printed `unrouted_arcs` unconditionally. That
++        // flag is set by no run script here, so every "unrouted=0" this router
++        // has ever logged was vacuous -- the counter was never touched. The
++        // value also feeds the stall detector, which therefore degenerated to
++        // overused_wires alone, the precise failure the requeue was added to
++        // fix.
++        {
+             for (size_t n = 0; n < nets.size(); n++) {
+                 // Constant nets are deliberately left unrouted by router2 -- they
+                 // are excluded from route_queue at setup and from
+@@ -1643,7 +1660,7 @@ struct Router2
+                         ++unrouted_arcs;
+                         any_unrouted = true;
+                     }
+-                if (any_unrouted)
++                if (any_unrouted && requeue_unrouted)
+                     failed_nets.insert(int(n));
+             }
+         }
+@@ -2282,6 +2299,14 @@ struct Router2
+             log_info("    iter=%d wires=%d overused=%d overuse=%d unrouted=%d archfail=%s\n", iter, total_wire_use,
+                      overused_wires, total_overuse, unrouted_arcs,
+                      overused_wires > 0 ? "NA" : std::to_string(arch_fail).c_str());
++            // Export per-tile congestion on a CONVERGED iteration too, not only
++            // from the SKIP_FAILED_ARCS abort path. Seeding a placement from a
++            // failed route's congestion describes a route nobody wants to
++            // reproduce; this is the map worth feeding back.
++            if (const char *cf = getenv("NEXTPNR_DUMP_CONGESTION")) {
++                if (overused_wires == 0)
++                    write_congestion_history(cf);
++            }
+             ++iter;
+             if (curr_cong_weight < 1e9)
+             {
+diff --git a/xilinx/arch.cc b/xilinx/arch.cc
+index 410d3c32..8684ca77 100644
+--- a/xilinx/arch.cc
++++ b/xilinx/arch.cc
+@@ -648,6 +648,25 @@ std::vector<std::pair<IdString, std::string>> Arch::getBelAttrs(BelId bel) const
+ 
+ // -----------------------------------------------------------------------
+ 
++
++// AM01/openXC7 (env NEXTPNR_LINEAR_DELAY=1): drop the concave second segment
++// of the distance->delay model, so marginal cost per tile is constant.
++//
++// The stock model charges 30/tile for the first 18 x-tiles and 10/tile beyond,
++// 60/tile for the first 6 y-tiles and 20/tile beyond. Measured against Vivado
++// on this design, the true rate is ~99 ps/tile and essentially flat, so the
++// stock model is 3.3x (y) to 6.6x (x) under at the margin -- and OVER-charges
++// below ~13 tiles, i.e. the error changes sign.
++//
++// Criticality is scale-invariant (timing.cc:678-680), so only the shape of
++// this curve reaches the placer. A concave curve tells the placer that pulling
++// an already-distant critical net closer buys almost nothing.
++static inline bool nextpnr_linear_delay()
++{
++    static const bool v = getenv("NEXTPNR_LINEAR_DELAY") != nullptr;
++    return v;
++}
++
+ delay_t Arch::estimateDelay(WireId src, WireId dst, bool debug) const
+ {
+     if (src == dst)
+@@ -752,8 +771,12 @@ delay_t Arch::estimateDelay(WireId src, WireId dst, bool debug) const
+     // greedy best-first and biases it against vertical long lines.
+     static const bool iso_h = getenv("NEXTPNR_ISO_HEURISTIC") != nullptr;
+     const int yc1 = iso_h ? 30 : 60, yc2 = iso_h ? 10 : 20;
+-    delay_t base = 30 * std::min(std::abs(dst_x - src_x), 18) + 10 * std::max(std::abs(dst_x - src_x) - 18, 0) +
+-                   yc1 * std::min(std::abs(dst_y - src_y), 6) + yc2 * std::max(std::abs(dst_y - src_y) - 6, 0) + 300;
++    delay_t base;
++    if (nextpnr_linear_delay())
++        base = 30 * std::abs(dst_x - src_x) + yc1 * std::abs(dst_y - src_y) + 300;
++    else
++        base = 30 * std::min(std::abs(dst_x - src_x), 18) + 10 * std::max(std::abs(dst_x - src_x) - 18, 0) +
++               yc1 * std::min(std::abs(dst_y - src_y), 6) + yc2 * std::max(std::abs(dst_y - src_y) - 6, 0) + 300;
+ 
+     if (xc7)
+         base = (base * 3) / 2;
+@@ -852,8 +875,12 @@ delay_t Arch::predictDelay(const NetInfo *net_info, const PortRef &sink) const
+         // and the search heuristic disagree about the same distance.
+         static const bool iso_h2 = getenv("NEXTPNR_ISO_HEURISTIC") != nullptr;
+         const int pyc1 = iso_h2 ? 30 : 60, pyc2 = iso_h2 ? 10 : 20;
+-        delay_t base = 30 * std::min(std::abs(dst_x - src_x), 18) + 10 * std::max(std::abs(dst_x - src_x) - 18, 0) +
+-                       pyc1 * std::min(std::abs(dst_y - src_y), 6) + pyc2 * std::max(std::abs(dst_y - src_y) - 6, 0) + 300;
++        delay_t base;
++        if (nextpnr_linear_delay())
++            base = 30 * std::abs(dst_x - src_x) + pyc1 * std::abs(dst_y - src_y) + 300;
++        else
++            base = 30 * std::min(std::abs(dst_x - src_x), 18) + 10 * std::max(std::abs(dst_x - src_x) - 18, 0) +
++                   pyc1 * std::min(std::abs(dst_y - src_y), 6) + pyc2 * std::max(std::abs(dst_y - src_y) - 6, 0) + 300;
+ 
+         if (xc7)
+             base = (base * 3) / 2;
+diff --git a/xilinx/arch_place.cc b/xilinx/arch_place.cc
+index 17688f2d..eeab70c1 100644
+--- a/xilinx/arch_place.cc
++++ b/xilinx/arch_place.cc
+@@ -1248,6 +1248,22 @@ void Arch::fixupPlacement()
+                 roots.push_back(ci);
+         }
+         int fixed = 0;
++        // How FAR does repair move things?
++        //
++        // The log has always reported only a COUNT ("relocated 11790"), which
++        // says nothing about whether this pass is benign. It matters: the
++        // measured critical path on this design is a flop-to-flop net with no
++        // logic between the endpoints, whose two flops sit 132 slice rows apart
++        // (SLICE_X5Y137 -> SLICE_X26Y269, logic 0.322 ns, net 15.104 ns).
++        //
++        // The ring search below is bounded by max(gw, gh) -- the whole device --
++        // and takes the first valid bel at the smallest radius without regard to
++        // where the cell's neighbours are. A cell that cannot be placed locally
++        // can therefore legitimately end up anywhere, and a count would not show
++        // it. These buckets do.
++        int move_hist[5] = {0, 0, 0, 0, 0}; // r=0, 1-2, 3-8, 9-32, >32
++        int move_max = 0;
++        IdString move_max_cell;
+         for (CellInfo *root : roots) {
+             const bool abs_z = root->constr_abs_z;
+             // Full cluster tree (root + all transitive constr_children), root first.
+@@ -1286,6 +1302,7 @@ void Arch::fixupPlacement()
+                 if (m->bel != BelId())
+                     unbindBel(m->bel);
+             bool placed = false;
++            int placed_r = 0;
+             std::vector<BelId> mbels;
+             for (int r = 0; r <= std::max(gw, gh) && !placed; r++)
+                 for (int dx = -r; dx <= r && !placed; dx++)
+@@ -1335,6 +1352,7 @@ void Arch::fixupPlacement()
+                                 }
+                             if (allok) {
+                                 placed = true;
++                                placed_r = r;
+                                 break;
+                             }
+                             for (size_t i = 0; i < members.size(); i++)
+@@ -1350,11 +1368,24 @@ void Arch::fixupPlacement()
+                             bindBel(obels[i], members[i], STRENGTH_WEAK);
+                     }
+                 log_warning("post-place repair: no valid placement for '%s'\n", root->name.c_str(this));
+-            } else
++            } else {
+                 ++fixed;
++                if (placed_r > move_max) {
++                    move_max = placed_r;
++                    move_max_cell = root->name;
++                }
++                move_hist[placed_r == 0
++                                  ? 0
++                                  : placed_r <= 2 ? 1 : placed_r <= 8 ? 2 : placed_r <= 32 ? 3 : 4]++;
++            }
+         }
+-        if (fixed)
++        if (fixed) {
+             log_info("post-place repair: relocated %d stranded cluster(s)/cell(s) to valid bels\n", fixed);
++            log_info("  move radius: r=0 %d, r<=2 %d, r<=8 %d, r<=32 %d, r>32 %d\n", move_hist[0],
++                     move_hist[1], move_hist[2], move_hist[3], move_hist[4]);
++            if (move_max > 0)
++                log_info("  furthest move: r=%d ('%s')\n", move_max, move_max_cell.c_str(this));
++        }
+     }
+     for (auto &ts : tileStatus) {
+         if (ts.lts == nullptr)
+-- 
+2.53.0
+

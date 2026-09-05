@@ -1,0 +1,76 @@
+# T-LUT7: charge a LUT7 what it actually costs, and see what it buys.
+#
+# THE DEFECT
+# ----------
+# synth_xilinx passes `abc -luts 2:2,3,6:5[,10,20]`, i.e. LUT1-2 cost 2, LUT3-6
+# cost 5, LUT7 cost 10, LUT8 cost 20. And passes/techmap/abc.cc writes the delay
+# column as a constant:
+#
+#     fprintf(f, "%d %d.00 1.00\n", i+1, config.lut_costs.at(i));
+#                          ^^^^ delay hardcoded to 1.00 for EVERY LUT size
+#
+# So ABC sees LUT7 = area 10, depth 1 and LUT6+LUT2 = area 7, depth 2. Whenever
+# there is timing slack it takes the cheaper-by-area option, which is the SLOWER
+# one on silicon: a LUT7 is two 6-LUT sites plus a dedicated MUXF7, and the
+# MUXF7 is free hardware. Charging 10 for what occupies the same two sites as a
+# cost-7 pair is a modelling error, not a trade-off.
+#
+# WHAT THE DESIGN SAYS
+# --------------------
+# The OdoCrypt rotation network is a 7-input XOR per bit (encrypt.v:14824-14828
+# plus a 7th term at :14844), 640 bits x 21 rounds = 13440 bits. Synthesised in
+# isolation, all 13440 map as LUT7 = 2xLUT6 + MUXF7, one general-routing hop.
+# In the full design they map to LUT6+LUT2 instead -- two hops:
+#
+#     shipped netlist:   13732 LUT2, 294 MUXF7
+#     predicted if LUT7: ~13440 MUXF7
+#
+# SUCCESS CRITERION
+# -----------------
+# MUXF7 goes from 294 to ~13400 and LUT2 collapses. Expected gain is bounded and
+# should NOT be oversold: it removes one general-routing hop from the critical
+# path (1.3 ns + 0.2 ns of a 10.8 ns path, so ~106 MHz -- about 15%). It is not
+# the 158.81 MHz Vivado reaches; Vivado's own synthesis reports F7 Muxes: 0 and
+# still hits it. This is an openXC7-specific win, not the main gap.
+#
+# The cost tuple below keeps LUT1-6 as synth_xilinx sets them and prices LUT7/8
+# at what they physically occupy: a LUT7 is two 6-LUT sites (2 x 5 = 10 -> 6),
+# a LUT8 is four (-> 12). Anything at or below LUT6+LUT2 = 7 makes the fast form
+# win; 6 leaves a margin.
+#
+# Run:  yosys -s synth_lut7_cost.ys
+# Then: compare `stat` MUXF7/LUT2 against the shipped netlist, and P&R the JSON.
+
+read_verilog -sv ../hdl/am01_qmtech_top_nm1.v
+read_verilog -sv ../hdl/clk_gen_hash.v
+read_verilog -sv ../hdl/odocrypt_gpio_wrapper.v
+read_verilog -sv ../../../hdl/odocrypt/encrypt.v
+read_verilog -sv ../../../hdl/odocrypt/keccak800.v
+read_verilog -sv ../../../hdl/odocrypt/miner.v
+read_verilog -sv ../../../hdl/odocrypt/atomminer_misc.v
+
+# Everything up to LUT mapping exactly as the shipped flow does it.
+synth_xilinx -run begin:map_ffs -top am01_qmtech_top -family xc7 -flatten
+
+# The committed FF workaround, kept so this run differs from the shipped netlist
+# in ONE variable only (the LUT cost tuple). It is separately obsolete now that
+# the upstream control-set bug is fixed in bf78fccf, but removing it here as well
+# would confound the measurement.
+dfflegalize -cell $_SDFFE_?P0P_ 01 -cell $_DLATCH_?P?_ 01 -minsrst 999999999 -mince 999999999
+
+opt_expr -mux_undef -noclkinv
+
+# THE ONE CHANGE: LUT7 priced at 6 rather than 10, LUT8 at 12 rather than 20.
+abc -luts 2:2,3,6:5,6,12
+
+clean
+techmap -map +/xilinx/ff_map.v
+xilinx_srl -fixed -minlen 3
+techmap -map +/xilinx/lut_map.v -map +/xilinx/cells_map.v -D LUT_WIDTH=6
+xilinx_dffopt
+opt_lut_ins -tech xilinx
+clkbufmap -buf BUFG O:I
+clean
+
+stat -tech xilinx
+write_json out_nm1_nosr/am01_qmtech_top_lut7.json
