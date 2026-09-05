@@ -14,7 +14,9 @@
 # Usage:
 #   cd hardware/qmtech-kintex7/vivado
 #   vivado -mode batch -source build_full.tcl
-set script_dir [file dirname [info script]]
+# Absolute -- see the note in build.tcl. build.tcl resets this when sourced
+# below, but it is used to FIND build.tcl first, so it has to be right here too.
+set script_dir [file normalize [file dirname [info script]]]
 source [file join $script_dir build.tcl]
 
 puts "----------------------------------------------------------------------"

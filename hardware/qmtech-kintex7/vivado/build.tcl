@@ -21,7 +21,14 @@
 
 set part      xc7k325tffg676-1
 set proj_name am01_qmtech_kintex7
-set script_dir [file dirname [info script]]
+# NORMALIZED, not relative. [info script] is "build_full.tcl" when Vivado is
+# invoked as `vivado -source build_full.tcl`, so dirname is "." and every path
+# built from it -- including proj_dir, and so every report path -- depends on
+# the working directory still being what it was at launch. It is not always:
+# a 2026-09-04 run finished synthesis, spent two minutes in open_run, then
+# died writing a report because "./build" no longer resolved. Three hours of
+# synthesis thrown away by a relative path.
+set script_dir [file normalize [file dirname [info script]]]
 set proj_dir   [file join $script_dir build]
 
 set repo_root    [file normalize [file join $script_dir .. .. ..]]
