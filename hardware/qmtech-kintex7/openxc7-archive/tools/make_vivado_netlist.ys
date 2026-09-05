@@ -1,0 +1,43 @@
+# Regenerate the Verilog netlist Vivado reads, PRESERVING yosys cell names.
+#
+# WHY -norename
+# -------------
+# The first attempt at "nextpnr place -> Vivado route" applied 0 of 141548
+# placement constraints. The cause was not cell packing (only 275 $PACKER and
+# 751 $LUT$ split cells exist out of 70774). It was that the two files were
+# written at different points in the flow with different NAME SETS:
+#
+#   netlist_for_vivado.v   cells named  _62672_
+#   nextpnr placed JSON    cells named  $flatten\...\worker.\compare.$lt$...
+#
+# yosys write_verilog documents this:
+#
+#   -norename
+#       without this option all internal object names (the ones with a dollar
+#       instead of a backslash prefix) are changed to short names in the
+#       format '_<number>_'.
+#
+# So the default rewrote every internal name and nothing could ever have
+# matched. -norename keeps the names nextpnr also carries, making the placement
+# reattachable by name.
+#
+# SOURCE
+# ------
+# _st, not _yb. The Y-band run (92.36 MHz) was reported as the best result for
+# most of this session, but the striped run is better: 102.15 MHz, also 0
+# unrouted. Both constrain the same 420 BRAMs over the same X/Y span and differ
+# only in the allocation, so Y-band is a ~10% REGRESSION, not the +12% win it
+# was recorded as.
+#
+# For this script the choice is cosmetic -- _st and _yb are byte-identical in
+# size (61431662) because they are the same synthesis output differing only in
+# BEL attributes, so the cell set and hence the emitted Verilog are the same.
+# Using _st anyway so the provenance points at the run actually worth beating.
+#
+# Using the pre-pack synthesis JSON (not the placed one) because Vivado must
+# link ordinary Xilinx primitives, not nextpnr's packed LC/SLICE cells.
+#
+# Run:  yosys -s make_vivado_netlist.ys
+
+read_json out_nm1_nosr/am01_qmtech_top_v68.json
+write_verilog -norename out_nm1_nosr/netlist_norename_v68.v

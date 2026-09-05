@@ -1,0 +1,219 @@
+From ec7d4066b9cdfb56253bf85b0f52880001bd9972 Mon Sep 17 00:00:00 2001
+From: colneech-dev <colneech@gmail.com>
+Date: Thu, 3 Sep 2026 07:17:56 +0100
+Subject: [PATCH 4/4] placer: fix congestion aggregation -- mean not max,
+ floored capacity, clamped
+
+The first routed A/B collapsed timing 134.86 -> 54.84 MHz with 2.4x the
+spread wirelength. Instrumented the model rather than guessing at a
+scale factor. Measured over 78302 wired tiles:
+
+    capacity  p10 1.0    p50 249.0   p90 314.0   max 7558.0
+    demand    p10 0.00   p50 0.84    p90 55.75   max 34775.57
+    ratio     p10 0.000  p50 0.016   p90 0.465   max 1310.201
+
+That refutes the units hypothesis I had reached for (demand systematically
+exceeding capacity): median demand is far UNDER capacity and only 7-17% of
+tiles exceed a ratio of 1.0. The units are broadly sane.
+
+The defect is the AGGREGATION. cong_max() took the maximum over a
+regions bounding box, and against a distribution with median 0.016 and
+max 1310 that let one pathological tile set the multiplier for an entire
+region. overused() divided the regions bel count by it, the region could
+never be satisfied, and it expanded until the die was uniformly spread.
+
+Three fixes, all in aggregation, none in the estimator:
+  - floor the capacity denominator at 0.25x the device median, so a
+    degenerate 1-wire tile cannot manufacture a four-figure ratio
+  - aggregate a region by MEAN rather than max
+  - clamp the density multiplier (NEXTPNR_CONG_CLAMP, default 2.0)
+
+Also adds NEXTPNR_CONG_STATS=1, which prints the distributions above --
+the diagnostic that made the real cause visible.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ common/placer_heap.cc | 117 +++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 103 insertions(+), 14 deletions(-)
+
+diff --git a/common/placer_heap.cc b/common/placer_heap.cc
+index 458d4c51..6c5fd3b9 100644
+--- a/common/placer_heap.cc
++++ b/common/placer_heap.cc
+@@ -350,6 +350,7 @@ class HeAPPlacer
+     // half and double the best value both clearly worse.
+     std::vector<std::vector<float>> route_capacity;
+     float route_capacity_mean = 0.0f;
++    float route_capacity_median = 0.0f;
+ 
+     void build_route_capacity()
+     {
+@@ -372,8 +373,24 @@ class HeAPPlacer
+                     ++nonzero;
+                 }
+         route_capacity_mean = nonzero ? float(total / nonzero) : 0.0f;
+-        log_info("routing capacity: %d tiles carry wires, mean %.1f wires/tile\n", nonzero,
+-                 double(route_capacity_mean));
++        // Median, for use as a floor. The p10 tile carries a single wire;
++        // dividing a real demand figure by that manufactures a four-figure
++        // congestion ratio out of a degenerate tile rather than a hot one.
++        {
++            std::vector<float> flat;
++            flat.reserve(nonzero);
++            for (int x = 0; x <= max_x; x++)
++                for (int y = 0; y <= max_y; y++)
++                    if (route_capacity.at(x).at(y) > 0.0f)
++                        flat.push_back(route_capacity.at(x).at(y));
++            if (!flat.empty()) {
++                size_t k = flat.size() / 2;
++                std::nth_element(flat.begin(), flat.begin() + k, flat.end());
++                route_capacity_median = flat.at(k);
++            }
++        }
++        log_info("routing capacity: %d tiles carry wires, mean %.1f median %.1f wires/tile\n", nonzero,
++                 double(route_capacity_mean), double(route_capacity_median));
+     }
+ 
+     std::vector<std::vector<std::vector<std::vector<BelId>>>> fast_bels;
+@@ -1540,7 +1557,16 @@ class HeAPPlacer
+             //
+             // cong_d is exactly 1.0 when congestion awareness is off, so every
+             // comparison below is then unchanged.
+-            const float cong_d = (cong > 1.0f) ? cong : 1.0f;
++            // Clamped (NEXTPNR_CONG_CLAMP, default 2.0). Even a genuinely
++            // congested region should tighten its density target by a bounded
++            // factor; unbounded, a hot region simply expands forever.
++            static const float cong_clamp = [] {
++                const char *e = getenv("NEXTPNR_CONG_CLAMP");
++                return e ? float(atof(e)) : 2.0f;
++            }();
++            float cong_d = (cong > 1.0f) ? cong : 1.0f;
++            if (cong_clamp > 1.0f && cong_d > cong_clamp)
++                cong_d = cong_clamp;
+             // AM01/openXC7 (env NEXTPNR_SMALL_BETA=<f>): density target for
+             // tiles with fewer than 4 bels.
+             //
+@@ -1596,6 +1622,7 @@ class HeAPPlacer
+             auto startt = std::chrono::high_resolution_clock::now();
+             init();
+             build_wire_demand();
++            log_cong_stats();
+             find_overused_regions();
+             for (auto &r : regions) {
+                 if (merged_regions.count(r.id))
+@@ -1796,23 +1823,85 @@ class HeAPPlacer
+             float cap = p->route_capacity.at(x).at(y);
+             if (!(cap > 0.0f))
+                 cap = p->route_capacity_mean; // tile has no wires of its own
++            // Floor the denominator. Measured capacity p10 is 1.0 wire, and
++            // dividing by that turns an ordinary demand into a ratio in the
++            // hundreds -- an artefact of a degenerate tile, not congestion.
++            float floor_cap = 0.25f * p->route_capacity_median;
++            if (floor_cap > 0.0f && cap < floor_cap)
++                cap = floor_cap;
+             if (!(cap > 0.0f))
+                 return 1.0f;
+             return wire_demand.at(x).at(y) / cap;
+         }
+ 
+-        // Worst congestion over a region's extent. Used as the region's
+-        // density-target multiplier, so a region is judged by its hottest
+-        // tile rather than by an average that a large cool area would dilute.
+-        float cong_max(int x0, int y0, int x1, int y1)
++        // Congestion over a region's extent, as the MEAN of its tiles.
++        //
++        // This was the maximum, which is indefensible against the measured
++        // distribution: ratio median 0.016 but max 1310, so a single tile set
++        // the multiplier for an entire region, overused() could never be
++        // satisfied, and regions expanded until the whole die was spread.
++        // The mean is the aggregate the density target actually wants -- how
++        // much routing this area needs against what it has.
++        float cong_region(int x0, int y0, int x1, int y1)
+         {
+-            float m = 1.0f;
+             if (wire_demand.empty() || p->route_capacity.empty())
+-                return m;
++                return 1.0f;
++            double acc = 0;
++            int n = 0;
+             for (int x = std::max(0, x0); x <= std::min(p->max_x, x1); x++)
+-                for (int y = std::max(0, y0); y <= std::min(p->max_y, y1); y++)
+-                    m = std::max(m, cong_at(x, y));
+-            return m;
++                for (int y = std::max(0, y0); y <= std::min(p->max_y, y1); y++) {
++                    acc += cong_at(x, y);
++                    ++n;
++                }
++            if (n == 0)
++                return 1.0f;
++            float m = float(acc / n);
++            return (m > 1.0f) ? m : 1.0f;
++        }
++
++        // Diagnostic: are RUDY demand and wire-count capacity even in
++        // comparable units? Printed once per spread under NEXTPNR_CONG_STATS=1.
++        void log_cong_stats()
++        {
++            static const bool want = getenv("NEXTPNR_CONG_STATS") != nullptr;
++            if (!want || wire_demand.empty() || p->route_capacity.empty())
++                return;
++            std::vector<float> caps, dems, ratios;
++            for (int x = 0; x <= p->max_x; x++)
++                for (int y = 0; y <= p->max_y; y++) {
++                    float c = p->route_capacity.at(x).at(y);
++                    if (!(c > 0.0f))
++                        continue;
++                    float d = wire_demand.at(x).at(y);
++                    caps.push_back(c);
++                    dems.push_back(d);
++                    ratios.push_back(d / c);
++                }
++            if (caps.empty())
++                return;
++            auto pct = [](std::vector<float> &v, double q) {
++                if (v.empty())
++                    return 0.0f;
++                size_t k = size_t(q * double(v.size() - 1));
++                std::nth_element(v.begin(), v.begin() + k, v.end());
++                return v.at(k);
++            };
++            std::vector<float> c2 = caps, d2 = dems, r2 = ratios;
++            log_info("cong stats over %d wired tiles:\n", int(caps.size()));
++            log_info("   capacity  p10 %.1f  p50 %.1f  p90 %.1f  max %.1f\n", double(pct(c2, 0.10)),
++                     double(pct(c2, 0.50)), double(pct(c2, 0.90)), double(pct(c2, 1.0)));
++            log_info("   demand    p10 %.2f  p50 %.2f  p90 %.2f  max %.2f\n", double(pct(d2, 0.10)),
++                     double(pct(d2, 0.50)), double(pct(d2, 0.90)), double(pct(d2, 1.0)));
++            log_info("   ratio     p10 %.3f  p50 %.3f  p90 %.3f  max %.3f\n", double(pct(r2, 0.10)),
++                     double(pct(r2, 0.50)), double(pct(r2, 0.90)), double(pct(r2, 1.0)));
++            for (float thr : {0.5f, 1.0f, 1.5f, 2.0f, 5.0f}) {
++                int over = 0;
++                for (float r : ratios)
++                    if (r > thr)
++                        ++over;
++                log_info("   ratio > %.1f : %d tiles (%.1f%%)\n", double(thr), over,
++                         100.0 * double(over) / double(ratios.size()));
++            }
+         }
+ 
+         bool wire_congested(int x, int y)
+@@ -1968,7 +2057,7 @@ class HeAPPlacer
+             // Extent changed, so recompute the region's congestion figure.
+             // Every growth and every merge reaches this point, so a region's
+             // density target can never be judged against a stale figure.
+-            r.cong = cong_max(r.x0, r.y0, r.x1, r.y1);
++            r.cong = cong_region(r.x0, r.y0, r.x1, r.y1);
+         }
+ 
+         void find_overused_regions()
+@@ -2005,7 +2094,7 @@ class HeAPPlacer
+                         reg.bels.push_back(bels_at(x, y, t));
+                         reg.cells.push_back(occ_at(x, y, t));
+                     }
+-                    reg.cong = cong_max(reg.x0, reg.y0, reg.x1, reg.y1);
++                    reg.cong = cong_region(reg.x0, reg.y0, reg.x1, reg.y1);
+                     // Make sure we cover carries, etc
+                     grow_region(reg, reg.x0, reg.y0, reg.x1, reg.y1, true);
+ 
+-- 
+2.53.0
+

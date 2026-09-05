@@ -47,6 +47,26 @@ static bool g_bram_out_reg = false;
 // plus one more when the output register is enabled.
 static int RoundCycles() { return g_bram_out_reg ? 3 : 2; }
 
+// Number of the 10 large-S-box module TYPES (sbox_large0..9) to infer as
+// distributed RAM (SLICEM LUTRAM) instead of block RAM. Set by --lutram=N.
+//
+// Each of the 10 types is instantiated once per unrolled round, so N of 10
+// converts almost exactly N/10 of total large-S-box BRAM demand into LUT
+// fabric -- a direct lever on BRAM occupancy for wide/multi-miner configs
+// where BRAM, not LUTs, is the binding resource (see RESULTS.md, AM01
+// hashrate scaling options). Cost model (per am01-hashrate-scaling-options
+// memory): ~420 LUTs per converted instance (a 1024x10 dual-port ROM as
+// logic, ~21 LUTs/bit x 10 bits x 2 ports).
+static int g_lutram_count = 0;
+
+// Set by --pipeline-premix. Registers the pre-mix XOR reduction so the
+// 10-way 64-bit tree and the final 3-input XOR land in different clock
+// cycles. Costs one cycle of latency and no throughput: the pre-mix is
+// outside encrypt_loop, so the round schedule and the
+// gcd(throughput, RoundCycles*unrolling + extra_delay) constraint are
+// untouched. See RESULTS.md "Known remaining ceiling".
+static bool g_pipeline_premix = false;
+
 // Which period[] tap feeds round i's key.
 //
 // full_round applies the key COMBINATIONALLY after the sboxes:
@@ -117,7 +137,52 @@ void GenerateSboxes(const T (&sbox)[sz1][sz2], bool dual_port, const char* prefi
             // Vivado conflating duplicate instances either). With this
             // attribute the correct count holds even past that threshold.
             // yosys already infers this correctly regardless; unaffected.
-            fprintf(f, "    (* ram_style = \"block\" *) reg [%d:0] mem[0:%zd];\n", width-1, sz2-1);
+            //
+            // --lutram=N converts the first N of these sz1 module TYPES
+            // (i < g_lutram_count) to distributed RAM instead. Only meaningful
+            // when dual_port (the large S-boxes, the only ones this cost model
+            // was measured against); small S-boxes are already tiny enough
+            // that yosys/Vivado map them to LUTs on their own.
+            // rom_style FOR THE DISTRIBUTED CASE -- CORRECT, BUT IT DOES
+            // NOT HELP. MEASURED BOTH WAYS 2026-09-02, 3 miners, --lutram=3:
+            //
+            //                        ram_style      rom_style
+            //   LUT as Distributed RAM      40             40
+            //   LUT as Logic           246,903        246,903
+            //   RAMB18                     882            882
+            //
+            // Byte-identical. Vivado will not map a 1024-deep DUAL-PORT ROM to
+            // distributed memory at all: 7-series distributed primitives top
+            // out at 256 deep single-port, so 1024x10 with two read ports
+            // needs cascading plus address muxing, and the tool builds
+            // combinational logic instead -- ~730 LUTs per instance, whatever
+            // the attribute says.
+            //
+            // The attribute is still the right one for a memory with no write
+            // port, so it stays. But --lutram cannot free BRAM for a third
+            // miner on this device without first making these S-boxes
+            // shallower or single-port. See the am01-hashrate-scaling-options
+            // memory.
+            //
+            // These have NO WRITE PORT -- an initial block and two
+            // read-only always blocks -- so they are ROMs, and ram_style
+            // applies to inferred RAMs. MEASURED 2026-09-02 on a 3-miner
+            // --lutram=3 synthesis: Vivado ignored ram_style="distributed"
+            // entirely and built combinational logic --
+            //     LUT as Distributed RAM        40   (i.e. none of them)
+            //     LUT as Logic             246,903   (121% of the device)
+            // at ~730 LUTs per converted instance against the ~420 the
+            // cost model above assumes. BRAM landed on 882 RAMB18, exactly
+            // as predicted, so only the distributed path was broken.
+            //
+            // ram_style="block" is left alone on purpose: it demonstrably
+            // DOES infer block RAM for these same ROMs, and changing a
+            // working path beside a broken one loses the ability to say
+            // which change did what.
+            fprintf(f, "    (* %s = \"%s\" *) reg [%d:0] mem[0:%zd];\n",
+                    (dual_port && i < g_lutram_count) ? "rom_style" : "ram_style",
+                    (dual_port && i < g_lutram_count) ? "distributed" : "block",
+                    width-1, sz2-1);
             // Separate always blocks per port, each with its own read of the
             // shared `mem` array -- Vivado's dual-port BRAM inference is
             // pattern-sensitive and doesn't reliably collapse two reads in
@@ -202,8 +267,32 @@ void OdoVerilog::Generate(int throughput, const char* prefix, FILE* f) const
         //
         // tools/check-epoch.sh reads this line back and echoes whatever it
         // finds, so the instruction cannot drift from the artefact again.
-        fprintf(f, "// odo_gen flags:       %s\n",
-                g_bram_out_reg ? "--bram-out-reg" : "(none)");
+        // BOTH flags, not just --bram-out-reg. --lutram=N changes which
+        // S-box types infer distributed RAM instead of block RAM, so a
+        // rebuild without it does not fit the configuration it was
+        // generated for -- omitting it reproduces exactly the drift this
+        // line exists to prevent. Missing until 2026-09-02: a --lutram=3
+        // artefact stamped itself "(none)", and check-epoch.sh would have
+        // printed a regeneration command that rebuilt the wrong core.
+        {
+            char flagbuf[64];
+            size_t fl = 0;
+            flagbuf[0] = '\0';
+            if (g_bram_out_reg) {
+                snprintf(flagbuf, sizeof flagbuf, "--bram-out-reg");
+                fl = strlen(flagbuf);
+            }
+            if (g_lutram_count > 0) {
+                snprintf(flagbuf + fl, sizeof flagbuf - fl, "%s--lutram=%d",
+                         fl ? " " : "", g_lutram_count);
+                fl = strlen(flagbuf);
+            }
+            if (g_pipeline_premix)
+                snprintf(flagbuf + fl, sizeof flagbuf - fl, "%s--pipeline-premix",
+                         fl ? " " : "");
+            fprintf(f, "// odo_gen flags:       %s\n",
+                    flagbuf[0] ? flagbuf : "(none)");
+        }
         fprintf(f, "// Round cycles:        %d  %s\n", RoundCycles(),
                 g_bram_out_reg ? "(sbox read, output register, state register)"
                                : "(sbox read, state register)");
@@ -254,18 +343,48 @@ void OdoVerilog::Generate(int throughput, const char* prefix, FILE* f) const
         period_bits++;
 
     // pre-mix
-    fprintf(f, "module %spre_mix(in, out);\n", prefix);
-    fprintf(f, "    input [%d:0] in;\n", DIGEST_BITS-1);
-    fprintf(f, "    output [%d:0] out;\n", DIGEST_BITS-1);
-    fprintf(f, "    wire [%d:0] total;\n", WORD_BITS-1);
-    fprintf(f, "    assign total = 0");
-    for (int i = 0; i < STATE_SIZE; i++)
-        fprintf(f, " ^ in[%d:%d]", WORD_BITS*(i+1)-1, WORD_BITS*i);
-    fprintf(f, ";\n");
-    for (int i = 0; i < STATE_SIZE; i++)
-        fprintf(f, "    assign out[%d:%d] = in[%d:%d] ^ total ^ (total >> 32);\n",
-                WORD_BITS*(i+1)-1, WORD_BITS*i, WORD_BITS*(i+1)-1, WORD_BITS*i);
-    fprintf(f, "endmodule\n\n");
+    if (g_pipeline_premix)
+    {
+        // Registered reduction: the 10-way XOR tree ends at total_r, and only
+        // a 3-input XOR remains between total_r and the consumer's register.
+        // in_r carries the untouched operand across the same boundary so the
+        // halves stay aligned.
+        // Split into the reduction (the long half, registered by the caller
+        // alongside state[0] so the two stay aligned with no 640-bit copy)
+        // and the application (the short half).
+        fprintf(f, "module %spre_mix_total(in, total);\n", prefix);
+        fprintf(f, "    input [%d:0] in;\n", DIGEST_BITS-1);
+        fprintf(f, "    output [%d:0] total;\n", WORD_BITS-1);
+        fprintf(f, "    assign total = 0");
+        for (int i = 0; i < STATE_SIZE; i++)
+            fprintf(f, " ^ in[%d:%d]", WORD_BITS*(i+1)-1, WORD_BITS*i);
+        fprintf(f, ";\n");
+        fprintf(f, "endmodule\n\n");
+
+        fprintf(f, "module %spre_mix_apply(in, total, out);\n", prefix);
+        fprintf(f, "    input [%d:0] in;\n", DIGEST_BITS-1);
+        fprintf(f, "    input [%d:0] total;\n", WORD_BITS-1);
+        fprintf(f, "    output [%d:0] out;\n", DIGEST_BITS-1);
+        for (int i = 0; i < STATE_SIZE; i++)
+            fprintf(f, "    assign out[%d:%d] = in[%d:%d] ^ total ^ (total >> 32);\n",
+                    WORD_BITS*(i+1)-1, WORD_BITS*i, WORD_BITS*(i+1)-1, WORD_BITS*i);
+        fprintf(f, "endmodule\n\n");
+    }
+    else
+    {
+        fprintf(f, "module %spre_mix(in, out);\n", prefix);
+        fprintf(f, "    input [%d:0] in;\n", DIGEST_BITS-1);
+        fprintf(f, "    output [%d:0] out;\n", DIGEST_BITS-1);
+        fprintf(f, "    wire [%d:0] total;\n", WORD_BITS-1);
+        fprintf(f, "    assign total = 0");
+        for (int i = 0; i < STATE_SIZE; i++)
+            fprintf(f, " ^ in[%d:%d]", WORD_BITS*(i+1)-1, WORD_BITS*i);
+        fprintf(f, ";\n");
+        for (int i = 0; i < STATE_SIZE; i++)
+            fprintf(f, "    assign out[%d:%d] = in[%d:%d] ^ total ^ (total >> 32);\n",
+                    WORD_BITS*(i+1)-1, WORD_BITS*i, WORD_BITS*(i+1)-1, WORD_BITS*i);
+        fprintf(f, "endmodule\n\n");
+    }
 
     // s-box
     GenerateSboxes(Sbox1, false, prefix, "small", f);
@@ -483,15 +602,31 @@ void OdoVerilog::Generate(int throughput, const char* prefix, FILE* f) const
     fprintf(f, "    input read;\n");
     fprintf(f, "    output [%d:0] out;\n", DIGEST_BITS-1);
     fprintf(f, "    output write;\n");
+    // v2 adds NO latency -- total_r is captured on the same edge as state[0]
+    // from the same source -- so the read pipeline is unchanged either way.
     fprintf(f, "    reg [1:0] progress;\n");
     fprintf(f, "    initial progress = 2'h0;\n");
     fprintf(f, "    reg [639:0] state[1:0];\n");
     fprintf(f, "    wire [639:0] next;\n");
-    fprintf(f, "    %spre_mix premixer(state[0], next);\n", prefix);
+    if (g_pipeline_premix)
+    {
+        // The reduction hangs off the PORT `in`, one cycle upstream of where
+        // it is consumed, and lands in a 64-bit register. state[0] captures
+        // the same `in` on the same edge, so `next` combines two views of one
+        // value -- no realignment and no 640-bit shadow copy needed.
+        fprintf(f, "    wire [%d:0] premix_total;\n", WORD_BITS-1);
+        fprintf(f, "    reg [%d:0] total_r;\n", WORD_BITS-1);
+        fprintf(f, "    %spre_mix_total totaler(in, premix_total);\n", prefix);
+        fprintf(f, "    %spre_mix_apply premixer(state[0], total_r, next);\n", prefix);
+    }
+    else
+        fprintf(f, "    %spre_mix premixer(state[0], next);\n", prefix);
     fprintf(f, "    %sencrypt_loop crypter(clk, state[1], progress[1], out, write);\n", prefix);
     fprintf(f, "    always @(posedge clk) begin\n");
     fprintf(f, "        progress[0] <= read;\n");
     fprintf(f, "        progress[1] <= progress[0];\n");
+    if (g_pipeline_premix)
+        fprintf(f, "        total_r <= premix_total;\n");
     fprintf(f, "        state[0] <= in;\n");
     fprintf(f, "        state[1] <= next;\n");
     fprintf(f, "    end\n");
@@ -510,12 +645,31 @@ int main(int argc, char* argv[])
     uint32_t key = 0;
     uint32_t throughput = 0;
     const char* prefix = NULL;
-    // --bram-out-reg may appear anywhere; strip it before positional parsing.
+    // --bram-out-reg and --lutram=N may appear anywhere; strip them before
+    // positional parsing.
     for (int i = 1; i < argc; i++)
     {
         if (strcmp(argv[i], "--bram-out-reg") == 0)
         {
             g_bram_out_reg = true;
+            for (int j = i; j < argc - 1; j++)
+                argv[j] = argv[j+1];
+            argc--;
+            i--;
+        }
+        else if (strcmp(argv[i], "--pipeline-premix") == 0)
+        {
+            g_pipeline_premix = true;
+            for (int j = i; j < argc - 1; j++)
+                argv[j] = argv[j+1];
+            argc--;
+            i--;
+        }
+        else if (strncmp(argv[i], "--lutram=", 9) == 0)
+        {
+            g_lutram_count = atoi(argv[i] + 9);
+            if (g_lutram_count < 0 || g_lutram_count > 10)
+                return usage(argv[0], "--lutram=N must be 0..10 (10 large S-box module types exist)");
             for (int j = i; j < argc - 1; j++)
                 argv[j] = argv[j+1];
             argc--;
