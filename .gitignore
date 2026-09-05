@@ -77,3 +77,7 @@ hardware/qmtech-kintex7/sw/am01_diag
 
 # PlatformIO build tree for the CYD firmware.
 hardware/qmtech-kintex7/cyd/firmware/.pio/
+
+# CYD unit-test binaries (built by `make -C hardware/qmtech-kintex7/cyd/sim`)
+hardware/qmtech-kintex7/cyd/sim/test_cyd_*
+!hardware/qmtech-kintex7/cyd/sim/test_cyd_*.c

@@ -39,13 +39,18 @@
  *   {rx_err[3:0], tx_cnt[4:0], rx_cnt[4:0], tx_full, rx_empty}
  *
  * The RX FIFO is 256 bytes as of 0x0204, but this layout did NOT change: the
- * 5-bit rx_cnt here simply saturates at 31, and nothing in this file reads it
- * -- the RX side drains until rx_empty. The exact occupancy has its own
- * 16-bit register (CYD_REG_UART_RXCNT) for anyone who wants it. */
+ * 5-bit rx_cnt here saturates at 31, so it cannot size a drain of a 256-byte
+ * FIFO. That is what CYD_REG_UART_RXCNT (0x1C) is for, and drain_rx() reads
+ * it. The bits below are still the ones to use for the yes/no questions --
+ * rx_empty and tx_full -- which is all this file asks of them. */
 #define ST_RX_EMPTY(v)  ((v) & 0x1u)
 #define ST_TX_FULL(v)   (((v) >> 1) & 0x1u)
 #define ST_TX_CNT(v)    (((v) >> 7) & 0x1Fu)
 #define TX_FIFO_DEPTH   16
+/* RX is 256 as of 0x0204 (uart_bridge.v RX_FIFO_AW=8). Used only to
+ * bound the drain loop, so an older 16-byte bitstream is fine: the
+ * loop stops when the FIFO runs dry regardless. */
+#define RX_FIFO_DEPTH   256
 
 /* 0x0203, not higher. The panel thread works with any bitstream from
  * that revision on -- UART_STAT has not changed since -- and requiring
@@ -315,13 +320,52 @@ static void apply(const cyd_cmd_t *c, am01_bus_t *bus)
  * lost behind an outgoing status. */
 static void drain_rx(am01_bus_t *bus, int may_apply)
 {
-    for (int i = 0; i < 256; i++) {
+    uint16_t avail = 0;
+
+    /* SIZE THE BURST ONCE, then pop that many bytes.
+     *
+     * This used to read UART_STAT before every byte to test rx_empty: two bus
+     * transactions per byte, 512 of them to empty a full 256-byte FIFO. 0x1C
+     * gives the exact occupancy in one read, so a full drain costs 257.
+     *
+     * WHY A STALE COUNT IS SAFE HERE, when the same shortcut was a bug on the
+     * TX side. uart_write() cannot trust tx_cnt to size a write, because the
+     * FIFO drains while the bytes are being pushed -- room computed from a
+     * stale count is an OVER-estimate, and uart_bridge.v drops a write into a
+     * full FIFO silently. RX is the mirror image: this count only grows
+     * behind our back, because we are the only reader. A stale rx_count is an
+     * UNDER-estimate, so popping exactly `avail` bytes can never underflow.
+     * Whatever arrived during the burst is simply read on the next call.
+     *
+     * NOT version-gated, deliberately. 0x1C shipped in a bitstream that still
+     * reports 0x0203 (see the VERSION comment in odocrypt_gpio_wrapper.v), so
+     * there is no version number that correctly answers "does 0x1C exist" --
+     * gating on >= 0x0204 would quietly exclude a board that has it. The
+     * wrapper returns 0 for an unmapped read, so a zero here is either an
+     * empty FIFO or an older bitstream, and asking UART_STAT settles it. That
+     * costs one extra read only when there is nothing to do, and it makes the
+     * version discrepancy permanently harmless instead of load-bearing. */
+    if (am01_bus_read_reg(bus, CYD_REG_UART_RXCNT, &avail) < 0)
+        return;
+
+    if (avail == 0) {
         uint16_t st;
         if (am01_bus_read_reg(bus, CYD_REG_UART_STAT, &st) < 0)
             return;
         if (ST_RX_EMPTY(st))
             return;
+        /* Not empty, but 0x1C says zero: a bitstream without the register.
+         * Fall back to one byte per call -- correct, just slower, which is
+         * the right way round for a panel talking to an older board. */
+        avail = 1;
+    }
 
+    /* The FIFO cannot hold more than this; a larger value means a bad read,
+     * and it must not become an unbounded loop holding the bus. */
+    if (avail > RX_FIFO_DEPTH)
+        avail = RX_FIFO_DEPTH;
+
+    for (uint16_t i = 0; i < avail; i++) {
         uint16_t d;
         if (am01_bus_read_reg(bus, CYD_REG_UART_DATA, &d) < 0)
             return;
