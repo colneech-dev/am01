@@ -56,12 +56,19 @@ echo
 for s in $SEEDS; do
     d="seedrun/${TAG}_s${s}"; mkdir -p "$d"
     echo "=== FREQ=$FREQ seed $s -- $(date -Is) ==="
-    env NEXTPNR_ARC_MAX_VISIT=2000000 NEXTPNR_ROUTER2_MAX_STALL=250 \
+    # A per-seed cap is mandatory, not a nicety. Seeds do not merely converge
+    # slowly, some DIVERGE: seed 9 climbed from 88 overuse at iter 251 to 220
+    # by iter 324 and ran 3h50m against a ~25 min norm, blocking every seed
+    # behind it. Converging seeds here finish in 9-40 iterations, so a bad
+    # one is never worth waiting on -- abandon it and keep the sweep moving.
+    timeout --signal=KILL "${SEED_TIMEOUT:-45m}" \
+        env NEXTPNR_ARC_MAX_VISIT=2000000 NEXTPNR_ROUTER2_MAX_STALL=250 \
         NEXTPNR_CRIT_DIST_EXP=1.0 \
         "$NEXTPNR" --chipdb "$CHIPDB" \
         --json "$OUT/am01_qmtech_top.fp.json" --xdc "$XDC" \
         --freq "$FREQ" --seed "$s" \
         --log "$d/route.log" >"$d/console" 2>&1
+    [ $? -eq 137 ] && echo "    seed $s ABANDONED at ${SEED_TIMEOUT:-45m}"
 
     # Take the Fmax that FOLLOWS the final iter= line. nextpnr prints a
     # pre-route SA estimate earlier in the log; quoting that as a result is
