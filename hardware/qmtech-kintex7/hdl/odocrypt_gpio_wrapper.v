@@ -285,7 +285,17 @@ module odocrypt_gpio_wrapper #(
     // permanently -- surviving restarts, recoverable only by reconfiguring
     // the FPGA. It cost an hour of mining on 2026-09-01. OP_SOFT_RESET now
     // reaches it and the daemon issues one at startup.
-    /* 0x0205: the ILI9341/XPT2046 block is gone and 0x10-0x17 are free.
+    /* BUMP THIS IN THE SAME COMMIT AS ANY REGISTER-MAP OR BEHAVIOUR CHANGE.
+     *
+     * It is the only thing a host can ask a bitstream about itself, and it is
+     * worth nothing if it lags. It DID lag: the 256-byte RX FIFO and the
+     * rx_count register at 0x1C went in without a bump, so one bitstream
+     * carries 0x0204 behaviour and reports 0x0203. Harmless in that instance
+     * -- UART_STAT is identical either way and 0x1C reads 0 where it does not
+     * exist -- but the next omission will not be, and the cost of a bump is
+     * one line.
+     *
+     * 0x0205: the ILI9341/XPT2046 block is gone and 0x10-0x17 are free.
      * 0x0204 was the 256-byte RX FIFO and the exact rx_count at 0x1C.
      *
      * NOTE: one interim bitstream carries the 0x0204 changes but still
