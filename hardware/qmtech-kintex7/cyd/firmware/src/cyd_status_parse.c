@@ -146,7 +146,12 @@ bool cyd_status_parse(const char *json, cyd_status_t *st)
     st->age_ms   = 0;
 
     get_bool(json, "connected", &st->connected);
+    get_bool(json, "wifi_psk_set", &st->wifi_psk_set);
     get_str (json, "pool",    st->pool,    sizeof st->pool);
+    get_str (json, "ip",      st->ip,      sizeof st->ip);
+    get_str (json, "worker",  st->worker,  sizeof st->worker);
+    get_str (json, "wifi_ssid", st->wifi_ssid, sizeof st->wifi_ssid);
+    get_int (json, "wifi_rssi", &st->wifi_rssi);
     get_str (json, "job_id",  st->job_id,  sizeof st->job_id);
     get_str (json, "backend", st->backend, sizeof st->backend);
     get_str (json, "core",    st->core,    sizeof st->core);

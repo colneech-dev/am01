@@ -44,6 +44,21 @@ static cyd_action_t tap(cyd_ui_t *ui, cyd_rect_t r)
     return a;
 }
 
+/* Type a string by tapping the keys that carry it. Unshifted only -- shift has
+ * its own checks and is not what these are about. */
+static void type_str(cyd_ui_t *ui, const char *str)
+{
+    for (; *str; str++) {
+        int done = 0;
+        for (int r = 0; r < CYD_KB_ROWS && !done; r++)
+            for (int c = 0; c < CYD_KB_COLS && !done; c++)
+                if (cyd_ui_kb_char(c, r, false) == *str) {
+                    tap(ui, CYD_KB_KEY(c, r));
+                    done = 1;
+                }
+    }
+}
+
 /* Centre of a rect -- every touch in these tests aims at one. */
 #define CTR_X(r) ((r).x + (r).w / 2)
 #define CTR_Y(r) ((r).y + (r).h / 2)
@@ -159,7 +174,12 @@ int main(void)
     act = tap(&ui, CYD_CONFIRM_NO);
     ok(act == CYD_ACTION_NONE,   "NO returns no action");
     ok(ui.pending == CYD_ACTION_NONE, "NO clears the pending action");
-    ok(ui.screen == CYD_SCREEN_ACTIONS, "NO goes back, not straight out");
+    /* BACK TO WHERE IT CAME FROM -- the MENU, because that is where this
+     * confirm was started. This assertion used to demand ACTIONS
+     * unconditionally, which is how the bug survived: cancelling a reboot
+     * begun from the hamburger dropped the user on a screen they had never
+     * opened, and the suite called that correct. */
+    ok(ui.screen == CYD_SCREEN_MENU, "NO goes back to the screen it came from");
 
     /* A stray touch on CONFIRM must neither confirm nor dismiss. */
     cyd_ui_init(&ui);
@@ -574,6 +594,60 @@ int main(void)
         ok(cyd_ui_kb_char(0, 1, false) == 'q' &&
            cyd_ui_kb_char(0, 1, true) == 'Q',
            "shift uppercases a letter");
+    }
+
+    /* ---- keyboard: the cursor ------------------------------------------
+     *
+     * The caret was decoration before this: typing appended and DEL truncated
+     * whatever the caret showed, so correcting one character in the middle of
+     * a 40-character wallet address meant deleting back to it and retyping the
+     * tail. These pin the rules down. */
+    printf("\n-- keyboard cursor --\n");
+    {
+        cyd_ui_t k;
+        cyd_ui_init(&k);
+        /* Straight into the editor. These checks are about the EDITING rules,
+         * not about how the screen is reached -- navigating there would couple
+         * them to a menu layout that has nothing to do with what is tested. */
+        k.screen     = CYD_SCREEN_KEYBOARD;
+        k.edit_field = CYD_FIELD_WORKER;
+        k.kb_cursor  = 0;
+        ok(k.screen == CYD_SCREEN_KEYBOARD, "the keyboard is open on the worker");
+
+        size_t cap = 0;
+        char *buf = cyd_ui_field(&k, CYD_FIELD_WORKER, &cap);
+
+        tap(&k, CYD_KB_CLEAR);
+        ok(buf[0] == 0,      "CLR empties the field");
+        ok(k.kb_cursor == 0, "and puts the cursor at the start");
+
+        type_str(&k, "abc");
+        ok(strcmp(buf, "abc") == 0, "typing appends at the end");
+        ok(k.kb_cursor == 3,        "the cursor follows what was typed");
+
+        tap(&k, CYD_KB_LEFT);
+        tap(&k, CYD_KB_LEFT);
+        ok(k.kb_cursor == 1, "the left arrow moves the cursor");
+
+        type_str(&k, "x");
+        ok(strcmp(buf, "axbc") == 0, "a character inserts AT the cursor");
+        ok(k.kb_cursor == 2,         "and the cursor advances past it");
+
+        tap(&k, CYD_KB_BKSP);
+        ok(strcmp(buf, "abc") == 0, "DEL removes the character BEFORE the cursor");
+        ok(k.kb_cursor == 1,        "and the cursor steps back");
+
+        tap(&k, CYD_KB_LEFT);
+        tap(&k, CYD_KB_LEFT);
+        ok(k.kb_cursor == 0, "the cursor stops at the start");
+        tap(&k, CYD_KB_BKSP);
+        ok(strcmp(buf, "abc") == 0, "DEL at the start changes nothing");
+
+        for (int i = 0; i < 8; i++)
+            tap(&k, CYD_KB_RIGHT);
+        ok(k.kb_cursor == 3, "the cursor stops at the end");
+        type_str(&k, "d");
+        ok(strcmp(buf, "abcd") == 0, "typing at the end still appends");
     }
 
     printf("\n");

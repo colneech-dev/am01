@@ -70,6 +70,29 @@ typedef struct {
 
     bool     connected;         /* pool reachable                          */
     char     pool[64];
+    /* The miner's first non-loopback IPv4, published in
+     * status.json. The panel cannot look this up itself -- it is
+     * a separate device on the end of a serial link -- and it is
+     * how anyone finds the web UI. "" when the miner has no
+     * address yet. */
+    char     ip[16];
+    /* The configured stratum worker. The panel cannot see argv,
+     * so without this its POOL screen showed "tap to set" for a
+     * worker that had been set all along. */
+    char     worker[96];
+    /* The SSID wlan0 is ASSOCIATED with -- not the configured one.
+     * The miner runs as User=miner and cannot read the 0600 root
+     * wpa_supplicant config, so it reports what the radio is
+     * actually joined to. That is the more useful fact: the two
+     * differ exactly when something is wrong. "" when unassociated. */
+    char     wifi_ssid[36];
+    /* Whether a passphrase is configured at all. The panel shows
+     * THAT one exists; it never receives or shows the value. */
+    bool     wifi_psk_set;
+    /* Signal level of the associated network, dBm. 0 = unknown,
+     * which is drawn as NO bars rather than as a weak signal --
+     * "I cannot tell" and "very poor" are different claims. */
+    int      wifi_rssi;
     char     job_id[24];
     char     backend[16];       /* "gpio"                                  */
     char     core[16];          /* "pipelined"                             */
@@ -130,6 +153,19 @@ bool cyd_link_reboot(cyd_link_t *link);
 bool cyd_link_restart(cyd_link_t *link);
 /* WPA2 passphrase: 8..63 characters, checked by BOTH ends. */
 bool cyd_link_set_wifi(cyd_link_t *link, const char *ssid, const char *psk);
+
+/* Where incoming scan results are collected.
+ *
+ * void *, not cyd_ui_t *: cyd_ui.h includes THIS header, so the
+ * dependency runs one way only and the UI type is not visible here. */
+void cyd_link_set_scan_sink(void *ui);
+
+/* Ask the miner to scan. It has the privileges and the radio that
+ * actually has to associate; the panel only displays the answer. */
+bool cyd_link_wifi_scan(cyd_link_t *link);
+
+/* Diagnostics only -- send one raw line up the link. */
+void cyd_link_send_raw(cyd_link_t *link, const char *s);
 bool cyd_link_set_pool(cyd_link_t *link, const char *host, int port,
                        const char *worker, const char *pass);
 

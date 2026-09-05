@@ -52,6 +52,7 @@
 #include <Arduino.h>
 
 #include "cyd_link.h"
+#include "cyd_ui.h"
 #include "cyd_ota.h"
 #include "cyd_status_parse.h"
 
@@ -71,6 +72,19 @@ struct cyd_link {
 };
 
 static cyd_link g_link;
+
+/* Where scan results are deposited. Set once at startup; the link has no
+ * other reason to know about the UI, and this keeps the wire format out
+ * of the screen model. */
+static cyd_ui_t *g_scan_sink;   /* set via the void* API below */
+
+/* Takes void * because cyd_link.h cannot see cyd_ui_t -- cyd_ui.h
+ * includes cyd_link.h, so the dependency only goes one way. The cast
+ * is here, where the real type IS visible. */
+void cyd_link_set_scan_sink(void *ui)
+{
+    g_scan_sink = (cyd_ui_t *)ui;
+}
 
 cyd_link_t *cyd_link_uart_open(int baud)
 {
@@ -117,6 +131,40 @@ static bool handle_line(cyd_link_t *l, char *line, cyd_status_t *out)
      * changed. */
     if (cyd_ota_handle_line(line, LINK))
         return false;
+
+    /* Scan results. Collected here rather than in the UI so the screen model
+     * stays free of the wire format -- it sees a list, not a protocol. */
+    if (strcmp(line, CYD_MSG_SCANBEGIN) == 0) {
+        if (g_scan_sink) {
+            g_scan_sink->scan_n = 0;
+            g_scan_sink->scan_busy = true;
+        }
+        return false;
+    }
+    if (strcmp(line, CYD_MSG_SCANEND) == 0) {
+        if (g_scan_sink)
+            g_scan_sink->scan_busy = false;
+        return false;
+    }
+    if (strncmp(line, CYD_MSG_SCAN, strlen(CYD_MSG_SCAN)) == 0) {
+        if (g_scan_sink && g_scan_sink->scan_n < CYD_SCAN_MAX) {
+            const char *p = line + strlen(CYD_MSG_SCAN);
+            int rssi = atoi(p);
+            /* The SSID is the REST OF THE LINE after the number and one
+             * space -- they contain spaces, so it must not be tokenised. */
+            while (*p && *p != ' ')
+                p++;
+            if (*p == ' ')
+                p++;
+            if (*p) {
+                int i = g_scan_sink->scan_n++;
+                g_scan_sink->scan_rssi[i] = rssi;
+                snprintf(g_scan_sink->scan_ssid[i],
+                         sizeof g_scan_sink->scan_ssid[i], "%s", p);
+            }
+        }
+        return false;
+    }
 
     if (strncmp(line, CYD_MSG_STATUS, strlen(CYD_MSG_STATUS)) == 0) {
         if (cyd_status_parse(line + strlen(CYD_MSG_STATUS), out)) {
@@ -265,4 +313,23 @@ bool cyd_link_set_pool(cyd_link_t *link, const char *host, int port,
     if (n < 0 || (size_t)n >= sizeof b)
         return false;
     return send_cmd(b);
+}
+
+/* Diagnostics only. The protocol is otherwise driven from the miner end;
+ * this exists so the firmware can say one thing about itself at boot. */
+void cyd_link_send_raw(cyd_link_t *link, const char *s)
+{
+    (void)link;
+    if (s) LINK.print(s);
+}
+
+/* Ask the miner to scan. It has CAP_NET_ADMIN and, more to the point,
+ * the radio that has to associate. */
+bool cyd_link_wifi_scan(cyd_link_t *link)
+{
+    (void)link;
+    LINK.print(CYD_CMD_PREFIX);
+    LINK.print(CYD_CMD_WIFI_SCAN);
+    LINK.print("\n");
+    return true;
 }

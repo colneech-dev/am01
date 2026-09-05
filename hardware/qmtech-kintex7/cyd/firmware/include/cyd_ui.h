@@ -39,6 +39,8 @@ typedef enum {
     CYD_SCREEN_KEYBOARD,    /* on-screen entry for one POOL field         */
     CYD_SCREEN_MENU,        /* the hamburger's modal action sheet         */
     CYD_SCREEN_WIFI,        /* SSID + PSK, shares the keyboard            */
+    CYD_SCREEN_WIFI_LIST,   /* pick a network from a scan                 */
+    CYD_SCREEN_BUSY,        /* waiting out a reboot or a restart          */
     CYD_SCREEN_COUNT
 } cyd_screen_t;
 
@@ -58,7 +60,9 @@ typedef enum {
     /* Confirmed: it drops the miner for a few seconds. */
     CYD_ACTION_RESTART,
     /* Confirmed: getting this wrong takes a headless board off the network. */
-    CYD_ACTION_SET_WIFI
+    CYD_ACTION_SET_WIFI,
+    /* Ask the miner to scan. Not confirmed -- it changes nothing. */
+    CYD_ACTION_WIFI_SCAN
 } cyd_action_t;
 
 /* Field sizes. Worker is the roomiest because it is <wallet>.<name> and the
@@ -86,6 +90,14 @@ typedef enum {
 typedef struct {
     cyd_screen_t screen;
     cyd_action_t pending;       /* what CONFIRM would carry out           */
+
+    /* WHERE BACK GOES. Both CONFIRM and POOL are reachable from the
+     * hamburger MENU and from ACTIONS, and both used to return to ACTIONS
+     * unconditionally -- so cancelling a reboot started from the menu left
+     * you on a screen you had never opened. Recorded on the way in. */
+    cyd_screen_t confirm_from;
+    cyd_screen_t pool_from;
+
 
     /* Backlight. Dimming is not decoration: this sits next to a miner that
      * runs 24/7, and a panel at full brightness all night is a nuisance.
@@ -121,6 +133,60 @@ typedef struct {
     char        wifi_psk[CYD_WIFI_PSK_MAX];
     cyd_field_t edit_field;     /* which row the keyboard is editing      */
     bool        kb_shift;       /* uppercase for the next character       */
+    /* WHERE THE NEXT CHARACTER GOES, as an offset into the field.
+     *
+     * Typing used to append and DEL used to truncate, so correcting one
+     * character in the middle of a wallet address meant retyping everything
+     * after it. Held here, not in the drawing code, so the editing rules can
+     * be tested on a PC. Clamped to the string length on every entry, because
+     * a status update or a CLEAR can shorten the field underneath it. */
+    size_t      kb_cursor;
+    /* Show a password in the clear while typing it. Off every time the
+     * keyboard opens -- a reveal is a deliberate act, not a mode you can
+     * leave switched on and forget in front of somebody.
+     *
+     * It can only ever reveal what is being TYPED. A saved passphrase is
+     * never sent to the panel at all (the miner reports only that one
+     * exists), so there is no stored secret for this to expose. */
+    bool        kb_reveal;
+    /* FIRST VISIBLE CHARACTER. The worker is a wallet plus a name, about
+     * 40 characters, and roughly 30 fit in the field -- so without this the
+     * cursor could be moved somewhere the field was not showing, with no
+     * indication of where it had gone. Kept in the model, not in the drawing
+     * code, because "does the view follow the cursor" is a rule worth being
+     * able to test. */
+    size_t      kb_view;
+
+    /* What the BUSY screen is waiting for, and since when.
+     *
+     * A miner that has been told to reboot and a miner that has crashed look
+     * identical from here -- both simply stop sending STATUS. Recording what
+     * was ASKED FOR is the only way the panel can tell the difference, and it
+     * is the difference between "this is expected, wait" and "something is
+     * wrong". */
+    const char *busy_what;
+    uint32_t    busy_since_ms;
+    /* millis(), refreshed by the caller. The screen model has no clock --
+     * that is what lets it run on a PC in the test suite -- so anything
+     * that has to count seconds is told the time, exactly as
+     * last_touch_ms already is. */
+    uint32_t    busy_now_ms;
+    /* The miner's uptime when the reboot or restart was asked for.
+     * A smaller one afterwards is proof it actually restarted --
+     * nothing else makes uptime go backwards. */
+    uint32_t    busy_uptime0;
+
+    /* The last scan. Filled by the link layer as SCAN lines arrive, read by
+     * the picker. SSIDs are 32 bytes on the wire plus a terminator; they come
+     * from other people's networks over a serial link, so they are bounded
+     * here and treated as nothing but text to draw and copy. */
+    char        scan_ssid[CYD_SCAN_MAX][33];
+    int         scan_rssi[CYD_SCAN_MAX];
+    int         scan_n;
+    /* True from the moment SCAN is pressed until SCANEND arrives, so the
+     * picker can say "scanning..." instead of showing an empty list and
+     * looking broken. */
+    bool        scan_busy;
     /* The field as it was when the keyboard opened, so CANCEL means
      * "discard this edit" rather than "clear the field". Sized to
      * the largest field. */
@@ -130,6 +196,36 @@ typedef struct {
 /* The buffer and capacity for one field, so the keyboard and the drawing code
  * cannot disagree about which is which. Returns NULL for a bad index. */
 char *cyd_ui_field(cyd_ui_t *ui, cyd_field_t f, size_t *cap);
+
+/* How many characters of a field fit in the edit row.
+ *
+ * The row is 310px and font 2 averages ~8px. A password field loses 46px of
+ * that to the SHOW/HIDE toggle at its right-hand end, so it holds fewer --
+ * sizing both to the smaller would waste a quarter of the row on the worker,
+ * which is the longest field and is not a secret.
+ *
+ * Font 2 is proportional, so these are averages: a row of capitals shows
+ * fewer, a row of lowercase more. They are deliberately a little short of
+ * what fits, because a character clipped at the edge looks like a fault. */
+#define CYD_KB_VISIBLE        36
+#define CYD_KB_VISIBLE_SECRET 30
+
+/* Whichever applies to the field being edited. */
+size_t cyd_ui_kb_visible(cyd_field_t f);
+
+/* Slide the view so the cursor is on screen. Call after anything that
+ * moves the cursor or changes the length. */
+void cyd_ui_kb_follow(cyd_ui_t *ui, size_t len);
+
+/* Which character of the edited field is under x.
+ *
+ * Implemented in cyd_ui_draw.cpp, not here: it needs the font, and
+ * font 2 is proportional. The model owns what the cursor means; the
+ * drawing layer owns how wide a glyph is. */
+size_t cyd_ui_kb_index_at(const cyd_ui_t *ui, int x);
+
+/* True for the password fields, which are masked while typed. */
+bool cyd_ui_field_is_secret(cyd_field_t f);
 
 /* Keep host/port in step with what the miner reports, WITHOUT
  * clobbering an edit in progress. Safe to call on every status

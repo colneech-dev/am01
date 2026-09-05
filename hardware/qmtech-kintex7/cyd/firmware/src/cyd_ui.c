@@ -139,6 +139,49 @@ char cyd_ui_kb_char(int col, int row, bool shift)
     return c;
 }
 
+/* Fields whose contents must not be shown on a screen someone else can
+ * see. Both are passwords; nothing else here is a secret. */
+/*
+ * Keep the cursor inside the visible window.
+ *
+ * Called after anything that moves the cursor or changes the length. The
+ * window is CYD_KB_VISIBLE characters wide; the view only moves when the
+ * cursor would otherwise fall outside it, so typing in the middle of a long
+ * string does not make the text jump about.
+ */
+size_t cyd_ui_kb_visible(cyd_field_t f)
+{
+    return cyd_ui_field_is_secret(f) ? CYD_KB_VISIBLE_SECRET
+                                     : CYD_KB_VISIBLE;
+}
+
+void cyd_ui_kb_follow(cyd_ui_t *ui, size_t len)
+{
+    if (!ui)
+        return;
+    if (ui->kb_cursor > len)
+        ui->kb_cursor = len;
+
+    size_t vis = cyd_ui_kb_visible(ui->edit_field);
+
+    if (len < vis) {
+        ui->kb_view = 0;
+        return;
+    }
+    if (ui->kb_cursor < ui->kb_view)
+        ui->kb_view = ui->kb_cursor;
+    else if (ui->kb_cursor > ui->kb_view + vis - 1)
+        ui->kb_view = ui->kb_cursor - (vis - 1);
+
+    if (ui->kb_view + vis > len + 1)
+        ui->kb_view = (len + 1 > vis) ? len + 1 - vis : 0;
+}
+
+bool cyd_ui_field_is_secret(cyd_field_t f)
+{
+    return f == CYD_FIELD_PASS || f == CYD_FIELD_PSK;
+}
+
 char *cyd_ui_field(cyd_ui_t *ui, cyd_field_t f, size_t *cap)
 {
     if (!ui)
@@ -173,10 +216,27 @@ void cyd_ui_pool_sync(cyd_ui_t *ui, const cyd_status_t *st)
         ui->screen == CYD_SCREEN_WIFI || ui->screen == CYD_SCREEN_CONFIRM)
         return;
 
-    /* status carries "host:port" and no worker, so only these two can be
-     * prefilled -- the worker has to be typed, there is nowhere to get it
-     * from. Split on the LAST colon so an IPv6 literal does not lose its
-     * tail. */
+    /* THE WORKER IS PREFILLED TOO, now that the miner publishes it.
+     *
+     * It used not to be, and the comment here said so: "the worker has to be
+     * typed, there is nowhere to get it from". That was true and it made the
+     * POOL screen lie -- it showed "tap to set" for a worker that had been
+     * configured since the board was provisioned. status.json now carries it,
+     * so the screen can show what is actually running.
+     *
+     * Guarded the same way as host and port: never while an edit is open. */
+    if (st->worker[0])
+        snprintf(ui->pool_worker, sizeof ui->pool_worker, "%s", st->worker);
+
+    /* The SSID too, for the same reason: without it the WIFI screen showed
+     * "-- tap to set --" for the network the board was sitting on. The PSK is
+     * deliberately NOT prefilled -- it is not readable, and a screen that
+     * appears to show a passphrase invites someone to trust what it shows. */
+    if (st->wifi_ssid[0])
+        snprintf(ui->wifi_ssid, sizeof ui->wifi_ssid, "%s", st->wifi_ssid);
+
+    /* status carries the pool as "host:port". Split on the LAST colon so an
+     * IPv6 literal does not lose its tail. */
     const char *colon = NULL;
     for (const char *q = st->pool; *q; q++)
         if (*q == ':')
@@ -251,8 +311,12 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
             if (i < 3)       ui->screen = GO[i];
             else if (i == 3) ui->screen = CYD_SCREEN_WIFI;
             else if (i == 4) { ui->pending = CYD_ACTION_RESTART;
+                               ui->confirm_from = ui->screen;
+                ui->confirm_from = ui->screen;
                                ui->screen  = CYD_SCREEN_CONFIRM; }
             else if (i == 5) { ui->pending = CYD_ACTION_REBOOT;
+                               ui->confirm_from = ui->screen;
+                ui->confirm_from = ui->screen;
                                ui->screen  = CYD_SCREEN_CONFIRM; }
             else             ui->screen = CYD_SCREEN_GLANCE;   /* CANCEL */
             return CYD_ACTION_NONE;
@@ -273,10 +337,23 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
             ui->edit_field = f;
             ui->kb_shift = false;
             if (buf) snprintf(ui->kb_backup, sizeof ui->kb_backup, "%s", buf);
+        ui->kb_cursor = buf ? strlen(buf) : 0;
+        ui->kb_reveal = false;
+        ui->kb_view   = 0;
+        cyd_ui_kb_follow(ui, buf ? strlen(buf) : 0);
             ui->screen = CYD_SCREEN_KEYBOARD;
             return CYD_ACTION_NONE;
         }
-        if (cyd_rect_hit(CYD_WIFI_BACK, x, y)) {
+        if (cyd_rect_hit(CYD_WIFI_SCAN, x, y)) {
+            /* The MINER scans -- it has the privileges and, more to the
+             * point, it is the radio that has to associate. The caller sends
+             * the request; this only opens the screen that will show it. */
+            ui->scan_n = 0;
+            ui->scan_busy = true;
+            ui->screen = CYD_SCREEN_WIFI_LIST;
+            return CYD_ACTION_WIFI_SCAN;
+        }
+                if (cyd_rect_hit(CYD_WIFI_BACK, x, y)) {
             ui->screen = CYD_SCREEN_GLANCE;
         } else if (cyd_rect_hit(CYD_WIFI_SAVE, x, y)) {
             /* WPA2 is 8..63 characters and the daemon rejects anything else.
@@ -286,6 +363,7 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
             size_t n = strlen(ui->wifi_psk);
             if (ui->wifi_ssid[0] && n >= 8 && n <= 63) {
                 ui->pending = CYD_ACTION_SET_WIFI;
+                ui->confirm_from = ui->screen;
                 ui->screen  = CYD_SCREEN_CONFIRM;
             }
         }
@@ -337,17 +415,20 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
             return CYD_ACTION_FAN_BOOST;
         }
         if (cyd_rect_hit(CYD_ACT_POOL, x, y)) {
-            ui->screen = CYD_SCREEN_POOL;
+            ui->pool_from = ui->screen;
+                ui->screen = CYD_SCREEN_POOL;
             return CYD_ACTION_NONE;
         }
         if (cyd_rect_hit(CYD_BTN_LEFT, x, y)) {
             ui->screen = CYD_SCREEN_GLANCE;
         } else if (cyd_rect_hit(CYD_BTN_MID, x, y)) {
             ui->pending = CYD_ACTION_RESET_STATS;
-            ui->screen  = CYD_SCREEN_CONFIRM;
+            ui->confirm_from = ui->screen;
+                ui->screen  = CYD_SCREEN_CONFIRM;
         } else if (cyd_rect_hit(CYD_BTN_RIGHT, x, y)) {
             ui->pending = CYD_ACTION_REBOOT;
-            ui->screen  = CYD_SCREEN_CONFIRM;
+            ui->confirm_from = ui->screen;
+                ui->screen  = CYD_SCREEN_CONFIRM;
         }
         /* NOTHING is returned from this screen. Both destructive actions go
          * via CONFIRM; there is no path from one touch to an effect. */
@@ -371,13 +452,40 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
         }
         if (cyd_rect_hit(CYD_CONFIRM_NO, x, y)) {
             ui->pending = CYD_ACTION_NONE;
-            ui->screen  = CYD_SCREEN_ACTIONS;
+            /* BACK WHERE IT CAME FROM. This was CYD_SCREEN_ACTIONS
+             * unconditionally, so cancelling a reboot started from the
+             * hamburger menu landed on ACTIONS -- a screen the user had not
+             * opened and did not expect. */
+            ui->screen  = ui->confirm_from ? ui->confirm_from
+                                           : CYD_SCREEN_ACTIONS;
             return CYD_ACTION_NONE;
         }
         /* A touch anywhere ELSE on a confirm screen does nothing at all --
          * it does not dismiss and it does not confirm. Dismissing on a stray
          * touch would be fine; confirming would not, and treating "outside"
          * as either invites getting it the wrong way round later. */
+        return CYD_ACTION_NONE;
+
+    case CYD_SCREEN_WIFI_LIST:
+        for (int i = 0; i < CYD_WL_ROWS && i < ui->scan_n; i++) {
+            if (!cyd_rect_hit(CYD_WL_ROW(i), x, y))
+                continue;
+            /* Copy the name in and go back to the form. The PSK is NOT
+             * touched: picking a network is not the same as knowing its
+             * password, and silently keeping the previous one would be a
+             * good way to fail to connect for a reason nobody can see. */
+            snprintf(ui->wifi_ssid, sizeof ui->wifi_ssid, "%s",
+                     ui->scan_ssid[i]);
+            ui->screen = CYD_SCREEN_WIFI;
+            return CYD_ACTION_NONE;
+        }
+        if (cyd_rect_hit(CYD_WL_AGAIN, x, y)) {
+            ui->scan_n = 0;
+            ui->scan_busy = true;
+            return CYD_ACTION_WIFI_SCAN;
+        }
+        if (cyd_rect_hit(CYD_WL_BACK, x, y))
+            ui->screen = CYD_SCREEN_WIFI;
         return CYD_ACTION_NONE;
 
     case CYD_SCREEN_POOL: {
@@ -389,12 +497,25 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
                 ui->kb_shift = false;
                 if (buf)
                     snprintf(ui->kb_backup, sizeof ui->kb_backup, "%s", buf);
+                /* Opens at the END, which is where an append-style edit
+                 * expects to start. */
+                ui->kb_cursor = buf ? strlen(buf) : 0;
+        ui->kb_reveal = false;
+        ui->kb_view   = 0;
+        cyd_ui_kb_follow(ui, buf ? strlen(buf) : 0);
+                ui->kb_reveal = false;
+        ui->kb_view   = 0;
+        cyd_ui_kb_follow(ui, buf ? strlen(buf) : 0);
+                ui->kb_view   = 0;
+                cyd_ui_kb_follow(ui, buf ? strlen(buf) : 0);
                 ui->screen = CYD_SCREEN_KEYBOARD;
                 return CYD_ACTION_NONE;
             }
         }
         if (cyd_rect_hit(CYD_POOL_BACK, x, y)) {
-            ui->screen = CYD_SCREEN_ACTIONS;
+            /* Same reasoning as the confirm screen: POOL is reachable from
+             * the menu too. */
+            ui->screen = ui->pool_from ? ui->pool_from : CYD_SCREEN_ACTIONS;
         } else if (cyd_rect_hit(CYD_POOL_SAVE, x, y)) {
             /* Refuse an incomplete pool HERE rather than sending it. The
              * daemon rejects empty host/worker/pass, and a command dropped
@@ -403,6 +524,7 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
             if (ui->pool_host[0] && ui->pool_port[0] &&
                 ui->pool_worker[0] && ui->pool_pass[0]) {
                 ui->pending = CYD_ACTION_SET_POOL;
+                ui->confirm_from = ui->screen;
                 ui->screen  = CYD_SCREEN_CONFIRM;
             }
         }
@@ -413,7 +535,8 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
         size_t cap = 0;
         char *buf = cyd_ui_field(ui, ui->edit_field, &cap);
         if (!buf || cap == 0) {           /* cannot happen; fail closed */
-            ui->screen = CYD_SCREEN_POOL;
+            ui->pool_from = ui->screen;
+                ui->screen = CYD_SCREEN_POOL;
             return CYD_ACTION_NONE;
         }
         /* Back to WHICHEVER editor opened the keyboard -- hard-coding POOL
@@ -434,10 +557,62 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
             ui->kb_shift = !ui->kb_shift;
             return CYD_ACTION_NONE;
         }
-        if (cyd_rect_hit(CYD_KB_BKSP, x, y)) {
+        if (cyd_ui_field_is_secret(ui->edit_field) &&
+            cyd_rect_hit(CYD_KB_EYE, x, y)) {
+            ui->kb_reveal = !ui->kb_reveal;
+            return CYD_ACTION_NONE;
+        }
+                if (cyd_rect_hit(CYD_KB_LEFT, x, y)) {
+            if (ui->kb_cursor > 0)
+                ui->kb_cursor--;
+            cyd_ui_kb_follow(ui, strlen(buf));
+            return CYD_ACTION_NONE;
+        }
+        if (cyd_rect_hit(CYD_KB_RIGHT, x, y)) {
+            size_t cap = 0;
+            char *buf = cyd_ui_field(ui, ui->edit_field, &cap);
+            size_t len = buf ? strlen(buf) : 0;
+            if (ui->kb_cursor < len)
+                ui->kb_cursor++;
+            cyd_ui_kb_follow(ui, len);
+            return CYD_ACTION_NONE;
+        }
+        if (cyd_rect_hit(CYD_KB_CLEAR, x, y)) {
+            /* Empties the field. NOT the same as CANCEL, which restores what
+             * was there when the keyboard opened -- this is "I want this
+             * blank", and CANCEL can still undo it. */
+            size_t cap = 0;
+            char *buf = cyd_ui_field(ui, ui->edit_field, &cap);
+            if (buf && cap)
+                buf[0] = '\0';
+            ui->kb_cursor = 0;
+            ui->kb_view = 0;
+            return CYD_ACTION_NONE;
+        }
+        if (cyd_rect_hit(CYD_KB_FWDDEL, x, y)) {
+            /* FORWARDS: removes the character AT the cursor, which stays put.
+             * Backspace cannot do this without moving right first and then
+             * deleting left, which is two taps to undo one character. */
             size_t n = strlen(buf);
-            if (n)
-                buf[n - 1] = 0;
+            if (ui->kb_cursor < n)
+                memmove(buf + ui->kb_cursor, buf + ui->kb_cursor + 1,
+                        n - ui->kb_cursor);
+            cyd_ui_kb_follow(ui, strlen(buf));
+            return CYD_ACTION_NONE;
+        }
+        if (cyd_rect_hit(CYD_KB_BKSP, x, y)) {
+            /* Removes the character BEFORE the cursor and closes the gap --
+             * backspace, not truncate. It used to chop the last character off
+             * the string wherever the caret was, which made the caret a lie. */
+            size_t n = strlen(buf);
+            if (ui->kb_cursor > n)
+                ui->kb_cursor = n;
+            if (ui->kb_cursor > 0) {
+                memmove(buf + ui->kb_cursor - 1, buf + ui->kb_cursor,
+                        n - ui->kb_cursor + 1);
+                ui->kb_cursor--;
+            }
+            cyd_ui_kb_follow(ui, strlen(buf));
             return CYD_ACTION_NONE;
         }
         for (int r = 0; r < CYD_KB_ROWS; r++) {
@@ -452,11 +627,20 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
                 if (ui->edit_field == CYD_FIELD_PORT &&
                     (ch < '0' || ch > '9'))
                     return CYD_ACTION_NONE;
+                /* INSERTED AT THE CURSOR, shifting the tail right. Appending
+                 * regardless of the caret is what made mid-string edits
+                 * impossible: the only way to fix character 5 of a 40-character
+                 * wallet was to delete 35 and retype them. */
                 size_t n = strlen(buf);
+                if (ui->kb_cursor > n)
+                    ui->kb_cursor = n;
                 if (n + 1 < cap) {
-                    buf[n] = ch;
-                    buf[n + 1] = 0;
+                    memmove(buf + ui->kb_cursor + 1, buf + ui->kb_cursor,
+                            n - ui->kb_cursor + 1);
+                    buf[ui->kb_cursor] = ch;
+                    ui->kb_cursor++;
                 }
+                cyd_ui_kb_follow(ui, strlen(buf));
                 ui->kb_shift = false;     /* one-shot, like a real keyboard */
                 return CYD_ACTION_NONE;
             }
