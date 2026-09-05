@@ -48,6 +48,13 @@
 #include <inttypes.h>
 #include <signal.h>
 #include <time.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <linux/wireless.h>
 #include <math.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -238,7 +245,20 @@ static void stats_load(void)
 static void stats_save(void)
 {
     FILE *f = fopen(PIPE_STATS_PATH ".tmp", "w");
-    if (!f) return;
+    if (!f) {
+        /* ONCE. This failed silently from the day it was written -- the unit
+         * creates /run/odod but nothing created /var/lib/odod -- so the
+         * all-time best difficulty reset on every restart and nothing ever
+         * said why. A save that cannot happen is worth exactly one line. */
+        static int moaned;
+        if (!moaned) {
+            moaned = 1;
+            fprintf(stderr, "[pipe] cannot write %s: %s -- all-time stats "
+                            "will not survive a restart\n",
+                    PIPE_STATS_PATH ".tmp", strerror(errno));
+        }
+        return;
+    }
     fprintf(f, "%.6g %" PRIu64 "\n", g_st.best_diff_alltime, g_st.blocks_found);
     fclose(f);
     rename(PIPE_STATS_PATH ".tmp", PIPE_STATS_PATH);
@@ -287,6 +307,126 @@ static double mono_s(void)
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
+/*
+ * First non-loopback IPv4, or "" if the box has no address yet.
+ *
+ * Looked up fresh on every status write rather than cached: DHCP leases
+ * change, wlan0 comes and goes, and a panel confidently showing the address
+ * the miner had an hour ago is worse than one showing nothing. It is a couple
+ * of syscalls every three seconds.
+ */
+/*
+ * The SSID wlan0 is currently associated with, or "" if none.
+ *
+ * SIOCGIWESSID is the old wireless-extensions ioctl. cfg80211 still answers it
+ * for a station interface, and it costs two syscalls -- the alternative is a
+ * netlink conversation or shelling out to iw, and neither is worth it for one
+ * string. A failure here is not an error: an unassociated radio, a missing
+ * interface and a driver without WEXT all mean the same thing to the panel,
+ * which is "nothing to show".
+ */
+static void wifi_ssid(char *out, size_t n)
+{
+    out[0] = '\0';
+
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0)
+        return;
+
+    char buf[IW_ESSID_MAX_SIZE + 1];
+    memset(buf, 0, sizeof buf);
+
+    struct iwreq wrq;
+    memset(&wrq, 0, sizeof wrq);
+    snprintf(wrq.ifr_name, sizeof wrq.ifr_name, "%s", "wlan0");
+    wrq.u.essid.pointer = buf;
+    wrq.u.essid.length  = IW_ESSID_MAX_SIZE;
+
+    if (ioctl(fd, SIOCGIWESSID, &wrq) == 0 && wrq.u.essid.length > 0) {
+        buf[IW_ESSID_MAX_SIZE] = '\0';
+        snprintf(out, n, "%s", buf);
+    }
+    close(fd);
+}
+
+/*
+ * Signal level of the associated network, in dBm. 0 when unknown.
+ *
+ * /proc/net/wireless rather than another ioctl: it is one open and one line,
+ * the kernel already maintains it, and it needs no privileges. The columns are
+ *
+ *     iface: status  link  level  noise  ...
+ *
+ * and the values carry a trailing '.', which is why they are read as floats
+ * and rounded rather than parsed as integers.
+ *
+ * A level of 0 means "no idea" -- unassociated, no wlan0, or a driver that
+ * does not fill this in -- and the panel draws that as no bars rather than as
+ * a very weak signal, which would be a different and wrong claim.
+ */
+static int wifi_rssi(void)
+{
+    FILE *f = fopen("/proc/net/wireless", "r");
+    if (!f)
+        return 0;
+
+    char line[256];
+    int  rssi = 0;
+    while (fgets(line, sizeof line, f)) {
+        char *p = strstr(line, "wlan0:");
+        if (!p)
+            continue;
+        p += 6;
+        float status, link, level;
+        if (sscanf(p, "%f %f %f", &status, &link, &level) == 3)
+            rssi = (int)level;
+        break;
+    }
+    fclose(f);
+    return rssi;
+}
+
+/*
+ * Is a WPA passphrase configured? The file is 0600 root and this runs as
+ * miner, so it cannot be read -- but stat() answers the only question the
+ * panel asks, which is whether one is there at all. The panel shows that a
+ * password is set; it never shows the password.
+ */
+static int wifi_psk_configured(void)
+{
+    struct stat stbuf;
+    if (stat("/etc/wpa_supplicant/wpa_supplicant-wlan0.conf", &stbuf) != 0)
+        return 0;
+    return stbuf.st_size > 0;
+}
+
+/* The stratum worker, as given on the command line. Published so
+ * the panel can SHOW what is configured: it is a separate device
+ * and argv is not something it can see. */
+static char g_worker[96];
+
+static void first_ipv4(char *out, size_t n)
+{
+    out[0] = '\0';
+
+    struct ifaddrs *ifa = NULL;
+    if (getifaddrs(&ifa) != 0)
+        return;
+
+    for (struct ifaddrs *p = ifa; p; p = p->ifa_next) {
+        if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET)
+            continue;
+        if (p->ifa_flags & IFF_LOOPBACK)
+            continue;
+        if (!(p->ifa_flags & IFF_UP))
+            continue;
+        inet_ntop(AF_INET,
+                  &((struct sockaddr_in *)p->ifa_addr)->sin_addr, out, n);
+        break;
+    }
+    freeifaddrs(ifa);
+}
+
 static void status_write(void)
 {
     const char *path = getenv("ODOD_STATUS_FILE");
@@ -296,6 +436,10 @@ static void status_write(void)
     FILE *f = fopen(tmp, "w");
     if (!f) return;
     time_t now = time(NULL);
+    char ip[INET_ADDRSTRLEN] = "";
+    first_ipv4(ip, sizeof ip);
+    char wssid[IW_ESSID_MAX_SIZE + 1] = "";
+    wifi_ssid(wssid, sizeof wssid);
     double up = mono_s() - g_mono_start;          /* elapsed, clock-step safe */
     g_st.hashrate = (up > 0.0) ? g_st.work_acc / up : 0.0;
     /* long long, not long: on 32-bit ARM `long` is 32-bit and these Unix-time
@@ -308,6 +452,11 @@ static void status_write(void)
     fprintf(f,
         "{\n"
         "  \"pool\": \"%s\",\n"
+        "  \"ip\": \"%s\",\n"
+        "  \"worker\": \"%s\",\n"
+        "  \"wifi_ssid\": \"%s\",\n"
+        "  \"wifi_psk_set\": %s,\n"
+        "  \"wifi_rssi\": %d,\n"
         "  \"connected\": %s,\n"
         "  \"core\": \"pipelined\",\n"
         "  \"job_id\": \"%s\",\n"
@@ -335,7 +484,12 @@ static void status_write(void)
         "  \"uptime\": %lld,\n"
         "  \"updated\": %lld\n"
         "}\n",
-        g_st.pool, g_st.connected ? "true" : "false", g_st.job_id,
+        g_st.pool,
+        ip,
+        g_worker,
+        wssid, wifi_psk_configured() ? "true" : "false",
+        wifi_rssi(),
+        g_st.connected ? "true" : "false", g_st.job_id,
         g_st.epoch, g_st.bitstream_epoch, g_st.epoch_interval, enext, g_st.hashrate,
         g_st.found, g_st.shares, g_st.shares_accepted, g_st.shares_rejected,
         (long long)g_st.last_share,
@@ -353,6 +507,8 @@ int main(int argc, char **argv)
     const char *host   = argc > 1 ? argv[1] : getenv("STRATUM_HOST");
     const char *port   = argc > 2 ? argv[2] : getenv("STRATUM_PORT");
     const char *worker = argc > 3 ? argv[3] : getenv("STRATUM_WORKER");
+    if (worker)
+        snprintf(g_worker, sizeof g_worker, "%s", worker);
     const char *pass   = argc > 4 ? argv[4] : "x";
     if (!host || !port || !worker) {
         fprintf(stderr, "usage: %s <host> <port> <worker> [pass]\n", argv[0]);

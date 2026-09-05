@@ -41,10 +41,32 @@ WorkingDirectory=/var/lib/odo-miner
 # into separate arguments, which ${DAEMON_OPTS} would not do.
 ExecStart=/usr/bin/odo-miner $DAEMON_OPTS
 
-# /run/odod, where odo-webd and odo-ui read status from.
-RuntimeDirectory=odod
+# /run/odod, where odo-webd and odo-ui read status from, and
+# /run/odod/request, where the panel drops privileged requests for
+# am01-panel-helper.path to pick up.
+#
+# BOTH LISTED, so systemd creates them owned by the service user. The request
+# directory used to be created by the daemon itself on first use -- which
+# worked until something running as root created it first, after which the
+# miner could not write into its own request directory and every panel action
+# failed with EACCES. Ownership is not something to leave to whoever gets
+# there first.
+RuntimeDirectory=odod odod/request
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=yes
+
+# /var/lib/odod, where the all-time best difficulty and block count live.
+#
+# THIS WAS MISSING, and stats_save() failed on every write from the day it was
+# written: nothing created the directory, the miner runs as User=miner so it
+# could not create it itself, and the failure path was a bare `return`. The
+# symptom was BEST-A resetting on every restart, which reads as a miner that
+# forgets rather than a directory that is not there.
+#
+# StateDirectory=, not a tmpfiles rule: systemd creates it owned by the
+# service user before ExecStart, which is exactly the guarantee wanted.
+StateDirectory=odod
+StateDirectoryMode=0755
 
 Restart=on-failure
 # 30s, not 5: the usual reason for a restart is the pool or the network being
