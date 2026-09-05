@@ -92,65 +92,44 @@ order, which looks deliberate.
 | 47 | **GND** | | 48 | **GND** |
 | 49 | **5V0** | | 50 | **5V0** |
 
-## Display — ILI9341, SPI
+## Display and touch — REMOVED 2026-09-05
 
-| JP5 pin | FPGA ball | RTL port | Panel pin |
-|--------:|-----------|----------|-----------|
-| 1 or 2 | — | — | **VCC — see the 5 V warning below** |
-| 5 | AD21 | `lcd_sclk` | SCK / CLK |
-| 6 | AE21 | `lcd_mosi` | SDI / MOSI |
-| 7 | AE22 | `lcd_miso` | SDO / MISO |
-| 8 | AF22 | `lcd_cs_n` | CS |
-| 9 | AE23 | `lcd_dc` | DC / RS |
-| 10 | AF23 | `lcd_rst_n` | RESET |
-| 11 | V21 | `lcd_bl` | LED / BL |
+The ILI9341 panel and its XPT2046 touch controller were driven directly by the
+FPGA over JP5 5–13. **That whole path is gone**, in RTL, in the pin
+constraints, and in the CM4 driver (`am01_panel.c`).
 
-## Touch — XPT2046
+The CYD front panel replaced it: an ESP32 with its own display and touch,
+reached over a single pair of wires, updatable from the miner without opening
+the case. Keeping both would have meant maintaining two panels, a shared SPI
+engine, a touch sequencer, eight register addresses and nine pins — for a
+display that was strictly worse and needed the case open to change.
 
-| JP5 pin | FPGA ball | RTL port | Panel pin |
-|--------:|-----------|----------|-----------|
-| 12 | W21 | `touch_cs_n` | T_CS |
-| 13 | Y22 | `touch_irq` | T_IRQ / PENIRQ |
+### Nine pins are now free
 
-The touch controller **shares the SPI bus** with the panel — `T_CLK`, `T_DIN`
-and `T_DO` go to the same pins 5, 6 and 7. Only chip select is separate. That
-is why a combined module (e.g. the KMRTM28028-SPI) needs just these nine
-signals.
+| JP5 | Ball | was |
+|---|---|---|
 
-`touch_irq` is open-drain on the panel and has `PULLUP true` in the XDC, so no
-external pull-up is required.
 
-### PANEL SUPPLY: 5 V, NOT 3.3 V — measured 2026-08-30
 
-This table used to say VCC goes to JP5 pin 1 (VCCO_12, 3.3 V). On the module
-actually fitted that is WRONG and the panel stays dead: it powers only from
-JP5 pin 49/50 (5 V).
 
-The reason is an onboard linear regulator (U2 on this module) making 3.3 V for
-the ILI9341. A 3.3 V input never reaches its dropout, so nothing comes up. That
-regulator runs warm in normal use — dropping 5 V to 3.3 V while feeding a
-backlight is a few tenths of a watt in a small package.
 
-**A 5 V module has two consequences that a 3.3 V one does not:**
 
-1. **Its logic OUTPUTS may be 5 V.** Bank 12 is a 3.3 V bank and its pins are
-   NOT 5 V tolerant. If the module has a level shifter referenced to its 5 V
-   rail, then `SDO` and `T_DO` swing to 5 V and connecting either of them to
-   JP5 pin 7 can damage the FPGA. MEASURE `T_DO` against ground with the panel
-   powered and idle before connecting it. Under ~3.6 V is safe; near 5 V is not,
-   and needs a divider or a level shifter.
 
-   This is also a second reason to leave the display's `SDO` unconnected — the
-   design never reads it (see `spi_rx_en` in the wrapper), so it is pure risk.
 
-2. **Its logic INPUTS may not see 3.3 V as a high.** A 5 V-referenced HC-family
-   buffer wants Vih around 3.5 V, and the FPGA drives 3.3 V. HCT-family parts
-   are fine at 3.3 V; HC parts are marginal. If the backlight lights but no
-   image appears while the bus reports every write succeeding, this is the
-   first thing to suspect — the FPGA cannot tell that nothing registered.
 
-Powering the panel from 3.3 V instead would avoid both problems, but needs a
-module without the regulator, or a bypass of it.
+
+A contiguous run of 5–13, all on BANK12 (3.3 V). Register addresses `0x10`–
+`0x17` are free with them.
+
+**If you constrain any of these, do it one line per pin.** When the old block
+used a `foreach` loop, `lcd_miso` came out of synthesis with no IOSTANDARD at
+all, Vivado defaulted it to LVCMOS18, and DRC failed the entire implementation
+on a bank 12 Vcc conflict.
+
+The history of this path — the SPI multiplexing that was tried and abandoned,
+the 5 V panel supply, the level-shifter hazard on `T_DO` — is in the git
+history and in `CODE-REVIEW-2026-08-30.md`. It is not repeated here, because
+this file should describe what is wired now.
 
 ## Fan — 4-wire PWM
 

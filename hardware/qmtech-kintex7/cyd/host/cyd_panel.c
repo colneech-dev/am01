@@ -47,7 +47,11 @@
 #define ST_TX_CNT(v)    (((v) >> 7) & 0x1Fu)
 #define TX_FIFO_DEPTH   16
 
-#define PANEL_MIN_VERSION 0x0204
+/* 0x0203, not higher. The panel thread works with any bitstream from
+ * that revision on -- UART_STAT has not changed since -- and requiring
+ * a newer one would disable the panel on a board mid-upgrade for no
+ * functional reason. */
+#define PANEL_MIN_VERSION 0x0203
 
 static volatile int g_stop;
 static pthread_t    g_thread;

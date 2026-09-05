@@ -58,15 +58,6 @@ module am01_qmtech_top_mux4 (
     input  wire        fan_tach_in,
 
     // ILI9341 panel + XPT2046 touch on JP5, one shared SPI bus.
-    output wire        lcd_sclk,
-    output wire        lcd_mosi,
-    input  wire        lcd_miso,
-    output wire        lcd_cs_n,
-    output wire        lcd_dc,
-    output wire        lcd_rst_n,
-    output wire        lcd_bl,
-    output wire        touch_cs_n,
-    input  wire        touch_irq,
 
     // CYD front panel: a 115200-baud serial link on JP5 15-18, which nothing
     // else uses. Separate pins from the display above, so both can be wired
@@ -134,15 +125,6 @@ module am01_qmtech_top_mux4 (
         .fan_pwm     (fan_pwm),
         .fan_tach_in (fan_tach_in),
 
-        .lcd_sclk   (lcd_sclk),
-        .lcd_mosi   (lcd_mosi),
-        .lcd_miso   (lcd_miso),
-        .lcd_cs_n   (lcd_cs_n),
-        .lcd_dc     (lcd_dc),
-        .lcd_rst_n  (lcd_rst_n),
-        .lcd_bl     (lcd_bl),
-        .touch_cs_n (touch_cs_n),
-        .touch_irq  (touch_irq),
 
         .cyd_uart_tx (cyd_uart_tx),
         .cyd_uart_rx (cyd_uart_rx),

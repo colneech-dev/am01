@@ -60,8 +60,6 @@ module tb_uart_tx_pin;
         .bus_clk    (clk),
         .bus_rst_n  (rst_n),
         .fan_pwm    (), .fan_tach_in(1'b0),
-        .lcd_sclk(), .lcd_mosi(), .lcd_miso(1'b0), .lcd_cs_n(),
-        .lcd_dc(), .lcd_rst_n(), .lcd_bl(), .touch_cs_n(), .touch_irq(1'b0),
         .cyd_uart_tx(tx_pin), .cyd_uart_rx(1'b1),
         .cyd_esp_en(), .cyd_esp_io0(),
         .gpio_data  (gpio_data),

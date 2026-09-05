@@ -47,6 +47,10 @@ static void report(const char *what, long n, double secs)
            what, n, secs, rate, per * 1e6);
 }
 
+/* Unmapped since the display was removed; writes are ignored by the wrapper.
+ * See the note in the warm-up loop. */
+#define BENCH_SCRATCH_REG 0x11
+
 int main(int argc, char **argv)
 {
     long iters = (argc > 1) ? strtol(argv[1], NULL, 0) : 20000;
@@ -74,17 +78,27 @@ int main(int argc, char **argv)
     }
     printf("FPGA wrapper VERSION 0x%04x\n\n", version);
 
-    /* Warm up: first transactions pay page-fault and cache costs that would
-     * otherwise be blamed on the bus. */
+    /* A WRITE TO NOWHERE, deliberately.
+     *
+     * This measures the BUS, not a device, so it wants the cheapest possible
+     * write with no side effects. 0x11 was the LCD data register until the
+     * display was removed on 2026-09-05; it is now unmapped, and the wrapper
+     * ignores writes to it. That is exactly the property wanted here -- and
+     * it is stated rather than inherited, because the previous version called
+     * am01_bus_lcd_data() and would have gone on reporting healthy numbers
+     * for writes to a register that no longer existed.
+     *
+     * Warm up first: the opening transactions pay page-fault and cache costs
+     * that would otherwise be blamed on the bus. */
     for (int i = 0; i < 200; i++)
-        (void)am01_bus_lcd_data(bus, (uint16_t)i);
+        (void)am01_bus_write_reg(bus, BENCH_SCRATCH_REG, (uint16_t)i);
 
     printf("timing:\n");
 
     double t0 = now_s();
     long done = 0;
     for (long i = 0; i < iters; i++) {
-        if (am01_bus_lcd_data(bus, (uint16_t)i) != 0) break;
+        if (am01_bus_write_reg(bus, BENCH_SCRATCH_REG, (uint16_t)i) != 0) break;
         done++;
     }
     double write_s = now_s() - t0;

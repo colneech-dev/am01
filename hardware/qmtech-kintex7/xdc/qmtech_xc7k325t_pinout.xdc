@@ -294,48 +294,34 @@ set_property PULLUP true [get_ports fan_tach_in]
 # authority. The BALLS were always right, so no wiring that worked has changed
 # -- but the numbers are what someone counts along the header with.
 #
-#   JP5  5 (AD21) lcd_sclk     JP5 11 (V21) lcd_bl
-#   JP5  6 (AE21) lcd_mosi     JP5 12 (W21) touch_cs_n
-#   JP5  7 (AE22) lcd_miso     JP5 13 (Y22) touch_irq
-#   JP5  8 (AF22) lcd_cs_n
-#   JP5  9 (AE23) lcd_dc
-#   JP5 10 (AF23) lcd_rst_n
+# REMOVED 2026-09-05, WITH THE ILI9341 AND XPT2046. These nine pins are FREE:
+#
+#   JP5  5 (AD21)   JP5  9 (AE23)   JP5 13 (Y22)
+#   JP5  6 (AE21)   JP5 10 (AF23)
+#   JP5  7 (AE22)   JP5 11 (V21)
+#   JP5  8 (AF22)   JP5 12 (W21)
+#
+# A contiguous run of 5-13, which is the useful part if anything else wants
+# them. The CYD panel replaced that display: it is reachable over one pair of
+# wires and can be reflashed from the miner, and carrying both cost a shared
+# SPI engine, a touch sequencer and these pins.
+#
+# One thing worth keeping from the old block, because it will bite again: when
+# these were constrained via a foreach loop rather than one line each, lcd_miso
+# came out of synthesis with NO IOSTANDARD, Vivado defaulted it to LVCMOS18,
+# and DRC failed the whole implementation on a bank 12 Vcc conflict (bank 12 is
+# the 3V3 rail). Constrain new pins one per line.
 # ---------------------------------------------------------------------------
-set_property PACKAGE_PIN AD21 [get_ports lcd_sclk]
-set_property PACKAGE_PIN AE21 [get_ports lcd_mosi]
-set_property PACKAGE_PIN AE22 [get_ports lcd_miso]
-set_property PACKAGE_PIN AF22 [get_ports lcd_cs_n]
-set_property PACKAGE_PIN AE23 [get_ports lcd_dc]
-set_property PACKAGE_PIN AF23 [get_ports lcd_rst_n]
-set_property PACKAGE_PIN V21  [get_ports lcd_bl]
-set_property PACKAGE_PIN W21  [get_ports touch_cs_n]
-set_property PACKAGE_PIN Y22  [get_ports touch_irq]
-# Written out one per line rather than via a foreach. The loop form did not
-# apply -- lcd_miso came out of synthesis with no IOSTANDARD at all, so Vivado
-# defaulted it to LVCMOS18 and DRC failed the whole implementation on a bank
-# 12 Vcc conflict (bank 12 is the 3V3 rail). Explicit lines also match the
-# rest of this file, and a missing one is visible in a diff.
-set_property IOSTANDARD LVCMOS33 [get_ports lcd_sclk]
-set_property IOSTANDARD LVCMOS33 [get_ports lcd_mosi]
-set_property IOSTANDARD LVCMOS33 [get_ports lcd_miso]
-set_property IOSTANDARD LVCMOS33 [get_ports lcd_cs_n]
-set_property IOSTANDARD LVCMOS33 [get_ports lcd_dc]
-set_property IOSTANDARD LVCMOS33 [get_ports lcd_rst_n]
-set_property IOSTANDARD LVCMOS33 [get_ports lcd_bl]
-set_property IOSTANDARD LVCMOS33 [get_ports touch_cs_n]
-set_property IOSTANDARD LVCMOS33 [get_ports touch_irq]
-# XPT2046 PENIRQ is open-drain.
-set_property PULLUP true [get_ports touch_irq]
 
 # ---------------------------------------------------------------------------
 # CYD front panel -- ESP32 serial link, on JP5 15-18.
 #
-# ITS OWN PINS, not the display's. An earlier revision multiplexed this onto
-# lcd_sclk/lcd_miso/lcd_cs_n/lcd_dc behind a PANEL_IF parameter, which forced
-# a choice of one panel or the other at build time and left four ports named
-# after hardware they were no longer driving. There was never a need: JP5
-# carries 21 BANK12 signal pairs and this design constrained only 11 of them,
-# so pins 14-44 were sitting entirely free. Thirty pins.
+# ITS OWN PINS. An earlier revision multiplexed this onto the display's SPI
+# behind a PANEL_IF parameter, which forced a choice of one panel or the other
+# at build time. Giving it separate pins is what made it possible to run both
+# during the transition -- and then to delete the display outright, which
+# happened on 2026-09-05. JP5 carries 21 BANK12 signal pairs; this design now
+# constrains four of them.
 #
 # Picking 15-18 leaves pin 14 (AA22) as a gap after the display block, so the
 # two groups do not get miscounted into each other on the header.

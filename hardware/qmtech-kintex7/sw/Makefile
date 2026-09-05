@@ -120,7 +120,6 @@ SOURCES_DAEMON := \
 	$(CYD_HOST)/cyd_md5.c \
 	miner_io_gpio.c \
 	$(GPIO_BUS)/am01_gpio_bus.c \
-	$(GPIO_BUS)/am01_panel.c
 
 OBJECTS_DAEMON := $(call objects,$(SOURCES_DAEMON) $(SOURCES_CRYPTO) \
 	$(SOURCES_KECCAK) $(SOURCES_STRATUM))
@@ -200,7 +199,6 @@ OBJECTS_REG := $(call objects,$(SOURCES_REG))
 # cannot be staleness -- which is the ambiguity odo-miner's "stale" counter
 # cannot resolve. Needs the crypto oracle and Keccak, hence the extra groups.
 #
-# miner_io_gpio.c pulls in am01_panel.c for the cooperative display slice, so
 # that comes along even though this tool never draws anything.
 # =====================================================================
 
@@ -208,7 +206,6 @@ SOURCES_SMOKE := \
 	$(GPIO_BUS)/am01_smoke.c \
 	miner_io_gpio.c \
 	$(GPIO_BUS)/am01_gpio_bus.c \
-	$(GPIO_BUS)/am01_panel.c
 
 OBJECTS_SMOKE := $(call objects,$(SOURCES_SMOKE) $(SOURCES_CRYPTO) \
 	$(SOURCES_KECCAK))

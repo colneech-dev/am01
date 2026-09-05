@@ -113,15 +113,6 @@ module odocrypt_gpio_wrapper #(
     // ---------------------------------------------------------------
     // ILI9341 panel + XPT2046 touch on JP5, sharing one SPI bus.
     // ---------------------------------------------------------------
-    output wire        lcd_sclk,
-    output wire        lcd_mosi,
-    input  wire        lcd_miso,
-    output wire        lcd_cs_n,
-    output wire        lcd_dc,
-    output wire        lcd_rst_n,
-    output wire        lcd_bl,
-    output wire        touch_cs_n,
-    input  wire        touch_irq,
 
     // ---------------------------------------------------------------
     // CYD front panel: a serial link on its OWN JP5 pins.
@@ -194,22 +185,16 @@ module odocrypt_gpio_wrapper #(
     // LCD_DATA is deliberately its own slot: pixel writes are the only
     // high-traffic path here, and keeping them on a fixed address means the
     // host can hammer one register without re-addressing.
-    localparam [4:0] ADDR_LCD_CMD     = 5'h10;  // write: command byte, DC=0
-    localparam [4:0] ADDR_LCD_DATA    = 5'h11;  // write: data/pixel, DC=1
-    localparam [4:0] ADDR_LCD_STAT    = 5'h12;  // read: busy/fifo state
-    localparam [4:0] ADDR_LCD_CTRL    = 5'h13;  // write: [0] RST_N [1] backlight
-    localparam [4:0] ADDR_TOUCH_X     = 5'h14;  // read: XPT2046 X
-    localparam [4:0] ADDR_TOUCH_Y     = 5'h15;  // read: XPT2046 Y
-    localparam [4:0] ADDR_TOUCH_STAT  = 5'h16;  // read: [0] pressed
-    // 8-bit data write, DC=1. The ILI9341's single-byte parameters
-    // (COLMOD, MADCTL) cannot be sent through the 16-bit LCD_DATA slot
-    // without emitting a second, surplus byte after them.
-    localparam [4:0] ADDR_LCD_DATA8   = 5'h17;  // write: 8-bit data, DC=1
 
     // v2.0. read: [15:8] saturating lost-find count, [3:0] found-FIFO depth.
     // Exists so a dropped find is VISIBLE. v1.x had a single nonce latch that
     // a second find would overwrite silently, and the only symptom was a
     // share that never arrived -- indistinguishable from bad luck.
+    /* 0x10-0x17 were the ILI9341 and XPT2046 registers. Removed when the
+     * CYD panel replaced that display: it is reachable over one pair of
+     * wires and can be reflashed from the miner, and carrying two panels
+     * cost a shared SPI engine, a touch sequencer and nine JP5 pins.
+     * Free for reuse; see docs/JP5-WIRING.md for the pins. */
     localparam [4:0] ADDR_FIFO_STAT   = 5'h18;  // read: {lost[7:0], 4'h0, depth[3:0]}
 
     // CYD front panel, on its own JP5 pins (15-18). Always present, and
@@ -236,6 +221,10 @@ module odocrypt_gpio_wrapper #(
     // v1.4 adds LCD_DATA8 (8-bit DC=1, for single-byte panel parameters)
     // and makes the XPT2046 real: it was declared in v1.3 but stubbed --
     // touch_cs_n was tied high and touch_x/touch_y were never written.
+    // 0x0205 REMOVES all of it. The CYD panel replaced that display: it is
+    // reachable over one pair of wires and can be reflashed from the miner,
+    // and keeping both cost a shared SPI engine, a touch sequencer, nine JP5
+    // pins and eight register addresses. 0x10-0x17 are free.
     // A v1.2-or-older host driving only 4 address lines still works: the
     // fifth line idles low, so it addresses 0x00-0x0F exactly as before.
     // 0x0108: miner.v nonce_out now counts EVERY result. Gating the counter on
@@ -296,7 +285,14 @@ module odocrypt_gpio_wrapper #(
     // permanently -- surviving restarts, recoverable only by reconfiguring
     // the FPGA. It cost an hour of mining on 2026-09-01. OP_SOFT_RESET now
     // reaches it and the daemon issues one at startup.
-    localparam [15:0] VERSION = 16'h0203;
+    /* 0x0205: the ILI9341/XPT2046 block is gone and 0x10-0x17 are free.
+     * 0x0204 was the 256-byte RX FIFO and the exact rx_count at 0x1C.
+     *
+     * NOTE: one interim bitstream carries the 0x0204 changes but still
+     * REPORTS 0203 -- it was built before this was bumped. Nothing
+     * depends on telling them apart: UART_STAT is identical in all
+     * three, and 0x1C simply reads 0 on a bitstream that lacks it. */
+    localparam [15:0] VERSION = 16'h0205;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;
@@ -529,119 +525,6 @@ module odocrypt_gpio_wrapper #(
     );
 `endif
 
-    // =====================================================================
-    // ILI9341 display + XPT2046 touch, sharing one SPI bus.
-    //
-    // The FPGA is a transport here, not a graphics engine: the panel has its
-    // own GRAM, so nothing is stored on this side. The host writes a command
-    // byte to LCD_CMD (DC low) or a 16-bit pixel to LCD_DATA (DC high) and
-    // this shifts it out. No framebuffer means no BRAM, which is the only
-    // reason it fits in a design already at 94% RAMB18.
-    //
-    // SCLK is bus_clk/8 = 6.25MHz. Conservative on purpose -- none of this
-    // has been near real silicon, and a slow bus is far easier to debug than
-    // a marginal one.
-    // =====================================================================
-    // The shifter is 24 bits wide because an XPT2046 exchange is one:
-    // an 8-bit control byte followed by 16 clocks during which the result
-    // comes back. LCD traffic left-aligns into the same register.
-    reg  [23:0] spi_shift;
-    reg  [23:0] spi_rx;      // MISO sampled on the rising edge (SPI mode 0)
-    reg  [5:0]  spi_bits;
-    reg         spi_cs_touch_n;
-    reg         spi_rx_en;   // only the touch path cares about MISO
-    reg         spi_is_touch; // which client owns the transfer in flight
-    reg  [4:0]  spi_div_max;  // half-period, in bus_clk cycles, minus one
-
-    // bus_clk is 50MHz (sys_clk_50m straight through -- see
-    // am01_qmtech_top.v). Getting that wrong is what produced two defects
-    // here: a touch clock 3x over the XPT2046's limit, and a poll interval
-    // comment that was out by 2x.
-    //
-    // Panel: half-period 4 cycles -> 6.25MHz, comfortably inside the
-    // ILI9341's rating.
-    // Touch: the XPT2046's DCLK maximum is 2.0MHz, so half-period 16 cycles
-    // -> 1.5625MHz.
-    localparam [4:0] SPI_DIV_LCD   = 5'd3;
-    localparam [4:0] SPI_DIV_TOUCH = 5'd15;
-    reg  [4:0]  spi_div;
-    reg         spi_busy;
-    reg         spi_dc;
-    reg         spi_cs_lcd_n;
-    reg         spi_sclk;
-    reg         spi_mosi;
-    reg         lcd_rst_n_r;
-    reg         lcd_bl_r;
-    reg  [11:0] touch_x, touch_y;
-    reg         touch_pressed;
-
-    // ---- XPT2046 touch sequencer ------------------------------------
-    // Shares the SPI shifter with the panel. The LCD has priority: a touch
-    // exchange only starts when the shifter is idle AND no panel write is
-    // pending, so pixel traffic is never held up by touch polling. A whole
-    // exchange is 24 SPI bits at bus_clk/8, roughly 4us, so a panel write
-    // that does arrive mid-exchange waits a negligible time -- and the host
-    // already polls LCD_STAT before writing.
-    wire lcd_pending = (lcd_req_toggle != lcd_req_seen);
-
-    localparam [1:0] T_IDLE   = 2'd0,
-                     T_READ_X = 2'd1,
-                     T_READ_Y = 2'd2,
-                     T_SETTLE = 2'd3;
-    // Control bytes: S=1, 12-bit, differential, power-down between reads.
-    //   X position -> A2:A0 = 101 -> 8'hD0
-    //   Y position -> A2:A0 = 001 -> 8'h90
-    localparam [7:0] XPT_CMD_X = 8'hD0;
-    localparam [7:0] XPT_CMD_Y = 8'h90;
-    // touch_irq is an asynchronous open-drain pad. It was sampled directly,
-    // which was survivable while it only fed a status register; it now gates
-    // an FSM, so it gets a two-flop synchroniser.
-    reg  [1:0]  touch_irq_sync;
-    reg  [1:0]  touch_state;
-    reg  [19:0] touch_tick;     // rate limiter between poll rounds
-    reg         touch_start;
-    reg  [7:0]  touch_ctrl;
-
-    // Driven by the bus FSM on a write to LCD_CMD / LCD_DATA / LCD_CTRL.
-    //
-    // A TOGGLE, not a level. lcd_start used to be held high until the bus FSM
-    // returned to S_IDLE, which does not happen until the CM4 releases WR_N --
-    // a libgpiod ioctl away, microseconds. A transfer takes 1.28-2.56us, so
-    // the shifter finished, saw the request still asserted, and sent the same
-    // byte again: every write went out 2-10 times. Exactly the surplus-byte
-    // fault LCD_DATA8 was added to avoid, inherited by LCD_DATA8 itself.
-    //
-    // The toggle is edge-like but survives any clock-domain skew, and it keeps
-    // a single driver for each register -- the bus FSM owns lcd_req_toggle,
-    // the SPI engine owns lcd_req_seen. Clearing a shared flag from both would
-    // be a multiple-driver conflict, which this design has hit before.
-    // DEPTH ONE. A toggle carries at most one outstanding request: two writes
-    // issued before the engine takes the first flip it twice, which cancels
-    // and loses BOTH silently. The host must not write while the shifter is
-    // busy -- am01_panel.c polls LCD_STAT before every write, which
-    // guarantees it, and LCD_STAT exists for exactly this.
-    //
-    // Do not remove that polling as an optimisation. The toggle fix stops
-    // writes being REPEATED, it does not make the interface queue. Dropping
-    // the poll would trade a duplicate-byte fault for a lost-byte one.
-    reg         lcd_req_toggle;
-    reg         lcd_req_seen;
-    reg  [15:0] lcd_start_data;
-    reg         lcd_start_dc;
-    reg         lcd_start_16;
-    reg         lcd_ctrl_wr;
-    reg  [15:0] lcd_ctrl_data;
-
-    // The display pins, untouched. The CYD link is on its own pins, so there
-    // is nothing to mux and these are exactly what they always were.
-    assign lcd_sclk   = spi_sclk;
-    assign lcd_mosi   = spi_mosi;
-    assign lcd_cs_n   = spi_cs_lcd_n;
-    assign lcd_dc     = spi_dc;
-    assign lcd_rst_n  = lcd_rst_n_r;
-    assign lcd_bl     = lcd_bl_r;
-    assign touch_cs_n = spi_cs_touch_n;
-
     // ---- CYD serial link -------------------------------------------------
     // On JP5 15-18, which nothing else uses. The display block above is
     // therefore untouched, and a board with an ILI9341 and no CYD sees no
@@ -702,165 +585,6 @@ module odocrypt_gpio_wrapper #(
         .uart_rx (cyd_uart_rx)
     );
 
-    always @(posedge bus_clk or negedge bus_rst_n) begin
-        if (!bus_rst_n) begin
-            spi_shift     <= 24'h0;
-            spi_rx        <= 24'h0;
-            spi_bits      <= 6'd0;
-            spi_cs_touch_n <= 1'b1;
-            spi_rx_en     <= 1'b0;
-            spi_div       <= 5'd0;
-            spi_div_max   <= SPI_DIV_LCD;
-            spi_is_touch  <= 1'b0;
-            lcd_req_seen  <= 1'b0;
-            touch_irq_sync <= 2'b11;   // idle high = not pressed
-            spi_busy      <= 1'b0;
-            spi_dc        <= 1'b0;
-            spi_cs_lcd_n  <= 1'b1;
-            spi_sclk      <= 1'b0;
-            spi_mosi      <= 1'b0;
-            lcd_rst_n_r   <= 1'b0;   // hold the panel in reset
-            lcd_bl_r      <= 1'b0;   // backlight off until configured
-            touch_x       <= 12'h0;
-            touch_y       <= 12'h0;
-            touch_pressed <= 1'b0;
-            touch_state   <= T_IDLE;
-            touch_tick    <= 20'd0;
-            touch_start   <= 1'b0;
-            touch_ctrl    <= 8'h00;
-        end else begin
-            if (lcd_pending && !spi_busy) begin
-                // Left-align into the 24-bit shifter: bit 23 goes out first.
-                spi_shift    <= lcd_start_16 ? {lcd_start_data, 8'h00}
-                                             : {lcd_start_data[7:0], 16'h0000};
-                spi_bits     <= lcd_start_16 ? 6'd16 : 6'd8;
-                spi_dc       <= lcd_start_dc;
-                spi_cs_lcd_n <= 1'b0;
-                spi_rx_en    <= 1'b0;
-                spi_is_touch <= 1'b0;
-                spi_div_max  <= SPI_DIV_LCD;
-                spi_busy     <= 1'b1;
-                spi_div      <= 5'd0;
-                spi_sclk     <= 1'b0;
-                // Present the first bit immediately, while SCLK is still low.
-                spi_mosi     <= lcd_start_16 ? lcd_start_data[15]
-                                             : lcd_start_data[7];
-                // Consume the request. One driver each: the bus FSM owns
-                // lcd_req_toggle, this block owns lcd_req_seen.
-                lcd_req_seen <= lcd_req_toggle;
-            end else if (touch_start && !spi_busy && !lcd_pending) begin
-                // XPT2046: control byte then 16 clocks for the result. Held
-                // off while a panel write is pending so the panel never waits
-                // on touch -- and, because a dropped exchange would otherwise
-                // latch a stale sample as a coordinate, touch_start is only
-                // cleared when the transfer is actually taken (below).
-                spi_shift      <= {touch_ctrl, 16'h0000};
-                spi_bits       <= 6'd24;
-                spi_dc         <= 1'b0;
-                spi_cs_touch_n <= 1'b0;
-                spi_rx_en      <= 1'b1;
-                spi_rx         <= 24'h0;
-                spi_is_touch   <= 1'b1;
-                spi_div_max    <= SPI_DIV_TOUCH;
-                spi_busy       <= 1'b1;
-                spi_div        <= 5'd0;
-                spi_sclk       <= 1'b0;
-                spi_mosi       <= touch_ctrl[7];
-                touch_start    <= 1'b0;
-            end else if (spi_busy) begin
-                spi_div <= spi_div + 5'd1;
-                if (spi_div == spi_div_max) begin
-                    spi_div <= 5'd0;
-                    if (!spi_sclk) begin
-                        // RISING edge. MOSI was set a full half-period ago, so
-                        // the slave sees it stable -- previously MOSI and SCLK
-                        // were assigned in the same cycle, giving zero setup
-                        // while the comment claimed the opposite.
-                        spi_sclk <= 1'b1;
-                        // Mode 0: the slave presents its bit before this edge.
-                        if (spi_rx_en)
-                            spi_rx <= {spi_rx[22:0], lcd_miso};
-                    end else begin
-                        // FALLING edge: advance the shifter and present the
-                        // next bit, which then has a half-period to settle.
-                        spi_sclk  <= 1'b0;
-                        spi_shift <= {spi_shift[22:0], 1'b0};
-                        spi_mosi  <= spi_shift[22];
-                        spi_bits  <= spi_bits - 6'd1;
-                        if (spi_bits == 6'd1) begin
-                            spi_busy       <= 1'b0;
-                            spi_cs_lcd_n   <= 1'b1;
-                            spi_cs_touch_n <= 1'b1;
-                        end
-                    end
-                end
-            end
-
-            if (lcd_ctrl_wr) begin
-                lcd_rst_n_r <= lcd_ctrl_data[0];
-                lcd_bl_r    <= lcd_ctrl_data[1];
-            end
-
-            // XPT2046 PENIRQ is active low, open drain, and asynchronous to
-            // bus_clk -- hence the two-flop synchroniser rather than sampling
-            // the pad straight into a register that now gates an FSM.
-            touch_irq_sync <= {touch_irq_sync[0], touch_irq};
-            touch_pressed  <= ~touch_irq_sync[1];
-
-            // ---- touch sequencer ----------------------------------------
-            // touch_start is now cleared by the SPI engine when it actually
-            // TAKES the transfer, not merely when the shifter looks busy.
-            // Clearing it on "busy" meant a request lost to a panel write
-            // vanished, and the FSM then advanced anyway and latched whatever
-            // spi_rx happened to hold -- a stale sample reported as a real
-            // coordinate, which is worse than reporting nothing.
-
-            if (touch_tick != 20'd0)
-                touch_tick <= touch_tick - 20'd1;
-
-            case (touch_state)
-                T_IDLE: begin
-                    // Only poll while the pen is actually down. PENIRQ is the
-                    // panel's own indication, so an untouched screen costs no
-                    // SPI traffic at all.
-                    if (touch_pressed && touch_tick == 20'd0 &&
-                        !spi_busy && !lcd_pending && !touch_start) begin
-                        touch_ctrl  <= XPT_CMD_X;
-                        touch_start <= 1'b1;
-                        touch_state <= T_READ_X;
-                    end
-                end
-                T_READ_X: begin
-                    // Advance only when a TOUCH transfer completed. If the
-                    // request is still queued (touch_start high) it was held
-                    // off by a panel write and will go later; if the finished
-                    // transfer was the panel's, spi_rx is not ours.
-                    if (!touch_start && !spi_busy && spi_is_touch) begin
-                        // Of the 16 clocks after the control byte the result
-                        // is bits 14:3 -- one busy clock, then 12 data bits.
-                        touch_x     <= spi_rx[14:3];
-                        touch_ctrl  <= XPT_CMD_Y;
-                        touch_start <= 1'b1;
-                        touch_state <= T_READ_Y;
-                    end
-                end
-                T_READ_Y: begin
-                    if (!touch_start && !spi_busy && spi_is_touch) begin
-                        touch_y     <= spi_rx[14:3];
-                        touch_state <= T_SETTLE;
-                    end
-                end
-                T_SETTLE: begin
-                    // 10ms between rounds. bus_clk is 50MHz, so that is
-                    // 500,000 cycles -- the previous value assumed 100MHz and
-                    // therefore polled at 20ms, half the intended rate.
-                    touch_tick  <= 20'd500000;
-                    touch_state <= T_IDLE;
-                end
-                default: touch_state <= T_IDLE;
-            endcase
-        end
-    end
 
     // =====================================================================
     // Fan control -- closed loop on die temperature, entirely in fabric.
@@ -978,15 +702,6 @@ module odocrypt_gpio_wrapper #(
             // The clk_h synchroniser has no reset of its own, so leaving this
             // undisturbed is what keeps the two sides consistent across a bus
             // reset. Do not "tidy" this into the reset list.
-            // lcd_req_toggle IS reset, unlike req_toggle_bus above, and the
-            // difference matters. req_toggle_bus crosses into clk_h, whose
-            // synchroniser has no reset, so forcing it creates an edge the far
-            // side sees as a real request. lcd_req_toggle and its receiver
-            // lcd_req_seen are both in bus_clk and both cleared by bus_rst_n,
-            // so they come out of reset agreeing. Resetting only one of them
-            // would be the bug: lcd_pending would read true and fire one
-            // spurious panel write.
-            lcd_req_toggle  <= 1'b0;
             header_lo_stage <= 16'h0;
             target_lo_stage <= 16'h0;
             nonce_valid_clear_pulse <= 1'b0;
@@ -1031,12 +746,6 @@ module odocrypt_gpio_wrapper #(
                     gpio_ready   <= 1'b0;
                     gpio_data_oe <= 1'b0;
                     request_issued <= 1'b0;
-                    // One-shot strobe into the display block. lcd_start used
-                    // to be cleared here too, which is precisely what made it
-                    // useless: S_IDLE is not reached until the CM4 releases
-                    // WR_N, long after the transfer finished. It is a toggle
-                    // now and needs no clearing.
-                    lcd_ctrl_wr  <= 1'b0;
                     if (wr_active) begin
                         addr_latched  <= addr_sync1;
                         wdata_latched <= data_in_sync1;
@@ -1058,54 +767,6 @@ module odocrypt_gpio_wrapper #(
                         end
                         // Display writes are dropped if the shifter is still
                         // busy; the host polls LCD_STAT before writing.
-                        ADDR_LCD_CMD: begin
-                            // ONE-SHOT via request_issued -- see the note at
-                            // the strobe defaults. Without it lcd_req_toggle
-                            // flipped on every cycle of S_WRITE, starting 16
-                            // SPI transfers per host write. !spi_busy does not
-                            // prevent that: the duplication happens WITHIN one
-                            // transaction, while spi_busy gates between them.
-                            if (!request_issued && !spi_busy) begin
-                                lcd_start_data <= wdata_latched;
-                                lcd_start_dc   <= 1'b0;
-                                lcd_start_16   <= 1'b0;
-                                lcd_req_toggle <= ~lcd_req_toggle;
-                                request_issued <= 1'b1;
-                            end
-                            gpio_ready <= 1'b1;
-                        end
-                        ADDR_LCD_DATA: begin
-                            // ONE-SHOT via request_issued -- see the note at
-                            // the strobe defaults. Without it lcd_req_toggle
-                            // flipped on every cycle of S_WRITE, starting 16
-                            // SPI transfers per host write. !spi_busy does not
-                            // prevent that: the duplication happens WITHIN one
-                            // transaction, while spi_busy gates between them.
-                            if (!request_issued && !spi_busy) begin
-                                lcd_start_data <= wdata_latched;
-                                lcd_start_dc   <= 1'b1;
-                                lcd_start_16   <= 1'b1;
-                                lcd_req_toggle <= ~lcd_req_toggle;
-                                request_issued <= 1'b1;
-                            end
-                            gpio_ready <= 1'b1;
-                        end
-                        ADDR_LCD_DATA8: begin
-                            // ONE-SHOT via request_issued -- see the note at
-                            // the strobe defaults. Without it lcd_req_toggle
-                            // flipped on every cycle of S_WRITE, starting 16
-                            // SPI transfers per host write. !spi_busy does not
-                            // prevent that: the duplication happens WITHIN one
-                            // transaction, while spi_busy gates between them.
-                            if (!request_issued && !spi_busy) begin
-                                lcd_start_data <= wdata_latched;
-                                lcd_start_dc   <= 1'b1;
-                                lcd_start_16   <= 1'b0;
-                                lcd_req_toggle <= ~lcd_req_toggle;
-                                request_issued <= 1'b1;
-                            end
-                            gpio_ready <= 1'b1;
-                        end
                         ADDR_UART_DATA: begin
                             // request_issued makes this fire ONCE. Without it
                             // the byte was pushed on every cycle of S_WRITE --
@@ -1125,11 +786,6 @@ module odocrypt_gpio_wrapper #(
                         ADDR_ESP_CTRL: begin
                             esp_ctrl_r <= wdata_latched[1:0];
                             gpio_ready <= 1'b1;
-                        end
-                        ADDR_LCD_CTRL: begin
-                            lcd_ctrl_data <= wdata_latched;
-                            lcd_ctrl_wr   <= 1'b1;
-                            gpio_ready    <= 1'b1;
                         end
                         ADDR_CTRL: begin
                             if (!request_issued) begin
@@ -1200,10 +856,6 @@ module odocrypt_gpio_wrapper #(
                         ADDR_VCCAUX:   rdata_reg <= xadc_vccaux_bus;
                         ADDR_VCCBRAM:  rdata_reg <= xadc_vccbram_bus;
                         ADDR_FAN:      rdata_reg <= {fan_tach_hz, fan_duty};
-                        ADDR_LCD_STAT: rdata_reg <= {15'h0, spi_busy};
-                        ADDR_TOUCH_X:  rdata_reg <= {4'h0, touch_x};
-                        ADDR_TOUCH_Y:  rdata_reg <= {4'h0, touch_y};
-                        ADDR_TOUCH_STAT: rdata_reg <= {15'h0, touch_pressed};
                         // 8 + 4 + 4 = 16. The depth field is 4 bits, which
                         // is exactly enough for an 8-deep FIFO's 0..8.
                         ADDR_UART_DATA: begin

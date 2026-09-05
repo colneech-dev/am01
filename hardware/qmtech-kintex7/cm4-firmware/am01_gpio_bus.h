@@ -99,11 +99,6 @@ int am01_bus_read_temp(am01_bus_t *bus, double *celsius_out);
  * its own GRAM, so there is no framebuffer on either side and pixels are
  * written straight through. lcd_data() skips the version check because it is
  * the one path where throughput matters. */
-int am01_bus_lcd_cmd(am01_bus_t *bus, uint8_t cmd);
-int am01_bus_lcd_data(am01_bus_t *bus, uint16_t data);
-int am01_bus_lcd_data8(am01_bus_t *bus, uint8_t data);
-int am01_bus_lcd_busy(am01_bus_t *bus, int *busy_out);
-int am01_bus_lcd_ctrl(am01_bus_t *bus, int reset_n, int backlight);
 int am01_bus_read_touch(am01_bus_t *bus, uint16_t *x, uint16_t *y, int *pressed);
 
 /* Fan: optionally set a duty FLOOR (the fabric's temperature curve still

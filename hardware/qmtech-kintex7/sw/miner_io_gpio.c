@@ -10,7 +10,6 @@
 
 #include "miner_io_pipe.h"
 #include "am01_gpio_bus.h"
-#include "am01_panel.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -116,19 +115,12 @@ int miner_io_pipe_init(void)
 
     g_initialized = 1;
 
-    /* Optional ILI9341 panel, off unless AM01_PANEL is set. Failure here is
-     * deliberately NOT fatal: the panel is a convenience, mining is not, and
-     * a display that will not start must never stop the miner starting. */
-    if (am01_panel_init(g_bus) != 0)
-        fprintf(stderr, "miner_io_pipe_init: panel unavailable, mining anyway\n");
-
     return 0;
 }
 
 void miner_io_pipe_shutdown(void)
 {
     if (g_bus) {
-        am01_panel_shutdown(g_bus);
         am01_bus_close(g_bus);
         g_bus = NULL;
     }
@@ -229,32 +221,10 @@ int miner_io_pipe_wait(int timeout_ms)
         return 0;
 
     if (errno == ETIMEDOUT) {
-        /* Cooperative display slice.
-         *
-         * Only here, and only on the timeout path: reaching this point means
-         * the IRQ did not fire, so no nonce is pending and the bus is idle.
-         * Pushing tiles before the wait, or after a real edge, would delay a
-         * nonce that had already arrived.
-         *
-         * The budget bounds the worst case: a nonce arriving mid-slice waits
-         * at most the tile in flight, because a tile is indivisible and this
-         * asks for exactly one.
-         *
-         * That is 5.1ms, MEASURED -- am01_busbench on hardware 2026-08-30 puts
-         * a 16-bit bus write at 20.0us, so a 16x16 tile is 256 of them. This
-         * used to pass 2000u with a comment claiming "2ms against a 5ms poll
-         * interval", which was wrong in a way nothing could have caught before
-         * the bus was measured: the budget is checked BETWEEN tiles, so asking
-         * for 2ms never produced a 2ms slice, it produced a 5.1ms one. Naming
-         * the real quantum makes the cost visible instead of aspirational.
-         *
-         * The panel simply repaints more slowly when hashing is busy, which is
-         * the correct priority.
-         *
-         * am01_panel_slice() is a no-op when the panel is disabled, and never
-         * reports errors upward -- see am01_panel.h. */
-        (void)am01_panel_slice(g_bus, AM01_PANEL_TILE_US);
-        return 1;
+        /* The display slice used to run here. The ILI9341 panel was removed
+         * on 2026-09-05 -- the CYD replaced it -- so the mining loop no
+         * longer yields anything to a second display. */
+                return 1;
     }
 
     /* Anything else (bus error, line revoked) is worth surfacing, but the
