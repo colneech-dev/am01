@@ -151,9 +151,28 @@ report_utilization    -file [file join $script_dir mux4_impl_util.rpt]
 # has to fall by that much and the instance count was bought with clock.
 puts "----------------------------------------------------------------------"
 puts "MUX4 RESULT -- worst slack per clock:"
+# -quiet plus a length check: not every clock captures paths. clkfb is the
+# MMCM feedback and captures none, so an unguarded get_property errors out on
+# it -- which on 2026-09-05 killed this loop after the first clock and printed
+# nothing for clk_h or clk_2x, the only two anyone wants.
 foreach clk [get_clocks] {
-    set wns [get_property SLACK [get_timing_paths -to $clk -max_paths 1]]
-    puts [format "  %-20s WNS %s ns" [get_property NAME $clk] $wns]
+    set nm     [get_property NAME $clk]
+    set period [get_property PERIOD $clk]
+    set setup  [get_timing_paths -to $clk -max_paths 1 -delay_type max -quiet]
+    set hold   [get_timing_paths -to $clk -max_paths 1 -delay_type min -quiet]
+    if {[llength $setup] == 0} {
+        puts [format "  %-16s %8.3f ns  (no captured paths)" $nm $period]
+        continue
+    }
+    set wns [get_property SLACK [lindex $setup 0]]
+    set whs "n/a"
+    if {[llength $hold] > 0} { set whs [get_property SLACK [lindex $hold 0]] }
+    # The achievable period is what decides whether to retune the MMCM: a
+    # design that misses its target is not flashable even when the frequency
+    # it DID reach would have been acceptable.
+    set achievable [expr {$period - $wns}]
+    puts [format "  %-16s target %7.3f ns  WNS %7.3f  WHS %7s  -> needs %7.3f ns (%6.2f MHz)" \
+              $nm $period $wns $whs $achievable [expr {1000.0 / $achievable}]]
 }
 puts ""
 puts "  reports: mux4_impl_timing.rpt, mux4_impl_util.rpt"

@@ -46,6 +46,46 @@ set bit_file [file join $proj_dir "${proj_name}.runs" impl_1 "am01_qmtech_top.bi
 set impl_timing_rpt [file join $proj_dir "${proj_name}_timing_impl.rpt"]
 open_run impl_1
 report_timing_summary -file $impl_timing_rpt
+
+# ---- archive it, before anything can delete the run directory -----------
+#
+# BEFORE close_design, deliberately: the frequency below is read off the live
+# clock object, and there are no clocks once the design is closed. Closing
+# first would have named every artifact 0.00MHz.
+#
+# artifacts/ is the only copy that outlives a rebuild. Doing this by hand is
+# what lost a good 225MHz bitstream on 2026-09-05: the next build began with
+# `rm -rf build` and an hour of compute went with it.
+#
+# The frequency comes from the design rather than from a variable someone has
+# to remember to update -- it is read back off the actual clock object, so the
+# name cannot disagree with what was built.
+set art_dir [file join $script_dir artifacts]
+file mkdir $art_dir
+
+set hash_mhz 0.0
+foreach clk [get_clocks] {
+    set nm [get_property NAME $clk]
+    # clkout1_unbuf is clk_h, the hash clock. sys_clk_50m and clkfb are not
+    # interesting and clkout0_unbuf is clk_2x, which is unused here.
+    if {[string match "*clkout1*" $nm]} {
+        set per [get_property PERIOD $clk]
+        if {$per > 0} { set hash_mhz [expr {1000.0 / $per}] }
+    }
+}
+
+set stamp [clock format [clock seconds] -format "%m%d-%H%M"]
+set art [file join $art_dir \
+             [format "am01_%.2fMHz_%s.bit" $hash_mhz $stamp]]
+if {[file exists $bit_file]} {
+    file copy -force $bit_file $art
+    # The reports too: a bitstream whose timing nobody can look up is a
+    # bitstream nobody should flash.
+    catch {file copy -force $impl_timing_rpt \
+               [file join $art_dir [format "timing_%.2fMHz_%s.rpt" $hash_mhz $stamp]]}
+    puts "ARCHIVED: $art"
+}
+
 close_design
 
 puts "----------------------------------------------------------------------"
