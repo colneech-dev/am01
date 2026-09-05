@@ -21,6 +21,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 REQ="$SANDBOX/run/odod/request"
 POOL="$SANDBOX/boot/am01-miner.conf"
 WPA="$SANDBOX/etc/wpa_supplicant/wpa_supplicant-wlan0.conf"
+BOOTWPA="$SANDBOX/boot/wpa_supplicant.conf"
 mkdir -p "$REQ" "$SANDBOX/boot" "$SANDBOX/etc/wpa_supplicant" "$SANDBOX/bin"
 
 # Stub systemctl: record calls, never act.
@@ -38,9 +39,12 @@ HELPER="$SANDBOX/bin/helper"
 sed -e "s#^REQ_DIR=.*#REQ_DIR=$REQ#" \
     -e "s#^POOL_CONF=.*#POOL_CONF=$POOL#" \
     -e "s#^WPA_CONF=.*#WPA_CONF=$WPA#" \
+    -e "s#^WPA_BOOT=.*#WPA_BOOT=$BOOTWPA#" \
     "$HELPER_SRC" > "$HELPER"
 chmod +x "$HELPER"
 grep -q "^REQ_DIR=$REQ\$" "$HELPER" || { echo "sed redirect failed"; exit 1; }
+# Checked, because without it this test writes the real /boot.
+grep -q "^WPA_BOOT=$BOOTWPA\$" "$HELPER" || { echo "WPA_BOOT redirect failed"; exit 1; }
 
 PATH="$SANDBOX/bin:$PATH"
 checks=0; errors=0
@@ -141,6 +145,14 @@ ok $? "a passphrase containing spaces survives intact"
 [ "$(stat -c %a "$WPA")" = 600 ]; ok $? "and the file is 0600 -- it holds a PSK"
 grep -q "am01-wifi.service" "$SANDBOX_CALLS"
 ok $? "am01-wifi.service is restarted, not wpa_supplicant@wlan0"
+
+# THE COPY THAT SURVIVES A REBOOT. am01-wifi-provision.service copies
+# /boot/wpa_supplicant.conf over /etc before am01-wifi starts, so a change
+# written only to /etc applies now and is reverted at the next boot. That is
+# exactly what happened on 2026-09-05: the panel changed the network, it
+# worked, and the old one came back after a restart.
+[ -f "$BOOTWPA" ]; ok $? "the /boot copy is written, so the change survives a reboot"
+cmp -s "$WPA" "$BOOTWPA"; ok $? "and matches the config that took effect"
 
 # ---- unknown verbs -------------------------------------------------------
 echo

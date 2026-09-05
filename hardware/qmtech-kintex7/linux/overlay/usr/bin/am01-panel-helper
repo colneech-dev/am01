@@ -42,7 +42,12 @@ set -u
 REQ_DIR=/run/odod/request
 POOL_CONF=/boot/am01-miner.conf
 WPA_CONF=/etc/wpa_supplicant/wpa_supplicant-wlan0.conf
+# THE ONE THAT SURVIVES. am01-wifi-provision.service copies this over
+# WPA_CONF before am01-wifi.service starts, on every boot -- so writing
+# only WPA_CONF applies a change now and loses it at the next restart.
+WPA_BOOT=/boot/wpa_supplicant.conf
 WIFI_COUNTRY=GB
+SCAN_PATH=/run/odod/wifi_scan.txt
 
 say()  { echo "am01-panel-helper: $*" >&2; }
 deny() { say "REFUSED $1: $2"; }
@@ -92,6 +97,63 @@ apply_set_pool() {
 	say "pool set to $host:$port worker $worker"
 }
 
+# Scan for networks and leave the result where the panel thread can read it.
+#
+# NEEDS ROOT, which is the only reason it is here: SIOCSIWSCAN wants
+# CAP_NET_ADMIN and odo-miner runs as User=miner. Nothing here takes an
+# argument -- `iw` is invoked with a fixed command line, so there is no user
+# input to validate and no way for a request to influence what runs.
+#
+# `iw`, not `wpa_cli`: this image's wpa_supplicant is started without a
+# ctrl_interface, so /var/run/wpa_supplicant is empty and wpa_cli has nothing
+# to connect to. iw talks to nl80211 directly.
+#
+# A scan briefly takes the radio off-channel. That is a few hundred
+# milliseconds of a link that is not carrying the mining connection anyway --
+# the miner is on ethernet here -- and it is only ever triggered by someone
+# standing at the panel pressing SCAN.
+apply_wifi_scan() {
+	out=$SCAN_PATH.tmp
+
+	# Strongest first, one entry per SSID, hidden networks dropped.
+	#
+	# The signal line precedes the SSID line for each BSS, so the awk holds
+	# the last signal seen and emits it when the SSID arrives. sort -rn puts
+	# the least-negative dBm first, and the dedupe keeps whichever came
+	# first -- which, after the sort, is the strongest of a repeated SSID.
+	# That matters: mesh and band-steering setups advertise one name from
+	# several radios.
+	iw dev wlan0 scan 2>/dev/null | awk '
+		/^BSS /       { sig = "" }
+		/signal:/     { sig = $2 }
+		/^\tSSID: /   { ssid = substr($0, 8)
+		                if (ssid != "" && sig != "") print sig "\t" ssid }
+	' | sort -rn | awk -F'\t' '
+		# HIDDEN NETWORKS OUT. iw renders a cloaked SSID as a run of
+		# \\x00 escapes. It is not a name, and picking it off a
+		# list cannot join anything.
+		$2 ~ /\\x00/ { next }
+		{
+			ssid = $2
+			# Anything else iw escaped is non-ASCII -- a smart quote,
+			# an emoji. The panel draws an ASCII bitmap font, so show
+			# a placeholder rather than a literal backslash-x-e-2.
+			gsub(/\\x[0-9a-fA-F][0-9a-fA-F]/, "?", ssid)
+			if (!seen[ssid]++) print $1 "\t" ssid
+		}
+	' | head -n 12 > "$out" 2>/dev/null
+
+	if [ ! -s "$out" ]; then
+		# An empty result is still a result -- the panel must be told the
+		# scan finished, or it waits for a list that is never coming.
+		: > "$out"
+		say "wifi scan found nothing"
+	else
+		say "wifi scan found $(wc -l < "$out") network(s)"
+	fi
+	mv -f "$out" "$SCAN_PATH"
+}
+
 apply_set_wifi() {
 	f=$1
 	ssid=$(line_of "$f" 1); psk=$(line_of "$f" 2)
@@ -118,6 +180,29 @@ apply_set_wifi() {
 	sync
 	mv -f "$tmp" "$WPA_CONF" || { deny set_wifi "rename failed"; rm -f "$tmp"; return; }
 	sync
+
+	# AND THE COPY THAT SURVIVES A REBOOT.
+	#
+	# Writing only /etc looked like it worked -- the change applied, wlan0
+	# associated -- and then am01-wifi-provision.service copied
+	# /boot/wpa_supplicant.conf back over it on the next boot and the old
+	# network returned with nothing to explain it. /boot is the source of
+	# truth, the same way /boot/am01-miner.conf is for the pool.
+	#
+	# Failure here is reported but NOT fatal: the running configuration is
+	# already correct, and "your change works until you reboot" is worth
+	# saying out loud rather than discarding a change that did apply.
+	if [ -d /boot ]; then
+		btmp="${WPA_BOOT}.tmp"
+		if cp -f "$WPA_CONF" "$btmp" 2>/dev/null && \
+		   mv -f "$btmp" "$WPA_BOOT" 2>/dev/null; then
+			sync
+		else
+			rm -f "$btmp" 2>/dev/null
+			say "WARNING: could not write $WPA_BOOT -- this change will be"
+			say "         reverted at the next boot by am01-wifi-provision"
+		fi
+	fi
 	# SSID only. The PSK is never logged.
 	say "wifi configured for SSID \"$ssid\""
 	# am01-wifi.service, not wpa_supplicant@wlan0 -- this image runs its own
@@ -148,6 +233,10 @@ for f in "$REQ_DIR"/*; do
 		;;
 	set_pool)
 		apply_set_pool "$f"; rm -f "$f"
+		;;
+	wifi_scan)
+		rm -f "$f"
+		apply_wifi_scan
 		;;
 	set_wifi)
 		# Removed FIRST, so a malformed request cannot be retried forever by
