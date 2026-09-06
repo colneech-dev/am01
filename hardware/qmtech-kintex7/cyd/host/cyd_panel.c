@@ -391,7 +391,30 @@ static void drain_rx(am01_bus_t *bus, int may_apply)
                     fprintf(stderr, "[cyd] panel %s\n", g_rx.buf);
 
                 cyd_cmd_t c;
-                if (cyd_cmd_parse(g_rx.buf, &c) != CYD_CMD_KIND_NONE) {
+                int parsed = cyd_cmd_parse(g_rx.buf, &c) != CYD_CMD_KIND_NONE;
+
+                /* CLEAR THE LINE BEFORE DISPATCHING IT.
+                 *
+                 * apply() re-enters this function. PING goes to uart_write(),
+                 * which calls drain_rx(bus, 0) while it waits for TX room, and
+                 * that nested call appends whatever has arrived onto g_rx.buf
+                 * -- which still held this line, because the reset used to sit
+                 * after apply() returned. Two commands inside one ~58ms
+                 * transmit window therefore concatenated: "PING" followed by
+                 * "CMD reboot" parsed as "PINGCMD reboot", which is
+                 * CYD_CMD_KIND_NONE, so the reboot was dropped silently and
+                 * never even reached the deferral slot.
+                 *
+                 * The deferral below does NOT cover this, though the comment
+                 * on it reads as though it might: it defers the APPLY, not the
+                 * buffer, and the buffer is what the nested call scribbles on.
+                 *
+                 * Safe to clear here because cyd_cmd_parse() has already
+                 * copied every field it needs into `c`. */
+                g_rx.len = 0;
+                g_rx.overflow = 0;
+
+                if (parsed) {
                     if (may_apply) {
                         apply(&c, bus);
                     } else if (!g_deferred_valid) {

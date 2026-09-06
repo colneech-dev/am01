@@ -178,6 +178,18 @@ static int set_data_direction(am01_bus_t *bus, int output)
     if (bus->data_is_output != -1)
         gpiod_line_release_bulk(&bus->data_bulk);
 
+    /* UNKNOWN FROM HERE, and it must be recorded before the request rather
+     * than after it succeeds.
+     *
+     * The lines are released; if the request below fails we return -1 with
+     * them unrequested. Leaving data_is_output at its old value made that
+     * failure permanent: the next call would compare against the stale value,
+     * take the early return at the top, and drive lines nobody holds --
+     * EINVAL on every transaction from then until the process restarts. -1
+     * makes the next call retry the request, which is the recoverable
+     * behaviour and is what the field already means. */
+    bus->data_is_output = -1;
+
     int rc;
     if (output) {
         int defaults[NUM_DATA_LINES] = { 0 };
@@ -235,10 +247,30 @@ static int reg_write16_locked(am01_bus_t *bus, uint8_t addr, uint16_t data)
     if (drive_data(bus, data) < 0) return -1;
 
     if (gpiod_line_set_value(bus->wr_n, 0) < 0) return -1;
-    if (wait_ready(bus, 1) < 0) return -1;
+
+    /* WR_N IS ASSERTED FROM HERE. Every exit below must release it.
+     *
+     * A wait_ready() timeout used to return -1 with the strobe still low, and
+     * reg_write16() then unlocked the mutex. The wrapper's bus state machine
+     * does not leave its transfer state until the strobe is released, so the
+     * bus stayed mid-cycle and the next thread to take the lock started a
+     * transaction against a target that was still finishing the last one.
+     * Nothing re-deasserted it, so it did not self-heal. */
+    if (wait_ready(bus, 1) < 0)
+        goto release;
     if (gpiod_line_set_value(bus->wr_n, 1) < 0) return -1;
     if (wait_ready(bus, 0) < 0) return -1;
     return 0;
+
+release:
+    /* Best effort: if this fails too there is nothing further to try, and the
+     * timeout is the error worth reporting. errno is preserved for it. */
+    {
+        int saved = errno;
+        (void)gpiod_line_set_value(bus->wr_n, 1);
+        errno = saved;
+    }
+    return -1;
 }
 
 /* 4-phase interlocked read -- mirrors odocrypt_gpio_wrapper.v's S_READ
@@ -263,11 +295,30 @@ static int reg_read16_locked(am01_bus_t *bus, uint8_t addr, uint16_t *data_out)
     if (drive_addr(bus, addr) < 0) return -1;
 
     if (gpiod_line_set_value(bus->rd_n, 0) < 0) return -1;
-    if (wait_ready(bus, 1) < 0) return -1;
-    if (sample_data(bus, data_out) < 0) return -1;
+
+    /* RD_N IS ASSERTED FROM HERE, and this direction is the dangerous one.
+     *
+     * The wrapper keeps gpio_data_oe asserted for as long as RD_N is low, so
+     * returning early with the strobe still asserted leaves the FPGA DRIVING
+     * all 16 data lines. The next writer takes the lock, calls
+     * set_data_direction(bus, 1), and drives the same 16 lines from this end
+     * -- both ends driving, which is exactly the contention the direction
+     * handling in this file exists to prevent. */
+    if (wait_ready(bus, 1) < 0)
+        goto release;
+    if (sample_data(bus, data_out) < 0)
+        goto release;
     if (gpiod_line_set_value(bus->rd_n, 1) < 0) return -1;
     if (wait_ready(bus, 0) < 0) return -1;
     return 0;
+
+release:
+    {
+        int saved = errno;
+        (void)gpiod_line_set_value(bus->rd_n, 1);
+        errno = saved;
+    }
+    return -1;
 }
 
 /* The locking wrappers everything else calls.
