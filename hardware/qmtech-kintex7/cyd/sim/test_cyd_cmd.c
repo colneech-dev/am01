@@ -161,6 +161,43 @@ int main(void)
        !strcmp(c.ssid, "HomeNet") && !strcmp(c.psk, "hunter2hunter2"),
        "set_wifi splits ssid and psk");
 
+    /* A QUOTED SSID MAY CONTAIN SPACES. This is the case that shipped broken:
+     * unquoted, "BT Hub" + "mypassword123" parsed as ssid="BT",
+     * psk="Hub mypassword123" -- 17 chars, so every length check passed, the
+     * config looked valid, wpa_supplicant was restarted, and a headless miner
+     * joined the wrong network. The comment in cyd_cmd.c claimed such an SSID
+     * was "rejected rather than half-read"; nothing rejected it. */
+    ok(cyd_cmd_parse("CMD set_wifi \"BT Hub\" mypassword123", &c)
+           == CYD_CMD_KIND_SET_WIFI &&
+       !strcmp(c.ssid, "BT Hub") && !strcmp(c.psk, "mypassword123"),
+       "a quoted SSID keeps its spaces");
+
+    /* And the PSK still takes the remainder, so BOTH can hold spaces. */
+    ok(cyd_cmd_parse("CMD set_wifi \"My Network\" correct horse battery", &c)
+           == CYD_CMD_KIND_SET_WIFI &&
+       !strcmp(c.ssid, "My Network") &&
+       !strcmp(c.psk, "correct horse battery"),
+       "quoted ssid with spaces AND a psk with spaces");
+
+    /* Unquoted still works, so an older panel against this daemon keeps
+     * functioning for the names it could already express. */
+    ok(cyd_cmd_parse("CMD set_wifi PlainNet hunter2hunter2", &c)
+           == CYD_CMD_KIND_SET_WIFI &&
+       !strcmp(c.ssid, "PlainNet"),
+       "an unquoted ssid is still accepted");
+
+    /* An unterminated quote must be refused, not stored truncated -- a
+     * half-read name joins the wrong network just as surely. */
+    ok(cyd_cmd_parse("CMD set_wifi \"Unterminated hunter2hunter2", &c)
+           == CYD_CMD_KIND_NONE,
+       "an unterminated quoted ssid is refused");
+
+    /* The quote is safe as a delimiter only because it cannot appear in the
+     * data. That rejection is load-bearing now, so pin it. */
+    ok(cyd_cmd_parse("CMD set_wifi \"we\"ird\" hunter2hunter2", &c)
+           == CYD_CMD_KIND_NONE,
+       "a quote inside a quoted ssid is still refused");
+
     /* THE PSK TAKES THE REST OF THE LINE, spaces included. WPA passphrases
      * routinely contain them, and a token split would truncate one silently --
      * a board that cannot join, with a config that looks right. */

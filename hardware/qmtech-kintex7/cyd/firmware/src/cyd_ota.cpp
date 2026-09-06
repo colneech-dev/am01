@@ -19,8 +19,45 @@ static bool     s_active;
 static uint32_t s_total;        /* bytes the host says are coming */
 static uint32_t s_written;      /* bytes actually in flash        */
 static char     s_error[64];
+static uint32_t s_last_ms;      /* millis() of the last accepted byte */
 
-bool cyd_ota_active(void) { return s_active; }
+/* HOW LONG A TRANSFER MAY GO QUIET BEFORE IT IS ABANDONED.
+ *
+ * The host writes a chunk and waits for the ack before sending the next, so in
+ * a healthy transfer this is reset several times a second. 30s is far beyond
+ * any legitimate gap, and short enough that someone watching a frozen
+ * percentage does not conclude the panel has died and pull the power --
+ * which is the failure this path exists to avoid, because recovering a
+ * half-flashed panel means opening the case. */
+#define OTA_STALL_MS 30000u
+
+/* Abort without replying. fail() below needs a Stream to send OTAERR on; a
+ * timeout has nobody to answer, and the host has already given up. */
+static void ota_abort(const char *why)
+{
+    snprintf(s_error, sizeof s_error, "%s", why);
+    /* UNCONDITIONAL, not guarded on s_active. There is a window between
+     * Update.begin() succeeding and s_active being set in which a failure
+     * would otherwise leave UpdateClass running with _size > 0: every later
+     * OTABEGIN would skip its abort, Update.begin() would refuse with
+     * "already running", and OTA would be dead until a power cycle.
+     * abort() on a stopped Update is harmless. */
+    Update.abort();
+    s_active  = false;
+    s_total   = 0;
+    s_written = 0;
+    s_last_ms = 0;
+}
+
+bool cyd_ota_active(void)
+{
+    /* THE TIMEOUT LIVES HERE because this is the only thing main.cpp still
+     * calls while an update owns the panel -- loop() returns early on it. Any
+     * other home would need a caller that does not run. */
+    if (s_active && (uint32_t)(millis() - s_last_ms) > OTA_STALL_MS)
+        ota_abort("host went quiet");
+    return s_active;
+}
 
 const char *cyd_ota_take_error(void)
 {
@@ -45,12 +82,7 @@ int cyd_ota_percent(void)
  * spare slot is the only thing that was being written. */
 static void fail(Stream &reply, const char *why)
 {
-    snprintf(s_error, sizeof s_error, "%s", why);
-    if (s_active)
-        Update.abort();
-    s_active  = false;
-    s_total   = 0;
-    s_written = 0;
+    ota_abort(why);
     reply.print(CYD_MSG_OTAERR);
     reply.print(why);
     reply.print("\n");
@@ -114,6 +146,7 @@ static void handle_begin(const char *args, Stream &reply)
     }
 
     s_active  = true;
+    s_last_ms = millis();
     s_total   = (uint32_t)size;
     s_written = 0;
     s_error[0] = '\0';
@@ -156,6 +189,7 @@ static void handle_data(const char *b64, Stream &reply)
         return;
     }
     s_written += out_len;
+    s_last_ms  = millis();   /* progress: the transfer is alive */
     ack(reply);
 }
 

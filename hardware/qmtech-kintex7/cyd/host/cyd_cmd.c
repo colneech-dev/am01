@@ -87,16 +87,48 @@ cyd_cmd_kind_t cyd_cmd_parse(const char *line, cyd_cmd_t *out)
         return out->kind;
     }
 
-    /* set_wifi <ssid> <psk>
+    /* set_wifi "<ssid>" <psk>   (or set_wifi <ssid> <psk>, see below)
      *
      * The PSK is the LAST field and is taken WHOLE, spaces and all, because
      * WPA passphrases routinely contain them and a token split would silently
      * truncate one -- giving a board that cannot join, with a config that
-     * looks right. An SSID containing spaces is not supported and is rejected
-     * rather than half-read. */
+     * looks right.
+     *
+     * THE SSID MAY CONTAIN SPACES TOO, and this used to get it wrong. The old
+     * comment here claimed a spaced SSID was "rejected rather than half-read".
+     * Nothing rejected it: the first token became the SSID and the remainder
+     * became the PSK, so picking "BT Hub" from the scan list with the
+     * passphrase "mypassword123" stored ssid="BT" and psk="Hub mypassword123"
+     * -- 17 characters, which passes the length check below. The config looked
+     * valid, wpa_supplicant was restarted, and a headless miner left the
+     * network. The panel PRODUCES such names: its scan parser copies the rest
+     * of the line into scan_ssid[] for exactly that reason.
+     *
+     * Two free-text fields on one line need a delimiter, and " is the right
+     * one BECAUSE of the rejection below: " and \ cannot appear in either
+     * field, so a quote can never occur in the data it delimits and there is
+     * nothing to escape.
+     *
+     * An unquoted first token is still accepted, so a panel running older
+     * firmware against this daemon keeps working for the SSIDs it could
+     * already express. */
     if (strcmp(verb, CYD_CMD_SET_WIFI) == 0) {
-        p = token(p, out->ssid, sizeof out->ssid);
-        if (!p || !out->ssid[0]) goto bad;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '"') {
+            size_t n = 0;
+            p++;
+            while (*p && *p != '"' && n + 1 < sizeof out->ssid)
+                out->ssid[n++] = *p++;
+            out->ssid[n] = '\0';
+            /* Unterminated, or longer than the buffer: refuse rather than
+             * store a truncated name that would join the wrong network. */
+            if (*p != '"') goto bad;
+            p++;
+        } else {
+            p = token(p, out->ssid, sizeof out->ssid);
+            if (!p) goto bad;
+        }
+        if (!out->ssid[0]) goto bad;
         while (*p == ' ' || *p == '\t') p++;
         if (!*p) goto bad;                  /* an open network is not this */
         snprintf(out->psk, sizeof out->psk, "%s", p);

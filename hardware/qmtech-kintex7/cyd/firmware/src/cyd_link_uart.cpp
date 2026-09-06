@@ -290,10 +290,31 @@ bool cyd_link_set_wifi(cyd_link_t *link, const char *ssid, const char *psk)
     size_t n = strlen(psk);
     if (n < 8 || n > 63)          /* the daemon would reject it anyway */
         return false;
+    /* REFUSE " AND \ HERE TOO, not just at the daemon.
+     *
+     * The daemon rejects them (config-syntax injection into
+     * wpa_supplicant.conf) and silently drops the whole command. From the
+     * panel that is indistinguishable from a dead link: SAVE appears to work
+     * and nothing happens. Failing here lets the UI say so. */
+    for (const char *q = ssid; *q; q++)
+        if (*q == '"' || *q == '\\') return false;
+    for (const char *q = psk; *q; q++)
+        if (*q == '"' || *q == '\\') return false;
+
     char b[CYD_LINE_MAX];
-    /* PSK LAST and unquoted: the parser takes the remainder of the line
-     * whole, which is what lets a passphrase contain spaces. */
-    snprintf(b, sizeof b, "%s %s %s", CYD_CMD_SET_WIFI, ssid, psk);
+    /* SSID QUOTED, PSK LAST AND BARE.
+     *
+     * Both fields can contain spaces -- WPA passphrases routinely do, and the
+     * scan list hands back names like "BT Hub". Unquoted, the daemon took the
+     * first token as the SSID and the remainder as the PSK, so "BT Hub" plus
+     * "mypassword123" was stored as ssid="BT", psk="Hub mypassword123": a
+     * 17-character PSK that passes every length check, on the wrong network,
+     * on a headless miner.
+     *
+     * The quotes need no escaping because both ends refuse " outright, so the
+     * delimiter cannot occur in the delimited text. The PSK stays bare and
+     * last, which is what lets IT contain spaces. */
+    snprintf(b, sizeof b, "%s \"%s\" %s", CYD_CMD_SET_WIFI, ssid, psk);
     return send_cmd(b);
 }
 
