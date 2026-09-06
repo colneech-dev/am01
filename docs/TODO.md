@@ -265,9 +265,13 @@ temperature (53.4C -> 102, 56.6C -> 140, both correct for their band). The tach
 input reads exactly 0 in every sample — electrically quiet, so the line is held
 rather than floating and noisy.
 
-Unresolved on the hardware side: whether the fan's tach wire reaches JP5 pin 44
+Unresolved on the hardware side: whether the fan's tach wire reaches JP5 pin 46
 at all, and whether a 12V fan on this board's 5V rail produces a tach signal.
-`am01_probe fan 255` plus a meter on pin 44 settles it (expect ~1.5-1.7V while
+`am01_probe fan 255` plus a meter on pin 46 settles it -- pin 44 is V24 and
+is unconnected in this design. JP5-WIRING.md records the off-by-two that
+cost hours ("The fan's PWM and tach were wired to 43/44 ... instead of
+45/46"), and this item was still carrying it, so anyone working it would
+have metered a dead ball and concluded the tach was broken (expect ~1.5-1.7V while
 spinning if the tach is pulsing).
 
 ---

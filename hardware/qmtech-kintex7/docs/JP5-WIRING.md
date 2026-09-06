@@ -108,15 +108,15 @@ display that was strictly worse and needed the case open to change.
 
 | JP5 | Ball | was |
 |---|---|---|
-
-
-
-
-
-
-
-
-
+| 5 | AD21 | `lcd_sclk` |
+| 6 | AE21 | `lcd_mosi` |
+| 7 | AE22 | `lcd_miso` |
+| 8 | AF22 | `lcd_cs_n` |
+| 9 | AE23 | `lcd_dc` |
+| 10 | AF23 | `lcd_rst_n` |
+| 11 | V21 | `lcd_bl` |
+| 12 | W21 | `touch_cs_n` |
+| 13 | Y22 | `touch_irq` |
 
 A contiguous run of 5–13, all on BANK12 (3.3 V). Register addresses `0x10`–
 `0x17` are free with them.

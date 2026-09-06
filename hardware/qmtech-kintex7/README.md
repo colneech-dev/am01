@@ -1,6 +1,16 @@
 # AM01 + QMTECH Kintex-7 (XC7K325T) + Raspberry Pi CM4 variant
 
-Status: **proposal / work in progress**, not a verified hardware revision.
+Status: **built, flashed and mining.** Two miner instances on a QMTECH
+XC7K325T, driven by a Raspberry Pi CM4 over a bit-banged 16-bit GPIO bus,
+with an ESP32 front panel on JP5.
+
+Measured 2026-09-06: **129.21 MH/s** mean over ten samples (124.48 min,
+133.94 max) at **225 MHz**, 74 °C, with 2389 shares accepted and 0 rejected.
+A 237.50 MHz bitstream is built and closes timing at WNS +0.335 ns.
+
+Parts of this file are older than that and still describe the design as
+unbuilt; where a number here disagrees with `hdl/clk_gen_hash.v`, the RTL is
+the record.
 This sketches a second alternate AM01 build, alongside `hardware/zynq/`,
 using off-the-shelf boards instead of a custom PCB:
 
@@ -155,7 +165,12 @@ Max frequency for clock   'clk_h': 135.04 MHz  (FAIL at 150 MHz)
 | 2 instances if Vivado closes at 200 MHz | 200 | 100 MH/s |
 | Hard BRAM ceiling (bounds the problem; not reachable) | 458 | 229 MH/s |
 
-**Best current estimate for this board: ~42 MH/s.**
+**Superseded — this board MEASURES 129.21 MH/s** (ten samples, 2026-09-06,
+at 225 MHz with two instances). The ~42 MH/s below was an estimate made
+before anything was built, from a clock ceiling that later measurement moved
+a long way: 135 MHz was thought to be the limit, and the design has since
+closed timing at 237.5 MHz. The derivation is kept because the METHOD is
+still how to reason about a change; the number is not.
 
 The ~67.5 MH/s figure above is superseded and was optimistic by about
 1.6x. It rests on 135.04 MHz, which came from a static timing analysis
@@ -409,8 +424,30 @@ idea as the Zynq wrapper's register map but split to fit this bus width:
 | 5 | `HEADER_LO` | WO | Next header word, low 16 bits (staged) |
 | 6 | `HEADER_HI` | WO | High 16 bits; **writing this commits the 32-bit word** into `odo_block_data`'s header shift chain (write 19 times total) |
 | 7 | `TARGET_LO` | WO | Next target word, low 16 bits (staged) |
-| 8 | `TARGET_HI` | WO | High 16 bits; **commits** the word (write 8 times total; the 8th arms `start_hash`) |
-| 9–15 | *reserved* | — | — |
+| 8 | `TARGET_HI` | WO | High 16 bits; **commits** the word (write 8 times total; the 8th COMMITS the job) |
+| 9 | `SEED_LO` | RO | `ODO_SEED` low 16 bits — the epoch this bitstream was generated for |
+| A | `SEED_HI` | RO | `ODO_SEED` high 16 bits; a host compares this against the pool's epoch |
+| B | `TEMP` | RO | XADC die temperature, raw code (`T = code·503.975/4096 − 273.15`) |
+| C | `VCCINT` | RO | XADC supply, raw code (`V = code/4096 · 3.0`) |
+| D | `VCCAUX` | RO | XADC supply, raw code |
+| E | `VCCBRAM` | RO | XADC supply, raw code |
+| F | `FAN` | RW | r: `{tach_hz[7:0], duty[7:0]}` · w: `fan_floor`, a host-settable minimum (0 = pure auto) |
+| 10–17 | *free* | — | were the ILI9341/XPT2046 block, removed 2026-09-05 |
+| 18 | `FIFO_STAT` | RO | `{lost[7:0], 4'h0, depth[3:0]}` for the found-nonce FIFO |
+| 19 | `UART_DATA` | RW | w: push a TX byte to the panel · r: pop an RX byte |
+| 1A | `UART_STAT` | RO | `{rx_err[3:0], tx_cnt[4:0], rx_cnt[4:0], tx_full, rx_empty}`; `rx_cnt` saturates at 31 |
+| 1B | `ESP_CTRL` | WO | bit0 `EN`, bit1 `IO0` — ESP32 boot select |
+| 1C | `UART_RXCNT` | RO | RX FIFO occupancy, exact, 16 bits — use this, not `UART_STAT`'s saturating field |
+| 1D–1F | *free* | — | — |
+
+**The address bus is 5 bits**, not 4 (`gpio_addr[4]` is at ball B14 — see the
+XDC). The table above previously stopped at 8 and declared 9–15 reserved,
+which was wrong on both the contents and the width: a driver written to it
+would have had no seed check, no XADC, no fan control and no panel UART.
+
+Note also that the 8th target word **commits** a job rather than arming the
+core. Since 0x0200 the cores free-run, so there is nothing to arm — see the
+comment on `ADDR_TARGET_HI` in `hdl/odocrypt_gpio_wrapper.v`.
 
 Firmware flow is the same shape as the Zynq variant: write 19 header
 words (LO then HI each) → write 8 target words (LO then HI each) → poll
