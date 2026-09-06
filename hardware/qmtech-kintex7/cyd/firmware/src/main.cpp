@@ -63,6 +63,21 @@ void setup(void)
     g_ui.dim_level     = g_prefs.getUChar("dim_lvl", g_ui.dim_level);
     g_ui.dim_timeout_s = g_prefs.getULong("dim_tmo", g_ui.dim_timeout_s);
 
+    /* START THE IDLE CLOCK NOW, or the panel never dims until it is touched.
+     *
+     * cyd_ui_init() leaves last_touch_ms at 0 and the only other write is a
+     * touch PRESS, while the backlight block below requires a non-zero value
+     * before it will dim at all. So after every restart -- including the one
+     * an OTA performs, which is precisely why these settings are persisted --
+     * the panel sat at 100% indefinitely while SETTINGS displayed the saved
+     * level and timeout. Reported as "dim settings not saved"; they were
+     * saved, reloaded, and then never applied.
+     *
+     * Seeding it at boot means the timeout runs from power-on, which is the
+     * behaviour a user setting "dim after 60s" is asking for. */
+    g_ui.last_touch_ms = millis();
+    if (g_ui.last_touch_ms == 0) g_ui.last_touch_ms = 1;   /* 0 means unset */
+
     cyd_ui_backend_init();     /* TFT, rotation, backlight */
 
     {
@@ -299,28 +314,38 @@ void loop(void)
      * budget and there is no reason to spend it on intermediate values nobody
      * chose. Written once the setting has been still for 3 seconds. */
     {
-        static uint8_t  saved_level = 0xFF;
-        static uint32_t saved_tmo   = 0xFFFFFFFFu;
+        /* SEEDED FROM WHAT WAS LOADED, not from "unknown" sentinels.
+         *
+         * These were 0xFF / 0xFFFFFFFF, which differ from whatever came out of
+         * NVS, so `changed` was true on the very first pass and the debounce
+         * started running at boot. Three seconds later the sentinel guard
+         * correctly SKIPPED the write -- and then latched the current values
+         * as saved anyway. Any change made inside that window was therefore
+         * recorded as already-saved and never written: it reverted on the next
+         * reboot and could only be persisted by changing it a second time.
+         *
+         * Seeding removes the sentinels and the special case with them --
+         * `changed` is simply false until the user changes something. */
+        static uint8_t  saved_level = g_ui.dim_level;
+        static uint32_t saved_tmo   = g_ui.dim_timeout_s;
         static uint32_t dirty_since;
 
         bool changed = (g_ui.dim_level != saved_level ||
                         g_ui.dim_timeout_s != saved_tmo);
 
-        if (changed && dirty_since == 0) {
+        /* Restart the timer on EVERY change, so the write happens once the
+         * value has been still for 3s -- which is what the description above
+         * has always claimed. Setting it only when dirty_since was 0 timed
+         * from the FIRST change instead, so a run of adjustments wrote a
+         * mid-sequence value and then went quiet. */
+        if (changed) {
             dirty_since = millis();
             if (dirty_since == 0) dirty_since = 1;   /* 0 means "clean" */
-        } else if (!changed) {
-            dirty_since = 0;
         }
 
         if (dirty_since && (millis() - dirty_since) > 3000) {
-            if (saved_level != 0xFF || saved_tmo != 0xFFFFFFFFu) {
-                /* Not on the first pass: those sentinels are "unknown", not a
-                 * change the user made, and writing then would put the
-                 * defaults into NVS before anyone had touched anything. */
-                g_prefs.putUChar("dim_lvl", g_ui.dim_level);
-                g_prefs.putULong("dim_tmo", g_ui.dim_timeout_s);
-            }
+            g_prefs.putUChar("dim_lvl", g_ui.dim_level);
+            g_prefs.putULong("dim_tmo", g_ui.dim_timeout_s);
             saved_level = g_ui.dim_level;
             saved_tmo   = g_ui.dim_timeout_s;
             dirty_since = 0;
@@ -334,6 +359,9 @@ void loop(void)
     {
         static uint8_t applied = 255;
         uint8_t want = 100;
+        /* last_touch_ms is seeded at boot (see setup), so this no longer
+         * waits for a first touch before it will dim. The non-zero test stays
+         * as a guard against an unset value. */
         if (g_ui.dim_timeout_s > 0 && g_ui.last_touch_ms) {
             uint32_t idle = millis() - g_ui.last_touch_ms;
             if (idle > g_ui.dim_timeout_s * 1000u)
