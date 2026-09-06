@@ -379,7 +379,15 @@ static struct gpiod_chip *open_soc_gpiochip(void)
     gpiod_foreach_chip(iter, chip) {
         const char *label = gpiod_chip_label(chip);
         if (label && strncmp(label, "pinctrl-bcm", 11) == 0 &&
-            gpiod_chip_num_lines(chip) > IRQ_OFFSET) {
+            /* AGAINST THE HIGHEST OFFSET ACTUALLY USED, which is
+             * ADDR_OFFSETS[4] = 24, not IRQ_OFFSET = 23. The old test
+             * accepted a chip with exactly 24 lines (offsets 0..23) and would
+             * then fail at gpiod_chip_get_line(chip, 24) -- while the comment
+             * above it already said "the bus needs offsets up to 24", so the
+             * code contradicted its own description. Not reachable on
+             * pinctrl-bcm2711 (58 lines); the check simply did not do what it
+             * claimed. */
+            gpiod_chip_num_lines(chip) > (int)ADDR_OFFSETS[NUM_ADDR_LINES-1]) {
             found = chip;
             break;      /* iterator will not close the one we keep */
         }

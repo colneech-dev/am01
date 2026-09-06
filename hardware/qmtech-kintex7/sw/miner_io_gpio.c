@@ -220,19 +220,27 @@ int miner_io_pipe_wait(int timeout_ms)
     if (am01_bus_wait_irq(g_bus, ms) == 0)
         return 0;
 
-    if (errno == ETIMEDOUT) {
-        /* The display slice used to run here. The ILI9341 panel was removed
-         * on 2026-09-05 -- the CYD replaced it -- so the mining loop no
-         * longer yields anything to a second display. */
-                return 1;
-    }
+    /* The display slice used to run here. The ILI9341 panel was removed on
+     * 2026-09-05 -- the CYD replaced it -- so the mining loop no longer
+     * yields anything to a second display. */
+    if (errno == ETIMEDOUT)
+        return 1;               /* normal: no nonce yet */
+    if (errno == EINTR)
+        return 1;               /* a signal, not a fault -- treat as a timeout */
 
-    /* Anything else (bus error, line revoked) is worth surfacing, but the
-     * caller's contract only distinguishes ready/not-ready, so degrade to a
-     * timeout after a short sleep to avoid spinning on a persistent fault. */
+    /* A REAL FAULT IS REPORTED, not smoothed over.
+     *
+     * This used to sleep 5ms and return 1 on EVERY error, so the function
+     * could never return a negative value -- which made the caller's backoff
+     * in miner_pipe_am01.c dead code, guarded by `if (rc < 0)` on something
+     * that never went below zero, with a comment describing a recovery path
+     * that could not run. EINTR is excluded above precisely so an ordinary
+     * signal does not trip that backoff.
+     *
+     * The sleep stays: spinning on a revoked line helps nobody. */
     struct timespec ts = { .tv_sec = 0, .tv_nsec = 5L * 1000000L };
     nanosleep(&ts, NULL);
-    return 1;
+    return -1;
 }
 
 const char *miner_io_pipe_backend(void)

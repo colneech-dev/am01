@@ -419,9 +419,29 @@ static int pty_bridge(int enter_boot)
         /* ESP32 -> host */
         int r = uart_rx(buf, sizeof buf);
         if (r > 0) {
-            ssize_t unused = write(m, buf, (size_t)r);
-            (void)unused;
-            from_esp += (unsigned long)r;
+            /* RESUME FROM A PARTIAL WRITE. The master is O_NONBLOCK, so if
+             * esptool is slow to drain, write() returns EAGAIN or a short
+             * count -- and this used to discard the result and credit
+             * from_esp with the whole buffer regardless. Those ESP32 response
+             * bytes were lost while the counter claimed delivery, and esptool
+             * then waited for a reply that had been thrown away. It is defect
+             * #1 in the tcp_bridge post-mortem below, fixed there and left
+             * standing here. */
+            int off = 0;
+            while (off < r) {
+                ssize_t w = write(m, buf + off, (size_t)(r - off));
+                if (w > 0) {
+                    off += (int)w;
+                } else if (w < 0 && errno == EINTR) {
+                    continue;
+                } else {
+                    if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+                        fprintf(stderr, "pty_bridge: write failed: %s\n",
+                                strerror(errno));
+                    break;      /* reader behind; retry on the next pass */
+                }
+            }
+            from_esp += (unsigned long)off;   /* only what actually landed */
             busy = 1;
         }
 
