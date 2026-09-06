@@ -97,6 +97,27 @@ int main(void)
     ok(st.updated != st.epoch + st.uptime,
        "and differs from epoch+uptime, which was the bug");
     ok(st.temp_c == 55,         "temp_c 55");
+    /* THE ESCAPES miner_pipe_am01.c ACTUALLY EMITS.
+     *
+     * json_str() escapes quote, backslash and every control character --
+     * the last as a six-character \\uXXXX. get_str() used to skip the
+     * backslash and copy the rest, so one of those rendered on the panel
+     * as the literal text u0009. Quote and backslash came out right by
+     * the same accident. */
+    {
+        cyd_status_t e;
+        memset(&e, 0, sizeof e);
+        char js[256];
+        snprintf(js, sizeof js,
+                 "{\"hashrate\": 1.0, \"job_id\": \"a\\u0009b\", "
+                 "\"worker\": \"q\\\"r\"}");
+        ok(cyd_status_parse(js, &e), "a status carrying escapes parses");
+        ok(!strcmp(e.job_id, "a?b"),
+           "a \\u0009 control escape decodes, not 'u0009' verbatim");
+        ok(!strcmp(e.worker, "q\"r"),
+           "and an escaped quote still comes through as one quote");
+    }
+
 
     /* The rails. VCCINT is the one that matters: no current sense exists on
      * this board, so a change in the core rail is the only signal available

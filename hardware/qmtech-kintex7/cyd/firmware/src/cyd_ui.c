@@ -212,8 +212,16 @@ void cyd_ui_pool_sync(cyd_ui_t *ui, const cyd_status_t *st)
      * the OLD host and port and the NEW worker -- written to /boot, surviving a
      * reflash, with nothing on screen to say the host was not the one typed.
      * Shares would go to the old pool under a worker that may not exist there. */
+    /* WIFI_LIST belongs in this list too, and was missing.
+     *
+     * The sync runs on every status tick, once a second. Standing in the scan
+     * results with a network already picked, the next tick overwrote
+     * ui->wifi_ssid with whatever the miner is currently associated to -- so
+     * the selection silently reverted to the OLD network while the screen
+     * still showed the list. */
     if (ui->screen == CYD_SCREEN_POOL || ui->screen == CYD_SCREEN_KEYBOARD ||
-        ui->screen == CYD_SCREEN_WIFI || ui->screen == CYD_SCREEN_CONFIRM)
+        ui->screen == CYD_SCREEN_WIFI || ui->screen == CYD_SCREEN_CONFIRM ||
+        ui->screen == CYD_SCREEN_WIFI_LIST)
         return;
 
     /* THE WORKER IS PREFILLED TOO, now that the miner publishes it.
@@ -312,11 +320,9 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
             else if (i == 3) ui->screen = CYD_SCREEN_WIFI;
             else if (i == 4) { ui->pending = CYD_ACTION_RESTART;
                                ui->confirm_from = ui->screen;
-                ui->confirm_from = ui->screen;
                                ui->screen  = CYD_SCREEN_CONFIRM; }
             else if (i == 5) { ui->pending = CYD_ACTION_REBOOT;
                                ui->confirm_from = ui->screen;
-                ui->confirm_from = ui->screen;
                                ui->screen  = CYD_SCREEN_CONFIRM; }
             else             ui->screen = CYD_SCREEN_GLANCE;   /* CANCEL */
             return CYD_ACTION_NONE;
@@ -361,7 +367,18 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
              * silently dropped -- and a headless board that cannot join is one
              * somebody has to walk to. */
             size_t n = strlen(ui->wifi_psk);
-            if (ui->wifi_ssid[0] && n >= 8 && n <= 63) {
+            /* AND NO QUOTES OR BACKSLASHES. Both the panel's link layer and
+             * the daemon's parser refuse them -- they would break
+             * wpa_supplicant.conf's quoting -- so allowing SAVE here led to a
+             * confirmation screen, a press, and nothing happening. Checking
+             * the same rule at the point the button is offered means the form
+             * can say why instead. */
+            bool safe = true;
+            for (const char *q = ui->wifi_ssid; *q; q++)
+                if (*q == '"' || *q == '\\') { safe = false; break; }
+            for (const char *q = ui->wifi_psk; *q; q++)
+                if (*q == '"' || *q == '\\') { safe = false; break; }
+            if (safe && ui->wifi_ssid[0] && n >= 8 && n <= 63) {
                 ui->pending = CYD_ACTION_SET_WIFI;
                 ui->confirm_from = ui->screen;
                 ui->screen  = CYD_SCREEN_CONFIRM;
@@ -470,12 +487,23 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
         for (int i = 0; i < CYD_WL_ROWS && i < ui->scan_n; i++) {
             if (!cyd_rect_hit(CYD_WL_ROW(i), x, y))
                 continue;
-            /* Copy the name in and go back to the form. The PSK is NOT
-             * touched: picking a network is not the same as knowing its
-             * password, and silently keeping the previous one would be a
-             * good way to fail to connect for a reason nobody can see. */
+            /* Copy the name in, CLEAR THE PASSPHRASE, and go back.
+             *
+             * The comment here used to say the PSK was deliberately left
+             * alone -- and then justified that with "silently keeping the
+             * previous one would be a good way to fail to connect for a
+             * reason nobody can see", which is the argument for clearing it.
+             * The code did the opposite of its own reasoning: pick network A,
+             * type its password, change your mind and pick B, and B was saved
+             * with A's passphrase. The form even showed it masked, so it
+             * looked deliberate.
+             *
+             * Clearing costs a retype when someone re-picks the network they
+             * were already on. That is much cheaper than writing a wrong
+             * password to /boot on a headless board. */
             snprintf(ui->wifi_ssid, sizeof ui->wifi_ssid, "%s",
                      ui->scan_ssid[i]);
+            ui->wifi_psk[0] = '\0';
             ui->screen = CYD_SCREEN_WIFI;
             return CYD_ACTION_NONE;
         }
@@ -500,12 +528,7 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
                 /* Opens at the END, which is where an append-style edit
                  * expects to start. */
                 ui->kb_cursor = buf ? strlen(buf) : 0;
-        ui->kb_reveal = false;
-        ui->kb_view   = 0;
-        cyd_ui_kb_follow(ui, buf ? strlen(buf) : 0);
                 ui->kb_reveal = false;
-        ui->kb_view   = 0;
-        cyd_ui_kb_follow(ui, buf ? strlen(buf) : 0);
                 ui->kb_view   = 0;
                 cyd_ui_kb_follow(ui, buf ? strlen(buf) : 0);
                 ui->screen = CYD_SCREEN_KEYBOARD;
@@ -569,8 +592,8 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
             return CYD_ACTION_NONE;
         }
         if (cyd_rect_hit(CYD_KB_RIGHT, x, y)) {
-            size_t cap = 0;
-            char *buf = cyd_ui_field(ui, ui->edit_field, &cap);
+            /* buf/cap come from the case scope above -- redeclaring them here
+             * shadowed the outer pair (-Wshadow) for no gain. */
             size_t len = buf ? strlen(buf) : 0;
             if (ui->kb_cursor < len)
                 ui->kb_cursor++;
@@ -581,8 +604,6 @@ static cyd_action_t touch_inner(cyd_ui_t *ui, int x, int y)
             /* Empties the field. NOT the same as CANCEL, which restores what
              * was there when the keyboard opened -- this is "I want this
              * blank", and CANCEL can still undo it. */
-            size_t cap = 0;
-            char *buf = cyd_ui_field(ui, ui->edit_field, &cap);
             if (buf && cap)
                 buf[0] = '\0';
             ui->kb_cursor = 0;

@@ -580,6 +580,18 @@ int main(void)
         cyd_ui_pool_sync(&ui, &st);
         ok(!strcmp(ui.pool_host, "half-typed"),
            "nor while the wifi editor is open");
+
+        /* THE SCAN LIST WAS MISSING FROM THAT GUARD. Standing in the results
+         * with a network picked, the next status tick -- one a second --
+         * overwrote wifi_ssid with whatever the miner is associated to, so
+         * the selection silently reverted to the old network while the list
+         * was still on screen. */
+        snprintf(st.wifi_ssid, sizeof st.wifi_ssid, "TheOldNetwork");
+        ui.screen = CYD_SCREEN_WIFI_LIST;
+        snprintf(ui.wifi_ssid, sizeof ui.wifi_ssid, "JustPicked");
+        cyd_ui_pool_sync(&ui, &st);
+        ok(!strcmp(ui.wifi_ssid, "JustPicked"),
+           "nor while the scan list is open -- a tick must not undo the pick");
     }
 
     /* ---- keyboard bounds ------------------------------------------------ */

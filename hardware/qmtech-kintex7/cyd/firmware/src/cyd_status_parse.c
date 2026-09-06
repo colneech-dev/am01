@@ -121,7 +121,38 @@ static int get_str(const char *s, const char *key, char *out, size_t n)
     p++;
     size_t i = 0;
     while (*p && *p != '"' && i + 1 < n) {
-        if (*p == '\\' && p[1])     /* keep escapes readable, do not decode */
+        /* DECODE THE ESCAPES THE MINER ACTUALLY EMITS.
+         *
+         * miner_pipe_am01.c's json_str() escapes quote, backslash and every
+         * control character, the last as a six-character \uXXXX. Skipping the
+         * backslash and copying the rest -- which is what this did -- turned
+         * one of those into the literal text u0009 on the panel. Quote and
+         * backslash happened to come out right by the same accident.
+         *
+         * Only the ASCII range is decoded. Anything above it becomes '?', the
+         * same substitution the WiFi scan list makes for non-ASCII SSIDs, and
+         * for the same reason: this panel draws an ASCII bitmap font. */
+        if (*p == '\\' && p[1] == 'u' &&
+            p[2] && p[3] && p[4] && p[5]) {
+            unsigned v = 0;
+            int ok = 1;
+            for (int k = 2; k < 6; k++) {
+                char c = p[k];
+                v <<= 4;
+                if      (c >= '0' && c <= '9') v |= (unsigned)(c - '0');
+                else if (c >= 'a' && c <= 'f') v |= (unsigned)(c - 'a' + 10);
+                else if (c >= 'A' && c <= 'F') v |= (unsigned)(c - 'A' + 10);
+                else { ok = 0; break; }
+            }
+            if (ok) {
+                out[i++] = (v >= 0x20 && v < 0x7F) ? (char)v : '?';
+                p += 6;
+                continue;
+            }
+            /* not four hex digits: fall through and treat it as a plain
+             * escape rather than silently eating five characters */
+        }
+        if (*p == '\\' && p[1])
             p++;
         out[i++] = *p++;
     }

@@ -996,6 +996,17 @@ static const char *POOL_LABELS[CYD_POOL_ROWS] = { "HOST", "PORT", "WORKER", "PAS
 static void draw_wifi(const cyd_ui_t *ui, const cyd_status_t *st)
 {
     static const char *L[CYD_WIFI_ROWS] = { "SSID", "PSK" };
+
+    /* "(saved)" REFERS TO THE CONFIGURED NETWORK, not to whatever is typed.
+     *
+     * wifi_psk_set says a passphrase exists for the SSID the miner is using.
+     * Testing it alone meant that typing a NEW network name still showed
+     * "******** (saved)" against it -- a password that has never been entered
+     * for that network, displayed as though it had. Both empty strings
+     * compare equal too, so a blank form matched a blank status. */
+    bool same_net = st && ui->wifi_ssid[0] && st->wifi_ssid[0] &&
+                    strcmp(ui->wifi_ssid, st->wifi_ssid) == 0;
+    bool saved_psk = same_net && st->wifi_psk_set;
     char masked[CYD_WIFI_PSK_MAX];
 
     for (int i = 0; i < CYD_WIFI_ROWS; i++) {
@@ -1004,7 +1015,7 @@ static void draw_wifi(const cyd_ui_t *ui, const cyd_status_t *st)
         bool empty = (v[0] == 0);
         /* A saved passphrase counts as set for the border too -- a red box
          * around a row that says "(saved)" would contradict itself. */
-        bool have = !empty || (i == 1 && st && st->wifi_psk_set);
+        bool have = !empty || (i == 1 && saved_psk);
         fill_rect(r, C_PANEL);
         g.drawRect(r.x, r.y, r.w, r.h, have ? C_ACCENT : C_BAD);
 
@@ -1020,7 +1031,7 @@ static void draw_wifi(const cyd_ui_t *ui, const cyd_status_t *st)
             for (size_t k = 0; k < n; k++) masked[k] = '*';
             masked[n] = 0;
             v = masked;
-        } else if (i == 1 && empty && st && st->wifi_psk_set) {
+        } else if (i == 1 && empty && saved_psk) {
             /* A PASSPHRASE IS CONFIGURED, it just is not in this buffer.
              *
              * The row used to read "-- tap to set --" here, which is simply
@@ -1042,7 +1053,7 @@ static void draw_wifi(const cyd_ui_t *ui, const cyd_status_t *st)
     size_t n = strlen(ui->wifi_psk);
     /* Not while showing a SAVED passphrase: the rule applies to what is being
      * typed, and complaining about a length nobody has entered is noise. */
-    if (ui->wifi_ssid[0] && !(n == 0 && st && st->wifi_psk_set) &&
+    if (ui->wifi_ssid[0] && !(n == 0 && saved_psk) &&
         (n < 8 || n > 63)) {
         g.setTextDatum(TL_DATUM);
         g.setTextColor(C_WARN);
