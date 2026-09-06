@@ -253,7 +253,22 @@ fit_gap_x      = fit_gap;                      // short walls, unchanged
 // low-Y wall 10.2 + 2.4 = 12.6mm behind its opening. An RJ45 release latch
 // cannot be reached 12.6mm inside a 19 x 15mm window, so the Ethernet lead
 // went in and did not come out.
-fit_gap_y_lo   = fit_gap;                      // low-Y wall: the connectors
+// REVERTED 2026-09-06, SAME DAY. This was fit_gap on the low-Y wall, which
+// narrowed the case by 9mm -- correct on the merits (nothing stands off that
+// wall, and 10.2mm of gap put an RJ45's release latch out of finger reach),
+// and WRONG to ship, because a tray had already been printed to the 115.2mm
+// width and a 106.2mm lid does not fit it.
+//
+// Both walls are back to the same gap so the outer size returns to
+// 167.2 x 115.2. The asymmetric machinery below is kept and simply fed equal
+// values: it costs nothing, the per-side lip logic degenerates correctly, and
+// it is ready if the case is ever re-printed as a pair.
+//
+// THE ETHERNET PROBLEM IS THEREFORE STILL PRESENT: sockets on the low-Y wall
+// sit 10.2 + 2.4 = 12.6mm behind their openings, and the RJ45 latch cannot be
+// pressed that far inside a 19 x 15mm window. Fix it by setting this back to
+// `fit_gap` and reprinting BOTH parts together, not one of them.
+fit_gap_y_lo   = fit_gap + extra_side_gap_mm;  // low-Y wall: was fit_gap
 fit_gap_y_hi   = fit_gap + extra_side_gap_mm;  // high-Y wall: FT232H, switch
 fit_gap_y      = fit_gap_y_hi;  // kept for anything still reasoning about the
                                 // worst case; prefer the two above
@@ -1016,7 +1031,23 @@ cyd_center_mm     = [30, 45];
 //
 // If a future module has the sensor elsewhere, THIS is the number to change,
 // and changing the window will no longer disturb it.
-cyd_ldr_from_module_mm = 5;
+// 6.5 gives a 2.5mm GAP BETWEEN THE SCREEN CUTOUT AND THE SLOT, measured
+// 2026-09-06 on the printed lid and specified as 2.5mm.
+//
+// STATE THE REFERENCE, because two are in play and they differ by 0.5mm. The
+// lid's through-window is screen_window_mm + screen_fit_gap_mm = 69 + 1.0 =
+// 70, so its edge is 35.0 from the window centre, while the GLASS edge is at
+// 34.5. What is visible and measurable on a printed lid is the cutout, so
+// that is the frame the 2.5mm belongs to:
+//
+//   slot centre    = window/2 + margin - from_module = 34.5 + 12 - 6.5 = 40.0
+//   slot near edge = 40.0 - slot_h/2 = 37.5
+//   cutout edge    = (69 + 1.0)/2    = 35.0
+//   gap            = 2.5  <- the number asked for
+//
+// For the record, the old from_glass = 4 put the near edge at 36.0 for a
+// 1.0mm gap, which is what was measured on the print and reported.
+cyd_ldr_from_module_mm = 6.5;
 cyd_ldr_band_mm       = [8, 14];   // measured, from the short edge
 cyd_ldr_clear_mm      = 1;         // each side, for print tolerance
 cyd_ldr_both_ends     = false;     // one hole only
