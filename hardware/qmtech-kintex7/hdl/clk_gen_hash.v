@@ -87,6 +87,46 @@
 // If this does not close, fall back to MULT 18 before anything else: it is
 // still +12.5% and has more than twice the predicted margin.
 //
+// SPEED BUMP, 2026-09-05 (second of the day): MULT 18 -> 19, clk_h
+// 225.00 -> 237.50MHz (+5.6%). DIVIDE_2X stays 2.
+//
+// 225MHz IS FLASHED, MINING AND MEASURED: 129.21 MH/s mean over 10 samples
+// (124.48 min, 133.94 max) against ~111 MH/s at 200MHz, +16%, at 74C with
+// 2389 shares accepted and 0 rejected. So this rung is a bump from a known
+// good board, not from a report.
+//
+// WHY 19 AND NOT 18.5, which the entry below nominated as the next rung.
+// The note below reasoned from a FIXED critical path, and that is not how
+// this design has behaved. The ceiling has moved up every time it was
+// pushed, because Vivado stops optimising the moment the constraint is met:
+//
+//   built at 200MHz -> closed +0.763ns -> worst path 4.237ns -> implies 236MHz
+//   built at 225MHz -> closed +0.273ns -> worst path 4.171ns -> implies 239.7MHz
+//
+// Asking for 225 did not consume the 236MHz headroom, it RAISED the implied
+// ceiling. Each figure is a lower bound on what the tool would produce under
+// a tighter constraint, so predicting 19 against the 225 build's path is
+// pessimistic by construction:
+//
+//   MULT 18.5 -> 231.25MHz, 4.324ns, >= +0.153ns   the cautious rung
+//   MULT 19   -> 237.50MHz, 4.211ns, >= +0.040ns   <- chosen
+//
+// +0.040ns would be far too thin if it were a real prediction. It is a floor
+// computed from an implementation that was not trying, and the two data
+// points above both beat their equivalent floor.
+//
+// The other reason to reach: this is the first build WITHOUT the ILI9341 and
+// XPT2046 block, which takes out a shared SPI engine, a touch sequencer and
+// nine pins. Less logic and less congestion in the same fabric.
+//
+// VCO = 50 * 19 = 950MHz, inside the -1 grade's 600-1200MHz range. clk_2x
+// becomes 475MHz and still nothing consumes it in the 2-instance design.
+// bus_clk remains sys_clk_50m, so uart_bridge's CLK_HZ=50_000_000 and the
+// fan PWM divider are unaffected -- the panel does not rebaud.
+//
+// IF THIS DOES NOT CLOSE, fall back to MULT 18.5 (231.25MHz) before anything
+// else; 225 stays flashed and earning either way.
+//
 // SPEED BUMP, 2026-09-05: MULT 24 -> 18, DIVIDE_2X 3 -> 2,
 // clk_h 200.00 -> 225.00MHz (+12.5%).
 //
@@ -123,8 +163,8 @@
 
 module clk_gen_hash #(
     parameter CLKIN_PERIOD_NS = 20.000, // 50MHz input
-    parameter CLKFBOUT_MULT   = 18,     // VCO = 50MHz * 18 = 900MHz (7-series -1: 600-1200MHz range)
-    parameter CLKOUT_DIVIDE_2X = 2      // clk_2x = 900/2 = 450MHz, clk_h = 900/4 = 225MHz
+    parameter CLKFBOUT_MULT   = 19,     // VCO = 50MHz * 19 = 950MHz (7-series -1: 600-1200MHz range)
+    parameter CLKOUT_DIVIDE_2X = 2      // clk_2x = 950/2 = 475MHz, clk_h = 950/4 = 237.5MHz
 )
 (
     input  wire clk_in,     // from sys_clk_50m (via IBUF upstream)
