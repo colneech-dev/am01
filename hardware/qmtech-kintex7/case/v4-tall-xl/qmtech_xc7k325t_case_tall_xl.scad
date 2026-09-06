@@ -972,17 +972,31 @@ lid_fan_screw_pitch = 32;    // standard for a 40mm fan
 lid_fan_screw_d     = 3.2;   // M3 clearance
 lid_fan_recess      = 4;     // of lid_thickness (6), leaving 2mm of floor
 
-// 1R5 is at board (144, 38), MEASURED. The fan is NOT centred on it.
+// 1R5 is at board (144, 52), MEASURED 2026-09-06: 16mm in from the switch/jack
+// edge and 38mm in from the JP5 edge.
+//
+// NOTE THE Y CONVENTION -- it is a trap and it caught me once. board_y()'s
+// parameter is y_from_top, and y_from_top = 0 is the HIGH-y board edge (model
+// y 102.6). JP5 and the USB/Ethernet cluster sit on the LOW-y edge, which is
+// y_from_top = 90. So "38mm from the JP5 edge" is y_from_top = 90 - 38 = 52,
+// not 38. Placing it at 38 put the fan 14mm off the target.
+//
+// The corrected value agrees with the photograph: along that edge the order
+// becomes 1R5 (model y 50.6), SW4 (65.1), JP1 (80.6).
+//
+// The fan is NOT centred on it.
 //
 // A fan's hub is dead air -- the axis moves nothing. Peak velocity sits out
 // around 0.6-0.7 of the radius, which for a 40mm fan is 12-14mm off centre.
 // Putting the target under the hub is the one placement that wastes the fan.
-// Centre (140, 28) leaves 1R5 10.8mm off-axis, inside that annulus, while
-// keeping the frame 3.6mm clear of the lid edge (spans board x 120..160).
+// Centre (140, 62) leaves 1R5 10.8mm off-axis, inside that annulus, while
+// keeping the frame 3.6mm clear of the lid edge (spans board x 120..160,
+// y_from_top 42..82). Offsetting AWAY from the heatsink rather than toward it
+// also trims the overlap with its footprint.
 //
 // It overlaps the heatsink's plan area on its inboard side. That air is not
 // lost: it goes into the fins.
-lid_fan_center_mm   = [140, 28];
+lid_fan_center_mm   = [140, 62];
 
 // ---- selected by VARIANT_SCREEN --------------------------------------
 is_cyd            = (VARIANT_SCREEN == "cyd");
