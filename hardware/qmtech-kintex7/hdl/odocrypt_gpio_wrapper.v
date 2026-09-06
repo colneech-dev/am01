@@ -1362,7 +1362,7 @@ module odocrypt_gpio_wrapper #(
                 // Tell clk_h the latch is free.
                 //
                 // GATED ON nonce_valid_reg, and that is load-bearing.
-                // nonce_valid_clear_pulse is NOT a one-cycle pulse despite the
+                // nonce_valid_clear_pulse IS a one-cycle pulse as of 0x0201. It was not, and the
                 // name: S_READ persists until the CM4 releases RD_N, and the
                 // ADDR_NONCE_HI case re-asserts it on every cycle in between --
                 // hundreds of bus_clk cycles over a bit-banged GPIO bus. It was

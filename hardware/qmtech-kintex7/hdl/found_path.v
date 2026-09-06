@@ -108,10 +108,33 @@ module found_path #(
     // Find collection.
     //
     // Both cores run off the same clock and the same THROUGHPUT counter, so
-    // they can strobe on the same cycle. Scan for the first two; anything
-    // beyond that would need NUM_MINERS > 2, which the BRAM budget does not
-    // allow, and is counted as lost rather than assumed impossible.
+    // they can strobe on the same cycle. This scans for the first TWO and
+    // stashes one overflow, so it absorbs at most two simultaneous finds per
+    // cycle plus a held third.
+    //
+    // THAT IS A HARD LIMIT ON NUM_MINERS, and it used to be justified by "the
+    // BRAM budget does not allow" more than two. hdl/mux4 instantiates this
+    // with NUM_MINERS=4, which breaks the premise: with four cores in
+    // lockstep, a cycle where three strobe together runs lost_inc = hits - 2
+    // and discards the third nonce. It is COUNTED in `lost` rather than
+    // dropped silently, so it is at least visible -- but the module is being
+    // used outside the regime it documents, and at a 1-in-256 target that is
+    // a real share thrown away.
+    //
+    // The generate below fails elaboration rather than letting a 4-instance
+    // build look correct. Raising the limit means widening this scan and the
+    // stash, not relaxing the check.
     // ---------------------------------------------------------------
+    // Elaboration-time guard for the limit described above. Instantiating a
+    // module that does not exist is the portable way to stop a build with a
+    // name that says why -- $fatal in an initial block would fire only in
+    // simulation, not synthesis.
+    generate
+        if (NUM_MINERS > 2) begin : g_too_many_miners
+            FOUND_PATH_SUPPORTS_AT_MOST_2_MINERS_SEE_COMMENT bad();
+        end
+    endgenerate
+
     integer    fpi;
     reg [2:0]  hits;
     reg [31:0] hit_first, hit_second;
