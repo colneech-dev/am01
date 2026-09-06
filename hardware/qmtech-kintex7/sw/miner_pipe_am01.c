@@ -242,6 +242,82 @@ static void stats_load(void)
     fclose(f);
 }
 
+/* Difficulty and block bookkeeping for a share that has just been submitted.
+ * Returns the share's difficulty so the caller can log it.
+ *
+ * FACTORED OUT because it existed on only ONE of the two drain paths. The
+ * handover drain -- the few hundred microseconds while a new job's 27 words
+ * are being written, during which the core is still returning nonces for the
+ * previous job -- submitted its shares correctly and then recorded none of
+ * this: no difficulty, no best_diff_session, no best_diff_alltime, no
+ * target_met against the NETWORK target, no blocks_found, no last_block, no
+ * banner, and no stats_save(). A genuine block found in that window would
+ * have been paid by the pool and left no local trace whatsoever.
+ *
+ * Copying the block into the second path would have fixed today's bug and
+ * left the next one; one function called from both cannot drift. */
+/* JSON string escaping for the few fields that are not ours.
+ *
+ * status.json interpolates the pool's job_id, the access point's SSID, and
+ * the configured worker straight into quoted values. A pool issuing a job_id
+ * of a"b -- or an SSID containing a quote or a trailing backslash -- produced
+ * a syntactically invalid file, and odo-webd, odo-ui and the CYD panel all
+ * failed to parse it. The panel then displays MINER DOWN while the miner is
+ * mining perfectly, which is the worst kind of wrong: it invites someone to
+ * go and "fix" a healthy board.
+ *
+ * Escaping rather than rejecting, because these values are not ours to
+ * refuse -- the pool picks the job_id and the neighbour picks the SSID. */
+static const char *json_str(const char *in, char *out, size_t cap)
+{
+    size_t o = 0;
+    if (!in) in = "";
+    for (; *in && o + 7 < cap; in++) {
+        unsigned char c = (unsigned char)*in;
+        if (c == '"' || c == '\\') {
+            out[o++] = '\\'; out[o++] = (char)c;
+        } else if (c < 0x20) {
+            /* Control characters are not legal raw in a JSON string, and a
+             * stray one from a corrupted line would break the file just as
+             * surely as a quote. */
+            o += (size_t)snprintf(out + o, cap - o, "\\u%04x", c);
+        } else {
+            out[o++] = (char)c;
+        }
+    }
+    out[o] = '\0';
+    return out;
+}
+
+static void stats_save(void);
+static double hash_to_difficulty(const uint8_t hash_le[32]);
+
+static double account_share(const uint8_t h[32], const job_t *j,
+                            uint32_t nonce, const char *tag)
+{
+    double d = hash_to_difficulty(h);
+
+    if (d > g_st.best_diff_session)
+        g_st.best_diff_session = d;
+    int new_best = (d > g_st.best_diff_alltime);
+    if (new_best)
+        g_st.best_diff_alltime = d;
+
+    /* j->target is the NETWORK target; j->share_target is the pool's. Only
+     * the former makes it a block. */
+    int is_block = target_met(h, j->target);
+    if (is_block) {
+        g_st.blocks_found++;
+        g_st.last_block = time(NULL);
+        printf("[pipe] *** BLOCK FOUND ***%s job=%s nonce=0x%08" PRIx32
+               " diff=%.6g (blocks_found=%" PRIu64 ")\n",
+               tag, j->job_id, nonce, d, g_st.blocks_found);
+    }
+    if (new_best || is_block)
+        stats_save();
+    return d;
+}
+
 static void stats_save(void)
 {
     FILE *f = fopen(PIPE_STATS_PATH ".tmp", "w");
@@ -440,6 +516,13 @@ static void status_write(void)
     first_ipv4(ip, sizeof ip);
     char wssid[IW_ESSID_MAX_SIZE + 1] = "";
     wifi_ssid(wssid, sizeof wssid);
+    /* Escaped copies. Sized x6 + 1 because the worst case is every byte
+     * expanding to a six-character backslash-u escape. */
+    char jbuf_pool[sizeof g_st.pool * 6 + 1];
+    char jbuf_ip[sizeof ip * 6 + 1];
+    char jbuf_worker[sizeof g_worker * 6 + 1];
+    char jbuf_ssid[sizeof wssid * 6 + 1];
+    char jbuf_job[sizeof g_st.job_id * 6 + 1];
     double up = mono_s() - g_mono_start;          /* elapsed, clock-step safe */
     g_st.hashrate = (up > 0.0) ? g_st.work_acc / up : 0.0;
     /* long long, not long: on 32-bit ARM `long` is 32-bit and these Unix-time
@@ -484,12 +567,19 @@ static void status_write(void)
         "  \"uptime\": %lld,\n"
         "  \"updated\": %lld\n"
         "}\n",
-        g_st.pool,
-        ip,
-        g_worker,
-        wssid, wifi_psk_configured() ? "true" : "false",
+        /* ESCAPED. The pool picks job_id and the neighbour picks the SSID,
+         * and either can contain a quote or a backslash -- which made
+         * status.json unparseable and had the panel report MINER DOWN on a
+         * perfectly healthy miner. pool/ip/worker are ours, but go through
+         * the same path so nothing here is a special case. */
+        json_str(g_st.pool,  jbuf_pool,   sizeof jbuf_pool),
+        json_str(ip,         jbuf_ip,     sizeof jbuf_ip),
+        json_str(g_worker,   jbuf_worker, sizeof jbuf_worker),
+        json_str(wssid,      jbuf_ssid,   sizeof jbuf_ssid),
+        wifi_psk_configured() ? "true" : "false",
         wifi_rssi(),
-        g_st.connected ? "true" : "false", g_st.job_id,
+        g_st.connected ? "true" : "false",
+        json_str(g_st.job_id, jbuf_job, sizeof jbuf_job),
         g_st.epoch, g_st.bitstream_epoch, g_st.epoch_interval, enext, g_st.hashrate,
         g_st.found, g_st.shares, g_st.shares_accepted, g_st.shares_rejected,
         (long long)g_st.last_share,
@@ -732,22 +822,7 @@ int main(int argc, char **argv)
                             g_st.shares     = shares;
                             g_st.last_share = time(NULL);
                             g_st.work_acc  += share_work(disp.share_target);
-                            double d = hash_to_difficulty(h);
-                            if (d > g_st.best_diff_session)
-                                g_st.best_diff_session = d;
-                            int new_best = (d > g_st.best_diff_alltime);
-                            if (new_best)
-                                g_st.best_diff_alltime = d;
-                            int is_block = target_met(h, disp.target);
-                            if (is_block) {
-                                g_st.blocks_found++;
-                                g_st.last_block = time(NULL);
-                                printf("[pipe] *** BLOCK FOUND *** job=%s nonce=0x%08"
-                                       PRIx32 " diff=%.6g (blocks_found=%" PRIu64 ")\n",
-                                       cur.job_id, nonce, d, g_st.blocks_found);
-                            }
-                            if (new_best || is_block)
-                                stats_save();
+                            double d = account_share(h, &disp, nonce, "");
                             printf("[pipe] SHARE job=%s nonce=0x%08" PRIx32
                                    " diff=%.6g (found=%" PRIu64 " shares=%" PRIu64 ")\n",
                                    cur.job_id, nonce, d, found, shares);
@@ -843,9 +918,15 @@ int main(int argc, char **argv)
                                     g_st.shares     = shares;
                                     g_st.last_share = time(NULL);
                                     g_st.work_acc  += share_work(prev.share_target);
+                                    /* The accounting the main path does. This
+                                     * is where a block could previously be
+                                     * submitted and never recorded. */
+                                    double gd = account_share(gh, &prev,
+                                                              gap_nonce,
+                                                              " (handover)");
                                     printf("[pipe] SHARE (handover) job=%s "
-                                           "nonce=0x%08" PRIx32 "\n",
-                                           prev.job_id, gap_nonce);
+                                           "nonce=0x%08" PRIx32 " diff=%.6g\n",
+                                           prev.job_id, gap_nonce, gd);
                                 }
                             } else {
                                 stale++;
