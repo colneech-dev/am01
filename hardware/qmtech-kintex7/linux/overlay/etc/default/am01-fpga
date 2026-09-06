@@ -50,8 +50,27 @@ FPGA_OPTS="-c ft232 --freq 1000000"
 #
 #   systemctl stop odo-miner
 #   echo -n '1-1.1:1.0' > /sys/bus/usb/drivers/ftdi_sio/unbind
-#   openFPGALoader -c ft232 --freq 1000000 \
+#   openFPGALoader -c ft232 --freq 500000 \
 #       --fpga-part xc7k325tffg676 --unprotect-flash -f /boot/am01.bit
+#
+# 500000, NOT 1000000, FOR A FLASH WRITE. Measured 2026-09-06: two
+# consecutive attempts at 1 MHz failed after about nine seconds with
+#
+#   timeout: 5 40 97
+#   wait: Error
+#   write en: Error
+#
+# -- the SPI write-enable timing out, the same signature this file already
+# records for 6 MHz, just further along. The identical command at 500 kHz
+# wrote all 9.8MB cleanly and read back the expected VERSION. An SRAM load
+# at 1 MHz still works; only the bidirectional SPI-over-JTAG traffic of a
+# FLASH WRITE is marginal.
+#
+# AND VERIFY THE UNBIND TOOK. One failure today traced to ftdi_sio having
+# re-claimed the device, with the error swallowed by `|| true`. Check before
+# spending five minutes on a write:
+#
+#   ls /sys/bus/usb/drivers/ftdi_sio/ | grep -q "^1-" && echo STILL BOUND
 #
 # --fpga-part is REQUIRED for a flash write: openFPGALoader loads a
 # spiOverJtag helper bitstream to reach the flash chip and needs the exact
