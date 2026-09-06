@@ -958,6 +958,32 @@ cyd_ldr_far_end       = false;     // LOWER position: 7-15mm from the high-X edg
 cyd_ldr_slot_mm       = [cyd_ldr_band_mm[1] - cyd_ldr_band_mm[0]
                          + 2*cyd_ldr_clear_mm, 5];   // X extent, Y extent
 
+// ---- Lid intake fan, over 1R5 ---------------------------------------
+//
+// The input buck's inductor runs too hot to hold at 225MHz -- the board is
+// specified for 2A @ 6V (12W) and we are past the clock that budget was
+// written for. This is a dedicated jet onto it. It does not make the input
+// stage bigger; it makes the temperature survivable.
+lid_fan_enable      = true;
+lid_fan_size        = 40;    // ACP4010-05PWM, 40 x 40 x 10, DC 5V 0.10A
+lid_fan_thickness   = 10;
+lid_fan_bore_d      = 38;    // air path; the frame is 40 across the corners
+lid_fan_screw_pitch = 32;    // standard for a 40mm fan
+lid_fan_screw_d     = 3.2;   // M3 clearance
+lid_fan_recess      = 4;     // of lid_thickness (6), leaving 2mm of floor
+
+// 1R5 is at board (144, 38), MEASURED. The fan is NOT centred on it.
+//
+// A fan's hub is dead air -- the axis moves nothing. Peak velocity sits out
+// around 0.6-0.7 of the radius, which for a 40mm fan is 12-14mm off centre.
+// Putting the target under the hub is the one placement that wastes the fan.
+// Centre (140, 28) leaves 1R5 10.8mm off-axis, inside that annulus, while
+// keeping the frame 3.6mm clear of the lid edge (spans board x 120..160).
+//
+// It overlaps the heatsink's plan area on its inboard side. That air is not
+// lost: it goes into the fins.
+lid_fan_center_mm   = [140, 28];
+
 // ---- selected by VARIANT_SCREEN --------------------------------------
 is_cyd            = (VARIANT_SCREEN == "cyd");
 screen_module_mm  = is_cyd ? cyd_module_mm     : ili_module_mm;
@@ -1558,6 +1584,16 @@ module lid_screen_cutout() {
 // True when a vent hole would land on the screen module's footprint. Holes
 // there would perforate the flange ledges the module sits on, and holes inside
 // the window are meaningless because it is already open.
+// Vents under the fan would let it draw straight back through the lid beside
+// itself rather than through the case -- a short circuit that produces noise
+// and no cooling. The halo is the frame plus 3mm.
+function vent_clear_of_fan(x, y) =
+    !lid_fan_enable ? true :
+    let (cx = board_origin[0] + lid_fan_center_mm[0],
+         cy = board_y(lid_fan_center_mm[1]),
+         h  = lid_fan_size/2 + 3)
+    !(x > cx - h && x < cx + h && y > cy - h && y < cy + h);
+
 function vent_clear_of_screen(x, y) =
     let (cx = board_origin[0] + screen_center_mm[0],
          cy = board_y(screen_center_mm[1]),
@@ -1584,7 +1620,7 @@ module lid_fpga_vent_holes() {
             for (i = [0:nx-1]) {
                 px = x0 + i*vent_hole_pitch + xoff;
                 py = y0 + j*row_dy;
-                if (vent_clear_of_screen(px, py))
+                if (vent_clear_of_screen(px, py) && vent_clear_of_fan(px, py))
                     translate([px, py, -1])
                         linear_extrude(height = lid_thickness + 2)
                             rotate([0, 0, 30])
@@ -1592,6 +1628,33 @@ module lid_fpga_vent_holes() {
                                        $fn = (vent_shape == "hex") ? 6 : 16);
             }
         }
+    }
+}
+
+// The fan drops into a pocket in the lid's TOP face and blows down through the
+// bore. Nothing protrudes below the lid -- see the header note about the
+// heatsink stack reaching exactly the same height.
+module lid_fan_cutout() {
+    if (lid_fan_enable) {
+        cx = board_origin[0] + lid_fan_center_mm[0];
+        cy = board_y(lid_fan_center_mm[1]);
+        fit = 0.6;       // per-side clearance so a 40mm frame drops in
+        fuse_eps = 0.05; // local, as in the other modules -- it is not global
+
+        // Locating pocket, open at the top.
+        translate([cx, cy, lid_thickness - lid_fan_recess])
+            linear_extrude(height = lid_fan_recess + fuse_eps)
+                square([lid_fan_size + 2*fit, lid_fan_size + 2*fit], center = true);
+
+        // Air path, all the way through.
+        translate([cx, cy, -1])
+            cylinder(h = lid_thickness + 2, d = lid_fan_bore_d, $fn = 64);
+
+        // Four M3 clearance holes through the 2mm floor.
+        for (dx = [-1, 1], dy = [-1, 1])
+            translate([cx + dx*lid_fan_screw_pitch/2,
+                       cy + dy*lid_fan_screw_pitch/2, -1])
+                cylinder(h = lid_thickness + 2, d = lid_fan_screw_d, $fn = 24);
     }
 }
 
@@ -1605,9 +1668,18 @@ module lid() {
             }
             lid_fpga_vent_holes();
             lid_screen_cutout();
+            lid_fan_cutout();
         }
     }
 }
+
+// The fan must sit entirely on the lid, and its screws must land in material.
+assert(!lid_fan_enable ||
+       (board_origin[0] + lid_fan_center_mm[0] - lid_fan_size/2 > 0 &&
+        board_origin[0] + lid_fan_center_mm[0] + lid_fan_size/2 < outer_length),
+       "lid fan overhangs the lid in X -- move lid_fan_center_mm");
+assert(!lid_fan_enable || lid_fan_recess < lid_thickness,
+       "lid fan recess must leave a floor for the screws to pull against");
 
 // Sanity-check echo: confirms (at compile time, in the console/log) how
 // much margin this variant's wall_height leaves over the real heatsink's
