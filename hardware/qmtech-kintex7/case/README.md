@@ -136,7 +136,7 @@ imprecision:
   position tables) and is capped by `wall_cutout_h()` so it never eats
   into the last `wall_roof_min_mm` (3mm) of the wall -- every side now
   keeps a genuinely continuous, full top edge, confirmed by rendering
-  each wall from directly outside (see `v4-sealed/preview_bottomwall_detail.png`:
+  each wall from directly outside (the bottom-wall detail render lived in the retired `v4-sealed/`:
   both bottom-wall windows sit inside solid material on every side, not
   notched open at the top).
 
@@ -146,35 +146,41 @@ the real heatsink everywhere, optional venting via a perforated lid
 panel (never an opening), no CM4 panel cutout (still a low-profile
 mezzanine), square corners (still no `hull()` rounding).
 
-## Three variants
+## One tray, one lid
 
-All three share one template (`VARIANT_WALL_HEIGHT` / `VARIANT_VENTED`
-knobs at the top of each `.scad`) and differ only in those two numbers.
+There used to be three variants. Two of them -- Sealed and Vented -- were
+**deleted on 2026-09-06**, because they had become impossible twice over:
 
-| Variant | Dir | Wall height | Venting | Heatsink margin | Internal mounts | Use when |
-|---|---|---|---|---|---|---|
-| **Sealed** | `v4-sealed/` | 30.6mm | none, fully solid | 8.1mm | **omitted** | passive cooling is enough, or you want a dust/splash-resistant box |
-| **Vented** | `v4-vented/` | 30.6mm | hex honeycomb, whole lid | 8.1mm | **omitted** | same size as Sealed, adds passive convection through the perforated lid |
-| **Tall-XL** | `v4-tall-xl/` | 54.6mm | same honeycomb | 32.1mm | yes | bigger/aftermarket heatsink, a fan above the stock one, and the only variant with room for the internal FT232H and switch |
+- their lids were cut for the ILI9341 panel, which was removed from the design
+  on 2026-09-05 (see `docs/JP5-WIRING.md`); and
+- their 24mm interior cannot contain the heatsink+fan stack. That stack was
+  **measured** on 2026-09-06 at 44mm above the board's top surface, against a
+  model that had been claiming 22.5mm from a datasheet for a heatsink nobody
+  ever bought. The clearance assert in the master now refuses to build them,
+  which is how it was noticed.
 
-Wall heights are the headroom above the board's top surface. The `VARIANT_`
-knob names 24 and 48; the rest is the v4.2 compensation for the taller
-standoffs, the 6mm lid and the fan-screw clearance, added in one place so a
-variant cannot be short by an amount nobody accounted for.
+What remains:
 
-**"Internal mounts: omitted"** is not a style choice. The FT232H holder needs
-40.5mm above the board and the KAN-28 switch nest 34.35mm, and neither fits in
-30.6mm. Rather than build them through the top of a wall too short to hold
-them -- which is what the tray STLs actually did until 2026-08-30, coming out
-48.9mm tall against a 39.0mm wall -- the short variants leave them out and say
-so in the render log. If you want the FT232H or the panel switch inside the
-case, print Tall-XL.
+| Part | Rendered from | Notes |
+|---|---|---|
+| `v4-tall-xl/base_tray.stl` | `v4-tall-xl/qmtech_xc7k325t_case_tall_xl.scad` (the master) | wall 54mm above the board |
+| `v4-cyd/lid.stl` | `v4-cyd/qmtech_xc7k325t_case_cyd.scad` (generated) | aperture for the CYD panel |
 
-Outer dimensions, all variants: **167.2 x 115.2mm**, 39.0mm tall (Sealed,
-Vented) or 63.0mm (Tall-XL), plus a 9mm lid that overlaps 3mm into the tray.
+Nothing is produced twice, so nothing can drift. `render_cases.sh` regenerates
+the CYD `.scad` from the master and renders both files; do not edit `v4-cyd/`
+by hand.
 
-![Sealed, isometric](v4-sealed/preview_isometric.png)
-![Vented, isometric](v4-vented/preview_isometric.png)
+**Measured dimensions**, tray **167.2 x 115.2 x 63.4mm**, plus a **6mm** lid
+that overlaps 3mm into the tray -- so **69.4mm** closed.
+
+The 54mm wall is sized against the measured stack with 10mm left over the fan,
+which a 40mm intake fan needs in order to breathe. It is not slack: at the
+48mm this file briefly claimed, the clearance was 4mm.
+
+Both internal mounts fit -- the FT232H holder needs 40.5mm above the board and
+the KAN-28 switch nest 34.65mm. Neither fitted in the retired variants, which
+is why those omitted them and said so in the render log.
+
 ![Tall-XL, isometric](v4-tall-xl/preview_isometric.png)
 
 Each directory is self-contained:
@@ -326,7 +332,7 @@ listing.
       -- "not full sides". Fixed by capping cutout height with
       `wall_cutout_h()`; confirmed by rendering each wall from directly
       outside the case (not just the usual isometric angle) --
-      `v4-sealed/preview_bottomwall_detail.png` shows both bottom-wall
+      the retired `v4-sealed/preview_bottomwall_detail.png` showed both bottom-wall
       windows sitting inside solid material on every side.
 11. **Print a fit-check first** -- see design note 1, still not
     calipers-verified.

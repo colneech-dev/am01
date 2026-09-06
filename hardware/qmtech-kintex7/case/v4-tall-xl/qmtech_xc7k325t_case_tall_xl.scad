@@ -179,10 +179,18 @@
 // ============================================================
 
 // ============================================================
-// VARIANT KNOBS -- these two lines are all that differ between the
-// three generated files in ../v4-sealed/, ../v4-vented/, ../v4-tall-xl/.
+// VARIANT KNOBS. This file is the MASTER; render_cases.sh generates
+// ../v4-cyd/ from it by rewriting these lines. v4-sealed and v4-vented were
+// deleted on 2026-09-06 -- their lids were for the removed ILI9341 and their
+// 24mm interior could not hold the measured 44mm heatsink+fan stack.
 // ============================================================
-VARIANT_WALL_HEIGHT = 48.0;   // TALL-XL variant: extra headroom for a bigger heatsink+fan
+// 48 -> 54. Sized against the MEASURED 44mm stack, not the 22.5mm guess, and
+// leaving 10mm over the fan. At 48 the clearance was 4mm: a 40mm intake fan
+// with a solid lid 4mm above it is choked, and the model was simultaneously
+// reporting 25.5mm of margin. 54 puts the tray at 63.4mm, which is still
+// shorter than the 65.0 it was this morning -- the double-counted headroom was
+// genuinely wasted, it just was not the only error.
+VARIANT_WALL_HEIGHT = 54.0;   // TALL-XL: 44mm measured stack + 10mm over the fan
 VARIANT_VENTED       = true;  // TALL-XL: vented, extra headroom
 
 // Which display the LID is cut for. The tray is identical either way -- only
@@ -191,7 +199,12 @@ VARIANT_VENTED       = true;  // TALL-XL: vented, extra headroom
 //   "cyd"      an ESP32 "Cheap Yellow Display": 91x50, carries its own ESP32,
 //              and talks to the miner over the network or USB rather than JP5,
 //              so it needs no JP5 wiring at all
-VARIANT_SCREEN       = "ili9341";
+// "cyd", not "ili9341". The ILI9341 and its XPT2046 were removed from the
+// design on 2026-09-05 and the CYD panel replaced them, so the ili9341 numbers
+// below now describe a display that cannot be driven -- and they were the only
+// screen dimensions in this file still flagged as unmeasured. Opening this
+// master directly gives the real configuration.
+VARIANT_SCREEN       = "cyd";
 
 // ---- Board ----
 board_length    = 160;   // X, the manual's Figure 2-1 dimension
@@ -315,14 +328,34 @@ wall_height = VARIANT_WALL_HEIGHT + extra_headroom_mm;
 // mezzanine connectors and the J11-J13 header row, still read off a
 // drawing rather than measured, but a real footprint now, not "roughly
 // the board's center".
-heatsink_lwh_mm       = [27, 27, 17.5]; // BGAH270-175E, L x W x H
+// MEASURED ON THE ACTUAL PART, 2026-09-06: 41 x 40 x 20.
+//
+// Was [27, 27, 17.5] from the BGAH270-175E datasheet -- a part README.md says
+// is distributor-only and was never bought, so every number here described
+// hardware nobody has. The real heatsink is half again as wide in both axes
+// and 2.5mm taller.
+heatsink_lwh_mm       = [41, 40, 20];   // MEASURED, L x W x H
 heatsink_center_mm    = [117, 45];      // FPGA package center, board-local XY
 heatsink_xy_margin_mm = 8;              // clearance around the heatsink body,
                                          // each side (position uncertainty +
                                          // the heatsink's own mounting clips)
 fpga_chip_and_pad_mm  = 2.0;  // BGA body + thermal pad, above the PCB surface
 heatsink_assembly_margin_mm = 3.0; // safety margin (adhesive squeeze-out, tolerance)
-heatsink_total_clearance_mm = heatsink_lwh_mm[2] + fpga_chip_and_pad_mm
+// MEASURED, AND IT REPLACES THE SUM BELOW.
+//
+// Board bottom to the top of the fan sitting on the heatsink: 46mm, on 2mm of
+// board, so 44mm above the board's top surface. The sum of guesses underneath
+// (chip+pad 2.0 + heatsink 17.5 + margin 3.0 = 22.5) understated that by
+// 21.5mm -- it did not account for the fan at all, and its heatsink height was
+// from the datasheet of a part that was never purchased.
+//
+// This is the number the clearance check must use. One measurement beats three
+// stacked estimates, and the estimates are kept below only because the vent
+// footprint still derives from the heatsink's own height.
+heatsink_stack_above_pcb_mm = 44;   // MEASURED: board top -> top of fan
+heatsink_total_clearance_mm = heatsink_stack_above_pcb_mm;
+
+heatsink_guessed_clearance_mm = heatsink_lwh_mm[2] + fpga_chip_and_pad_mm
                                + heatsink_assembly_margin_mm; // = 22.5mm, PCB to top of stack
 // What this variant provides, board TOP surface to the lid's underside. The
 // lid used to be ADDED here, which is backwards -- it is solid material above
@@ -1579,9 +1612,17 @@ module lid() {
 // Sanity-check echo: confirms (at compile time, in the console/log) how
 // much margin this variant's wall_height leaves over the real heatsink's
 // needs. Should read comfortably positive.
-echo(str("heatsink clearance margin (mm): ", heatsink_margin_mm,
-         " [interior provides ", case_interior_clearance_mm,
-         ", heatsink needs ", heatsink_total_clearance_mm, "]"));
+echo(str("heatsink+fan clearance (mm): ", heatsink_margin_mm,
+         " over the fan [interior ", case_interior_clearance_mm,
+         ", MEASURED stack ", heatsink_stack_above_pcb_mm, "]"));
+// A hard stop rather than a note. This is the one dimension that cannot be
+// discovered after printing -- the lid simply will not close, and the print is
+// hours. It read "25.5mm margin" while the true figure was 4mm.
+assert(case_interior_clearance_mm >= heatsink_stack_above_pcb_mm,
+       str("INTERIOR TOO SHORT: the heatsink+fan stack measures ",
+           heatsink_stack_above_pcb_mm, "mm above the board and the interior ",
+           "provides only ", case_interior_clearance_mm,
+           "mm. Raise VARIANT_WALL_HEIGHT."));
 
 
 // Assertion: the lip must actually reach under the board. lip_ledge is
