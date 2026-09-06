@@ -9,3 +9,12 @@
 # Same reasoning applies to Python scripts: a CRLF shebang line
 # (#!/usr/bin/env python3) fails identically on Linux/WSL.
 *.py text eol=lf
+
+# The overlay's /usr/bin scripts have NO extension, so the *.sh rule above
+# does not reach them, and they are shell scripts shipped into a Linux image.
+# With core.autocrlf=true a fresh clone writes "#!/bin/sh\r" into every one of
+# them and the built image dies with "bad interpreter: /bin/sh^M" -- silently,
+# because all four are invoked by systemd units whose failure does not stop
+# mining. Same failure this file's *.sh rule exists to prevent; the rule just
+# never covered the files that had no extension.
+hardware/qmtech-kintex7/linux/overlay/usr/bin/* text eol=lf
