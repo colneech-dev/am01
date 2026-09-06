@@ -123,6 +123,24 @@ apply_set_pool() {
 	sync
 	mv -f "$tmp" "$POOL_CONF" || { deny set_pool "rename failed"; rm -f "$tmp"; return; }
 	sync
+
+	# AND MAKE IT TAKE EFFECT NOW.
+	#
+	# Writing /boot alone was not enough, and it looked like it was. /boot is
+	# the source of truth, but the only thing that installs it into
+	# /etc/default/odo-miner is am01-miner-provision.service -- a
+	# Type=oneshot RemainAfterExit=yes unit that runs once per boot. So a pool
+	# change applied at the NEXT REBOOT, while the panel's own "restart miner"
+	# button restarted odo-miner against the OLD /etc/default and the journal
+	# said "pool set to ...". Everything reported success and the miner kept
+	# hashing to the previous pool.
+	#
+	# Re-running the provisioning unit installs it (its own hash-stamp check
+	# sees the file changed), and restarting the miner picks it up. Neither is
+	# fatal if it fails: the config is on /boot either way and a reboot still
+	# applies it, which is worth saying rather than pretending.
+	systemctl restart am01-miner-provision.service 		|| say "provisioning failed; the pool applies at next boot"
+	systemctl --no-block restart odo-miner 		|| say "miner restart failed; the pool applies at next boot"
 	say "pool set to $host:$port worker $worker"
 }
 

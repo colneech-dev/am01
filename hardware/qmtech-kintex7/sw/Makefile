@@ -128,7 +128,15 @@ OBJECTS_DAEMON := $(call objects,$(SOURCES_DAEMON) $(SOURCES_CRYPTO) \
 # Binary: odo-webd (HTTP status server)
 # =====================================================================
 
-SOURCES_WEBD := $(ODO_SW)/odo-webd/odo_webd.c
+# LOCAL COPY, not the sibling repo's. See odo-webd/odo_webd_am01.c: three of
+# its six controls were written for the Cyclone V's BusyBox image and wrote
+# paths that do not exist on this board -- /etc/odod.conf, /etc/init.d/S90odod
+# -- so they reported success and did nothing. The fork routes pool and WiFi
+# through am01-panel-helper instead, which already owns the correct paths.
+# webd/, not odo-webd/: the BINARY is named odo-webd and lives in this
+# directory, so a source directory of the same name makes the linker refuse
+# with "cannot open output file odo-webd: Is a directory".
+SOURCES_WEBD := webd/odo_webd_am01.c
 
 OBJECTS_WEBD := $(call objects,$(SOURCES_WEBD))
 

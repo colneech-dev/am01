@@ -116,6 +116,16 @@ grep -q '^DAEMON_OPTS="pool.example.com 5103 DTGwfAPbxQaKViGpoy8XfVguMPj5sGxTdS.
 ok $? "as DAEMON_OPTS -- the only key am01-miner-provision reads"
 [ ! -e "$REQ/set_pool" ]; ok $? "and the request file is consumed"
 
+# A POOL CHANGE MUST TAKE EFFECT NOW, not at the next boot. Writing /boot alone
+# looked like success -- the journal said "pool set to ..." -- while
+# /etc/default/odo-miner still held the old pool until am01-miner-provision
+# ran again, which it only does once per boot. The panel's own restart button
+# then restarted the miner against the stale config.
+grep -q "restart am01-miner-provision" "$SANDBOX_CALLS"
+ok $? "set_pool re-runs the provisioning that installs /boot into /etc"
+grep -q "restart odo-miner" "$SANDBOX_CALLS"
+ok $? "and restarts the miner so it picks the new pool up"
+
 # ---- set_wifi ------------------------------------------------------------
 echo
 echo "-- set_wifi rejects what would break wpa_supplicant.conf --"
