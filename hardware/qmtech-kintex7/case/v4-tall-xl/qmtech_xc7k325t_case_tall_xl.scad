@@ -1442,6 +1442,28 @@ function corner_xy(inset) = [
     [board_origin[0] + board_length - inset, board_origin[1] + board_width - inset],
 ];
 
+// THE PILOTS, CUT THROUGH THE FLOOR.
+//
+// corner_standoff() differences its pilot out of the STANDOFF cylinder only,
+// and standoffs() is unioned into base_tray -- so the floor beneath each pilot
+// (z 0 .. floor_thickness) was never cut. The bore was blind, with 2.35mm of
+// solid plastic under it, against a comment promising "the pilot takes an M3
+// self-tap from underneath". A screw inserted from below met the floor.
+//
+// Emitted separately so base_tray can subtract them AFTER the union, which is
+// the only ordering that reaches the floor.
+module standoff_pilots() {
+    if (enable_standoffs) {
+        pts = len(standoff_xy_mm) > 0
+            ? [ for (h = standoff_xy_mm) [board_origin[0] + h[0], board_y(h[1])] ]
+            : corner_xy(standoff_inset_mm);
+        for (p = pts)
+            translate([p[0], p[1], -1])
+                cylinder(h = floor_thickness + standoff_clearance + 2,
+                         d = standoff_pilot_od, $fn = 24);
+    }
+}
+
 module standoffs() {
     if (enable_standoffs) {
         pts = len(standoff_xy_mm) > 0
@@ -1501,24 +1523,33 @@ echo(str("internal mounts vs wall_height ", wall_height, ": FT232H needs ",
          "), switch needs ", kan28_stack_mm, " (", kan28_fits ? "fits" : "OMITTED", ")"));
 
 module base_tray() {
-    union() {
-        difference() {
-            tray_shell();
-            union() {
-                snap_groove();
-                left_edge_cutouts();
-                bottom_edge_cutouts();
-                top_edge_cutouts();
-                right_edge_cutouts();
-                right_edge_dc_jack();
-                right_edge_antenna_hole();
-                if (kan28_fits) top_edge_switch_hole();
+    difference() {
+        union() {
+            difference() {
+                tray_shell();
+                union() {
+                    snap_groove();
+                    left_edge_cutouts();
+                    bottom_edge_cutouts();
+                    top_edge_cutouts();
+                    right_edge_cutouts();
+                    right_edge_dc_jack();
+                    right_edge_antenna_hole();
+                    if (kan28_fits) top_edge_switch_hole();
+                }
             }
+            retaining_lip_ridge();
+            standoffs();
+            if (kan28_fits) top_edge_switch_clips();
+            if (ft232h_fits) ft232h_posts();
         }
-        retaining_lip_ridge();
-        standoffs();
-        if (kan28_fits) top_edge_switch_clips();
-        if (ft232h_fits) ft232h_posts();
+        // Subtracted from the WHOLE tray, standoffs included. corner_standoff()
+        // cuts its pilot out of its own cylinder, and standoffs() is unioned
+        // in -- so the floor beneath each pilot was never reached and the bore
+        // was blind, 2.35mm of solid plastic under a comment promising "an M3
+        // self-tap from underneath". This ordering is the only one that makes
+        // it a through-hole.
+        standoff_pilots();
     }
 }
 
@@ -1860,6 +1891,35 @@ assert(left_sep_mm > 0.8,
 assert(bottom_sep_mm > 0.8,
        str("bottom-wall cutouts merge or nearly touch (", bottom_sep_mm,
            "mm between them). Reduce cutout_margin."));
+
+// THE RIGHT WALL WAS NEVER CHECKED, and it is the crowded one: PWR_SW4, the
+// antenna hole and a DC inlet that grew from 7.5mm to 13mm on 2026-09-06.
+// min_separator() only walks a connector table, and the jack and antenna are
+// round features outside it, so this works the three edges out explicitly.
+//
+// The pillar between SW4 and the jack is the tight one. At Y 72.1 and 74.1 it
+// is 2.0mm -- printable, but under the 3mm a fit-check asked for, and it got
+// there without anything noticing.
+rw_sw4_hi   = board_y(right_connector_positions_mm[0][1])
+              + right_connector_positions_mm[0][2]/2 + cutout_margin;
+rw_jack_lo  = board_y(dc_jack_y_mm) - dc_jack_hole_d/2;
+rw_jack_hi  = board_y(dc_jack_y_mm) + dc_jack_hole_d/2;
+rw_ant_hi   = board_y(antenna_hole_y_mm) + antenna_hole_d/2;
+rw_sw4_lo   = board_y(right_connector_positions_mm[0][1])
+              - right_connector_positions_mm[0][2]/2 - cutout_margin;
+
+right_sep_sw4_jack = rw_jack_lo - rw_sw4_hi;
+right_sep_ant_sw4  = rw_sw4_lo - rw_ant_hi;
+echo(str("right wall separators (mm) -- antenna..SW4 ", right_sep_ant_sw4,
+         ", SW4..DC jack ", right_sep_sw4_jack));
+assert(right_sep_sw4_jack > 0.8,
+       str("SW4 and the DC inlet merge or nearly touch (",
+           right_sep_sw4_jack, "mm). dc_jack_hole_d or dc_jack_y_mm."));
+assert(right_sep_ant_sw4 > 0.8,
+       str("the antenna hole and SW4 merge or nearly touch (",
+           right_sep_ant_sw4, "mm)."));
+assert(rw_jack_hi < outer_width - wall_thickness,
+       "the DC inlet runs off the end of the right wall");
 
 
 // The case is sized by what has to fit ABOVE the board: heatsink plus a fan.
