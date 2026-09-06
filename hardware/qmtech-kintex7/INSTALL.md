@@ -3,9 +3,13 @@
 End-to-end: build image -> flash eMMC -> first boot -> prove the FPGA bus ->
 mine. Written for a CM4 **with eMMC** docked on the QMTECH XC7K325T board.
 
-Nothing here has been run on real hardware yet. Steps that are unverified are
-marked. Expect the FPGA bus bring-up (step 6) to be where the work is: the
-driver has never talked to a real FPGA.
+**This has been run on real hardware.** The board mines: 129.21 MH/s measured
+2026-09-06 at 225 MHz, with 2389 shares accepted and 0 rejected.
+
+The FPGA bus bring-up (step 6) was indeed where the work was, and the
+findings are recorded in `docs/JP5-WIRING.md` and the wrapper's own comments
+rather than left as warnings here. Some steps below may still be stale; where
+one disagrees with the RTL or the overlay, those are the record.
 
 ---
 

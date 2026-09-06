@@ -6,10 +6,13 @@ using plain bit-banged GPIO -- the simple path, not the BCM2711 SMI
 peripheral the QMTECH manual mentions as a faster option (see "SMI vs.
 bit-bang" below).
 
-**Status**: reference skeleton. Written to match the register map and
-4-phase handshake in `../hdl/odocrypt_gpio_wrapper.v` exactly, but not
-compiled against a real libgpiod or run against real hardware as part of
-this repo — see the top-level `../README.md`'s "what's still needed" list.
+**Status**: in production. `am01_gpio_bus.c` is compiled into `odo-miner`
+and is the only path to the FPGA on the running board — every header word,
+every nonce and every panel byte goes through it.
+
+It was a reference skeleton when this was written, "not compiled against a
+real libgpiod or run against real hardware". Both have long since happened;
+the bus has been carrying a live miner since 2026-08-31.
 
 ## Build
 

@@ -2,8 +2,12 @@
 
 Runs on the ESP32 of a "Cheap Yellow Display" (ESP32-2432S028R class).
 
-**Scaffolding. Not built, not flashed, not wired into anything.** The existing
-ILI9341 panel remains the live solution and is untouched.
+**Built, flashed, and the only panel.** The ILI9341 it was written alongside
+was removed from the design on 2026-09-05.
+
+This firmware drives the display and touch, parses the miner's status line,
+and reflashes itself over the UART (`cyd_ota.cpp`) without opening the case.
+Build with `pio run -e cyd`.
 
 ## What it is
 

@@ -3,11 +3,14 @@
 An ESP32 "Cheap Yellow Display" (ESP32-2432S028R class) as the AM01's front
 panel: 320x240 RGB565 with an XPT2046 resistive touch controller.
 
-**Nothing here is wired into the build yet, and nothing here modifies the
-existing ILI9341 panel path.** That solution is still being pursued; this is a
-parallel track. The files it would eventually replace —
-`cm4-firmware/am01_panel.c` and the display block inside
-`hdl/odocrypt_gpio_wrapper.v` — are deliberately untouched.
+**This IS the panel.** It is built, flashed, wired into `odo-miner` as a
+thread, and updatable over the wire.
+
+The text below dated from when this was a parallel track alongside the
+ILI9341. That display was **removed from the design on 2026-09-05** — the RTL
+block, the pin constraints and `cm4-firmware/am01_panel.c` are all gone, and
+`0x10`–`0x17` are free registers. The files this "would eventually replace"
+no longer exist.
 
 See `docs/PLAN-cyd-display.md` for the design and the reasoning behind it.
 

@@ -1,4 +1,15 @@
-# Vivado-free FPGA builds for the XC7K325T (openXC7) — **verified working**
+# Vivado-free FPGA builds for the XC7K325T (openXC7)
+
+> **ARCHIVED 2026-09-05 — this flow is no longer used.** The project builds
+> with Vivado (`../vivado/build_full.tcl`). This directory is kept for its
+> research record: the placement and congestion work here is the only place
+> that material exists, and `../openxc7-archive/` holds the scripts and
+> patches.
+>
+> The rest of this file describes the flow as it stood when work stopped. Its
+> headline result — 135.04 MHz, never flashed — was superseded within days:
+> the Vivado flow measured 129.21 MH/s on hardware at 225 MHz and has since
+> closed timing at 237.5 MHz. Do not read the numbers below as current.
 
 **Bottom line: you do not need a Vivado licence for this board.** A fully
 open-source toolchain takes Verilog all the way to a valid `.bit` for
