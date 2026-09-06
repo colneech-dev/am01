@@ -1,30 +1,31 @@
 # Build and run the CYD host/firmware unit tests.
 #
-# These tests existed with no build rules -- every one had to be rebuilt by
-# hand, guessing its object set from the linker errors. That is how test
-# suites quietly stop being run. `make -C cyd/sim` is now the whole story.
-#
-# They compile firmware sources (cyd_ui.c, cyd_fmt.c, cyd_status_parse.c) on
-# the HOST on purpose: that logic is deliberately free of Arduino/TFT_eSPI
-# dependencies so it can be tested without hardware. cyd_ui_draw.cpp is the
-# part that touches the display, and it is not here for exactly that reason.
+# These tests compile firmware and host sources on the HOST without
+# Arduino/TFT_eSPI dependencies so the entire state machine, parsers,
+# math, and form validation can be exercised in simulation.
 
 CC      ?= gcc
 H        = ../host
 F        = ../firmware/include
 S        = ../firmware/src
-# _POSIX_C_SOURCE: cyd_ota_send.c uses fileno(), which is POSIX, not C11.
-CFLAGS  ?= -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra \
+CFLAGS  ?= -std=c11 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -Wall -Wextra \
            -Wno-unused-parameter -O1 -g
 CPPFLAGS = -I$(H) -I$(F) -I.
 
 TESTS = test_cyd_cmd test_cyd_md5 test_cyd_ota_send \
-        test_cyd_status_parse test_cyd_fmt test_cyd_ui
+        test_cyd_status_parse test_cyd_fmt test_cyd_ui \
+        test_webd_form test_pow_math test_cyd_wifi_flow
 
 .PHONY: all check clean
 all: $(TESTS)
 
 check: $(TESTS)
+	@# test_pow_math.c TRANSCRIBES target_met() and hash_to_difficulty()
+	@# because both are static in miner_pipe_am01.c and linking that would
+	@# drag in libgpiod and the stratum client. A copy that drifts passes for
+	@# ever while the miner changes underneath it, and those two functions
+	@# decide whether a share is valid -- so the copy is checked, not trusted.
+	@echo "-- PoW maths copies --"; python3 check_pow_copy.py || exit 1
 	@fail=0; for t in $(TESTS); do \
 	  if ./$$t >/dev/null 2>&1; then echo "PASS $$t"; \
 	  else echo "FAIL $$t"; ./$$t 2>&1 | tail -20; fail=1; fi; \
@@ -37,9 +38,13 @@ test_cyd_status_parse: test_cyd_status_parse.c $(S)/cyd_status_parse.c
 test_cyd_fmt:          test_cyd_fmt.c          $(S)/cyd_fmt.c $(S)/cyd_status_parse.c
 test_cyd_ui:           test_cyd_ui.c           $(S)/cyd_ui.c $(S)/cyd_fmt.c \
                                                $(S)/cyd_status_parse.c
+test_webd_form:        test_webd_form.c
+test_pow_math:         test_pow_math.c
+test_cyd_wifi_flow:    test_cyd_wifi_flow.c    $(S)/cyd_ui.c $(S)/cyd_fmt.c \
+                                               $(S)/cyd_status_parse.c
 
 $(TESTS):
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ -lm
 
 clean:
 	rm -f $(TESTS)

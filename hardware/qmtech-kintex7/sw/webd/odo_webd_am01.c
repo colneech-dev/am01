@@ -662,12 +662,26 @@ static void serve_wifi_scan(int fd)
 /* ------------------------------------------------------------------ */
 /* Form decoding                                                       */
 /* ------------------------------------------------------------------ */
+/* THE s[1] AND s[2] TESTS BELOW ARE BELT-AND-BRACES, NOT A BUG FIX.
+ *
+ * A report on 2026-09-06 flagged the original -- which tested only
+ * isxdigit(s[1]) && isxdigit(s[2]) -- as an out-of-bounds read on a body
+ * ending in '%'. It was not. && short-circuits, so if s[1] is NUL then
+ * isxdigit(s[2]) is never evaluated; and for "...%A" the byte s[2] IS the
+ * terminator, which is inside the allocation. Checked under AddressSanitizer
+ * with exact-size heap buffers: "ssid=MyNetwork%", "a%", "%" and "%%" are all
+ * clean either way. See docs/BUG_REPORT.md, item BUG-01.
+ *
+ * The explicit tests are kept because they cost nothing and read plainly, but
+ * they are not fixing anything -- and this note exists so the next reader does
+ * not remove them believing they are redundant, nor re-report the same
+ * non-bug after seeing the original shape elsewhere. */
 static void url_decode(char *s)
 {
     char *o = s;
     while (*s) {
         if (*s == '+') { *o++ = ' '; s++; }
-        else if (*s == '%' && isxdigit((unsigned char)s[1]) && isxdigit((unsigned char)s[2])) {
+        else if (*s == '%' && s[1] && isxdigit((unsigned char)s[1]) && s[2] && isxdigit((unsigned char)s[2])) {
             char hex[3] = { s[1], s[2], 0 };
             *o++ = (char)strtol(hex, NULL, 16);
             s += 3;

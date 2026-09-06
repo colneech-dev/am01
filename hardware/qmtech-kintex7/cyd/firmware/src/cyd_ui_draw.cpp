@@ -1049,15 +1049,32 @@ static void draw_wifi(const cyd_ui_t *ui, const cyd_status_t *st)
         g.drawString(empty ? "-- tap to set --" : v, r.x + r.w - 6, r.y + 9, 2);
     }
 
-    /* Say the rule rather than let SAVE do nothing. */
-    size_t n = strlen(ui->wifi_psk);
-    /* Not while showing a SAVED passphrase: the rule applies to what is being
-     * typed, and complaining about a length nobody has entered is noise. */
-    if (ui->wifi_ssid[0] && !(n == 0 && saved_psk) &&
-        (n < 8 || n > 63)) {
-        g.setTextDatum(TL_DATUM);
-        g.setTextColor(C_WARN);
-        g.drawString("PSK must be 8-63 characters", 10, 126, 2);
+    /* WHY SAVE IS NOT AVAILABLE, always. */
+    {
+        size_t n = strlen(ui->wifi_psk);
+        bool has_bad_char = false;
+        for (const char *q = ui->wifi_ssid; *q; q++)
+            if (*q == '"' || *q == '\\') has_bad_char = true;
+        for (const char *q = ui->wifi_psk; *q; q++)
+            if (*q == '"' || *q == '\\') has_bad_char = true;
+
+        const char *why = NULL;
+        if (has_bad_char)
+            why = "quotes and backslashes are not allowed";
+        else if (!ui->wifi_ssid[0])
+            why = "pick a network or type an SSID";
+        else if (n == 0 && saved_psk)
+            why = "already configured - retype password to change";
+        else if (n == 0)
+            why = "enter the password for this network";
+        else if (n < 8 || n > 63)
+            why = "password must be 8-63 characters";
+
+        if (why) {
+            g.setTextDatum(TL_DATUM);
+            g.setTextColor((n == 0 && saved_psk) ? C_DIM : C_WARN);
+            g.drawString(why, 10, 126, 2);
+        }
     }
 
     button(CYD_WIFI_BACK, "BACK", false);
