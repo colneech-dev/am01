@@ -996,7 +996,27 @@ cyd_center_mm     = [30, 45];
 // edge moved at that end.
 //   before: window/2 + from_glass = 37.5 + 4 = 41.5 from the window centre
 //   now:    window/2 + from_glass = 34.5 + 4 = 38.5
-cyd_ldr_from_glass_mm = 4;
+// FROM THE MODULE EDGE, not the glass. 2026-09-06.
+//
+// This was cyd_ldr_from_module_mm, measured from the window, and that frame is
+// wrong: the LDR is soldered to the module and does not move when the window
+// definition changes. When cyd_window_mm went 75 -> 69 on 2026-09-03 the
+// aperture was moved 3mm inward to "follow the glass" -- and the printed lid
+// then had the hole 3mm too close to the screen, with the sensor partly under
+// solid plastic. That 3mm was introduced, not corrected.
+//
+// The two frames are genuinely different here, which is why this matters: the
+// margins are asymmetric (12mm on the low-Y end carrying the sensor, 10mm on
+// the high-Y end), so the module is NOT centred on the glass.
+//
+// 5mm in from the module edge puts the 5mm-tall slot at 2.5..7.5mm from that
+// edge, comfortably inside the 12mm margin strip and clear of the glass. In
+// the old frame this is from_glass = 7 -- i.e. it restores the pre-2026-09-03
+// absolute position, which is the one that was right.
+//
+// If a future module has the sensor elsewhere, THIS is the number to change,
+// and changing the window will no longer disturb it.
+cyd_ldr_from_module_mm = 5;
 cyd_ldr_band_mm       = [8, 14];   // measured, from the short edge
 cyd_ldr_clear_mm      = 1;         // each side, for print tolerance
 cyd_ldr_both_ends     = false;     // one hole only
@@ -1070,7 +1090,7 @@ screen_module_mm  = is_cyd ? cyd_module_mm     : ili_module_mm;
 screen_window_mm  = is_cyd ? cyd_window_mm     : ili_window_mm;
 screen_window_off_mm = is_cyd ? cyd_window_off_mm : ili_window_off_mm;
 screen_ldr_slot_mm   = is_cyd ? cyd_ldr_slot_mm  : [0, 0];
-screen_ldr_from_glass_mm = is_cyd ? cyd_ldr_from_glass_mm : 0;
+screen_ldr_from_module_mm = is_cyd ? cyd_ldr_from_module_mm : 0;
 
 // WHERE THE LIGHT-SENSOR APERTURE ACTUALLY ENDS UP, in mm from each short
 // edge, so a print can be checked against the board instead of against a
@@ -1681,8 +1701,12 @@ module lid_screen_cutout() {
         // cyd_margin_lo/hi automatically. Hard-coding +1 here is what would
         // let a margin swap leave the aperture 91mm from the sensor.
         ldr_sy = (cyd_margin_hi_mm >= cyd_margin_lo_mm) ? 1 : -1;
-        ldr_cy = wy + ldr_sy * (screen_window_mm[1]/2
-                                + screen_ldr_from_glass_mm);
+        // From the module edge on the sensor's side. ldr_sy = -1 selects
+        // the low-Y end, which is the wider margin and the one that carries
+        // the sensor, so the margin has to be picked to match.
+        ldr_margin = (ldr_sy > 0) ? cyd_margin_hi_mm : cyd_margin_lo_mm;
+        ldr_cy = wy + ldr_sy * (screen_window_mm[1]/2 + ldr_margin
+                                - screen_ldr_from_module_mm);
         // Centre of the measured band, referenced from each short edge of the
         // module rather than from the window centre -- the measurement was
         // taken from the board edge, so that is the frame it belongs in.
