@@ -123,8 +123,9 @@
 // 2. NO CM4 CUTOUT. The CM4 mates via two 100-pin board-to-board
 //    connectors (JP2/JP3) at 1.5-3.0mm stack height, and the module
 //    itself is only 4.7mm thick -- total ~6.2-7.7mm above the carrier
-//    board (Raspberry Pi CM4 datasheet). That's a fully internal,
-//    low-profile mezzanine: its HDMI/USB/Ethernet-attempt/SD/GPIO
+//    board (Raspberry Pi CM4 datasheet). THAT IS THE BARE MODULE: the one
+//    fitted here carries a heatsink, and MEASURES 24mm above the board --
+//    see cm4_stack_above_pcb_mm. Still a fully internal mezzanine: its HDMI/USB/Ethernet-attempt/SD/GPIO
 //    signals all route through JP2/JP3 to *this* board's own real
 //    connectors (P3/P4/J6/J7/J9/J14/JP5), which the wall cutouts below
 //    already handle. No panel access needed for JP2/JP3 themselves.
@@ -353,7 +354,25 @@ heatsink_assembly_margin_mm = 3.0; // safety margin (adhesive squeeze-out, toler
 // stacked estimates, and the estimates are kept below only because the vent
 // footprint still derives from the heatsink's own height.
 heatsink_stack_above_pcb_mm = 44;   // MEASURED: board top -> top of fan
-heatsink_total_clearance_mm = heatsink_stack_above_pcb_mm;
+
+// THE CM4 HAS A HEATSINK TOO, and the model did not know about it.
+//
+// MEASURED 2026-09-06: board bottom to the top of the CM4's heatsink is 26mm,
+// so 24mm above the board's top surface. Design note 2 near the top of this
+// file put the CM4 at "~6.2-7.7mm above the carrier board" from the Raspberry
+// Pi datasheet -- a BARE module on its mezzanine connectors, with no cooler on
+// it. Three times out, and the same class of error as the FPGA heatsink being
+// carried at a datasheet 17.5mm against a real 44mm stack.
+//
+// Harmless here only because the FPGA side is taller and sets the height. It
+// is recorded and checked anyway, because "harmless" was luck rather than
+// design, and a lower-profile FPGA cooler would make this the binding number.
+cm4_stack_above_pcb_mm = 24;   // MEASURED: board top -> top of CM4 heatsink
+
+// The interior has to clear whichever is taller.
+tallest_stack_above_pcb_mm =
+    max(heatsink_stack_above_pcb_mm, cm4_stack_above_pcb_mm);
+heatsink_total_clearance_mm = tallest_stack_above_pcb_mm;
 
 heatsink_guessed_clearance_mm = heatsink_lwh_mm[2] + fpga_chip_and_pad_mm
                                + heatsink_assembly_margin_mm; // = 22.5mm, PCB to top of stack
@@ -1725,16 +1744,18 @@ assert(!lid_fan_enable || lid_fan_recess < lid_thickness,
 // Sanity-check echo: confirms (at compile time, in the console/log) how
 // much margin this variant's wall_height leaves over the real heatsink's
 // needs. Should read comfortably positive.
-echo(str("heatsink+fan clearance (mm): ", heatsink_margin_mm,
-         " over the fan [interior ", case_interior_clearance_mm,
-         ", MEASURED stack ", heatsink_stack_above_pcb_mm, "]"));
+echo(str("clearance (mm): ", heatsink_margin_mm,
+         " over the tallest stack [interior ", case_interior_clearance_mm,
+         "; MEASURED FPGA heatsink+fan ", heatsink_stack_above_pcb_mm,
+         ", CM4 heatsink ", cm4_stack_above_pcb_mm, "]"));
 // A hard stop rather than a note. This is the one dimension that cannot be
 // discovered after printing -- the lid simply will not close, and the print is
 // hours. It read "25.5mm margin" while the true figure was 4mm.
-assert(case_interior_clearance_mm >= heatsink_stack_above_pcb_mm,
-       str("INTERIOR TOO SHORT: the heatsink+fan stack measures ",
-           heatsink_stack_above_pcb_mm, "mm above the board and the interior ",
-           "provides only ", case_interior_clearance_mm,
+assert(case_interior_clearance_mm >= tallest_stack_above_pcb_mm,
+       str("INTERIOR TOO SHORT: the tallest stack measures ",
+           tallest_stack_above_pcb_mm, "mm above the board (FPGA heatsink+fan ",
+           heatsink_stack_above_pcb_mm, ", CM4 heatsink ", cm4_stack_above_pcb_mm,
+           ") and the interior provides only ", case_interior_clearance_mm,
            "mm. Raise VARIANT_WALL_HEIGHT."));
 
 
