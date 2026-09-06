@@ -49,6 +49,28 @@ WPA_BOOT=/boot/wpa_supplicant.conf
 WIFI_COUNTRY=GB
 SCAN_PATH=/run/odod/wifi_scan.txt
 
+# WHERE ROOT STAGES FILES BEFORE PUBLISHING THEM.
+#
+# NOT under /run/odod. That directory is created by odo-miner.service as
+# RuntimeDirectory=odod and is owned by `miner`, so anything running as the
+# miner -- including the daemon holding the pool connection -- can create
+# paths inside it. This script runs as root, and a plain `> $file` redirect
+# follows a symlink and truncates whatever it points at. Staging the scan at
+# /run/odod/wifi_scan.txt.tmp therefore handed any miner-uid process an
+# arbitrary root-owned file overwrite: pre-create that name as a link to
+# /etc/shadow or /root/.ssh/authorized_keys, press SCAN, and root does the
+# write. The `mv` afterwards even removed the evidence.
+#
+# /run is root-owned and mode 0755, so only root can create this directory,
+# and 0700 keeps its contents unreadable to everyone else while a file is
+# half-written.
+#
+# The PUBLISH step was never the hole and does not change: mv uses rename(2),
+# which replaces a symlink at the destination rather than following it. Both
+# paths are on the same tmpfs, so it stays a rename and never degrades to a
+# copy (which would follow the link).
+STAGE_DIR=/run/am01-panel-helper
+
 say()  { echo "am01-panel-helper: $*" >&2; }
 deny() { say "REFUSED $1: $2"; }
 
@@ -86,11 +108,18 @@ apply_set_pool() {
 	# requires ^DAEMON_OPTS= and ignores the file otherwise. odo-miner takes
 	# positional arguments -- its main() has no option parser at all.
 	tmp="${POOL_CONF}.tmp"
-	umask 077
-	{
-		echo "# written by the CYD front panel"
-		echo "DAEMON_OPTS=\"$host $port $worker $pass\""
-	} > "$tmp" || { deny set_pool "cannot write $tmp"; return; }
+	# umask IN A SUBSHELL. Set bare, it outlives this function -- there is no
+	# restore, and every error path below returns before one could run. The
+	# dispatch loop handles a sorted glob in one invocation, and `wifi_scan`
+	# sorts after `set_pool` and `set_wifi`, so the leak reached the scan
+	# result and left it 0600 root-owned for a panel running as `miner`.
+	(
+		umask 077
+		{
+			echo "# written by the CYD front panel"
+			echo "DAEMON_OPTS=\"$host $port $worker $pass\""
+		} > "$tmp"
+	) || { deny set_pool "cannot write $tmp"; return; }
 	sync
 	mv -f "$tmp" "$POOL_CONF" || { deny set_pool "rename failed"; rm -f "$tmp"; return; }
 	sync
@@ -113,7 +142,9 @@ apply_set_pool() {
 # the miner is on ethernet here -- and it is only ever triggered by someone
 # standing at the panel pressing SCAN.
 apply_wifi_scan() {
-	out=$SCAN_PATH.tmp
+	mkdir -p "$STAGE_DIR" || { deny wifi_scan "cannot create $STAGE_DIR"; return; }
+	chmod 0700 "$STAGE_DIR"
+	out=$STAGE_DIR/wifi_scan.txt
 
 	# Strongest first, one entry per SSID, hidden networks dropped.
 	#
@@ -151,6 +182,16 @@ apply_wifi_scan() {
 	else
 		say "wifi scan found $(wc -l < "$out") network(s)"
 	fi
+	# EXPLICIT MODE, not whatever umask happens to be in force.
+	#
+	# apply_set_pool and apply_set_wifi both set `umask 077` and neither
+	# restores it, and the dispatch loop processes a sorted glob in which
+	# wifi_scan always sorts last -- so a scan queued behind a pool change is
+	# handled by the same invocation and inherits that umask. The file then
+	# lands 0600 root-owned, the panel thread (running as miner) gets EACCES
+	# from fopen(), and it waits out its 20s timeout and reports no networks.
+	# Standalone the identical scan works, because the service umask is 0022.
+	chmod 0644 "$out" || { deny wifi_scan "cannot chmod result"; rm -f "$out"; return; }
 	mv -f "$out" "$SCAN_PATH"
 }
 
@@ -162,21 +203,29 @@ apply_set_wifi() {
 	ok_psk  "$psk"  || { deny set_wifi "psk";  return; }
 
 	tmp="${WPA_CONF}.tmp"
-	umask 077                    # 0600 at creation; this file holds a PSK
-	{
-		echo "# written by the CYD front panel"
-		echo "ctrl_interface=/var/run/wpa_supplicant"
-		echo "update_config=1"
-		# country= is NOT optional: without it the regdomain stays at world
-		# (00), the firmware refuses the channel, and wlan0 sits in SCANNING
-		# with the radio working perfectly.
-		echo "country=$WIFI_COUNTRY"
-		echo "network={"
-		echo "	ssid=\"$ssid\""
-		echo "	key_mgmt=WPA-PSK"
-		echo "	psk=\"$psk\""
-		echo "}"
-	} > "$tmp" || { deny set_wifi "cannot write $tmp"; return; }
+	# 0600 at creation; this file holds a PSK.
+	# umask IN A SUBSHELL. Set bare, it outlives this function -- there is no
+	# restore, and every error path below returns before one could run. The
+	# dispatch loop handles a sorted glob in one invocation, and `wifi_scan`
+	# sorts after `set_pool` and `set_wifi`, so the leak reached the scan
+	# result and left it 0600 root-owned for a panel running as `miner`.
+	(
+		umask 077
+		{
+			echo "# written by the CYD front panel"
+			echo "ctrl_interface=/var/run/wpa_supplicant"
+			echo "update_config=1"
+			# country= is NOT optional: without it the regdomain stays at
+			# world (00), the firmware refuses the channel, and wlan0 sits
+			# in SCANNING with the radio working perfectly.
+			echo "country=$WIFI_COUNTRY"
+			echo "network={"
+			echo "	ssid=\"$ssid\""
+			echo "	key_mgmt=WPA-PSK"
+			echo "	psk=\"$psk\""
+			echo "}"
+		} > "$tmp"
+	) || { deny set_wifi "cannot write $tmp"; return; }
 	sync
 	mv -f "$tmp" "$WPA_CONF" || { deny set_wifi "rename failed"; rm -f "$tmp"; return; }
 	sync

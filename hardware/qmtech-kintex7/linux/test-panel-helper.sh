@@ -22,6 +22,8 @@ REQ="$SANDBOX/run/odod/request"
 POOL="$SANDBOX/boot/am01-miner.conf"
 WPA="$SANDBOX/etc/wpa_supplicant/wpa_supplicant-wlan0.conf"
 BOOTWPA="$SANDBOX/boot/wpa_supplicant.conf"
+SCAN="$SANDBOX/run/odod/wifi_scan.txt"
+STAGE="$SANDBOX/run/am01-panel-helper"
 mkdir -p "$REQ" "$SANDBOX/boot" "$SANDBOX/etc/wpa_supplicant" "$SANDBOX/bin"
 
 # Stub systemctl: record calls, never act.
@@ -40,11 +42,16 @@ sed -e "s#^REQ_DIR=.*#REQ_DIR=$REQ#" \
     -e "s#^POOL_CONF=.*#POOL_CONF=$POOL#" \
     -e "s#^WPA_CONF=.*#WPA_CONF=$WPA#" \
     -e "s#^WPA_BOOT=.*#WPA_BOOT=$BOOTWPA#" \
+    -e "s#^SCAN_PATH=.*#SCAN_PATH=$SCAN#" \
+    -e "s#^STAGE_DIR=.*#STAGE_DIR=$STAGE#" \
     "$HELPER_SRC" > "$HELPER"
 chmod +x "$HELPER"
 grep -q "^REQ_DIR=$REQ\$" "$HELPER" || { echo "sed redirect failed"; exit 1; }
 # Checked, because without it this test writes the real /boot.
 grep -q "^WPA_BOOT=$BOOTWPA\$" "$HELPER" || { echo "WPA_BOOT redirect failed"; exit 1; }
+# Same reason: without these two the scan test writes the real /run.
+grep -q "^SCAN_PATH=$SCAN$" "$HELPER" || { echo "SCAN_PATH redirect failed"; exit 1; }
+grep -q "^STAGE_DIR=$STAGE$" "$HELPER" || { echo "STAGE_DIR redirect failed"; exit 1; }
 
 PATH="$SANDBOX/bin:$PATH"
 checks=0; errors=0
@@ -177,6 +184,102 @@ grep -q "REFUSED unknown request" "$SANDBOX/err"; ok $? "and is logged"
 req set_wifi "onlyoneline"
 run
 [ ! -e "$REQ/set_wifi" ]; ok $? "a malformed set_wifi is consumed, not retried"
+
+# ---- wifi_scan -----------------------------------------------------------
+#
+# Untested until 2026-09-06, which is how it came to be the one verb carrying a
+# privilege hole: it was the only one writing a file into a directory the miner
+# owns, and no test ever went near it.
+echo "-- wifi_scan --"
+
+# A realistic `iw` capture: the signal line precedes the SSID line, one SSID is
+# advertised twice at different strengths (mesh / band steering), and one
+# network is cloaked.
+cat > "$SANDBOX/bin/iw" <<'STUB'
+#!/bin/sh
+cat <<'SCANOUT'
+BSS aa:bb:cc:dd:ee:01(on wlan0)
+	signal: -72.00 dBm
+	SSID: FarNetwork
+BSS aa:bb:cc:dd:ee:02(on wlan0)
+	signal: -41.00 dBm
+	SSID: MeshNet
+BSS aa:bb:cc:dd:ee:03(on wlan0)
+	signal: -66.00 dBm
+	SSID: MeshNet
+BSS aa:bb:cc:dd:ee:04(on wlan0)
+	signal: -50.00 dBm
+	SSID: \x00\x00\x00
+SCANOUT
+STUB
+chmod +x "$SANDBOX/bin/iw"
+
+rm -rf "$SCAN" "$STAGE"
+req wifi_scan ""
+run
+[ -f "$SCAN" ]; ok $? "a scan writes its result where the panel reads it"
+[ "$(head -n1 "$SCAN" | cut -f2)" = "MeshNet" ]
+ok $? "strongest first -- the -41 radio, not the -66 one"
+[ "$(grep -c MeshNet "$SCAN")" = 1 ]; ok $? "one entry per SSID, not one per radio"
+grep -q FarNetwork "$SCAN"; ok $? "weaker networks are still listed"
+! grep -q 'x00' "$SCAN"; ok $? "cloaked networks are dropped -- they cannot be joined"
+
+# THE MODE MATTERS. The panel thread runs as `miner`; a 0600 root-owned result
+# reads as "scan found nothing" after a 20s wait, with nothing to explain it.
+[ "$(stat -c %a "$SCAN")" = 644 ]; ok $? "and is readable by the panel (0644)"
+
+# The umask leak that produced exactly that: set_pool sets umask 077 and the
+# dispatch glob is sorted, so wifi_scan is handled by the same invocation.
+rm -f "$SCAN" "$POOL"
+req set_pool "pool.example.com
+5103
+w.x
+x"
+req wifi_scan ""
+run
+[ "$(stat -c %a "$SCAN")" = 644 ]
+ok $? "still 0644 with a set_pool queued ahead of it in the same run"
+
+# ---- the privilege boundary ----------------------------------------------
+#
+# /run/odod is owned by `miner` (odo-miner.service RuntimeDirectory=odod), so
+# any miner-uid process can pre-create names inside it. This helper runs as
+# root. A shell redirect follows a symlink; rename(2) does not. If this check
+# ever fails, a compromised miner can overwrite any file on the system.
+echo "-- a symlink planted by the miner uid must not be written through --"
+
+# THE STAGING PATH IS THE ONE THAT MATTERED.
+#
+# Until 2026-09-06 the scan was staged at $SCAN_PATH.tmp with a shell redirect,
+# inside /run/odod -- a directory owned by `miner`. A redirect follows a
+# symlink and truncates its target, so any miner-uid process could point that
+# name at /etc/shadow and have root do the write.
+#
+# Note which path is planted. An earlier version of this test planted the link
+# at $SCAN_PATH, the DESTINATION, and passed against the vulnerable helper --
+# because publishing has always been mv, i.e. rename(2), which replaces a
+# symlink rather than following it. Testing the safe half proved nothing. The
+# staging path is the attack surface, so the staging path is what is planted.
+rm -f "$SCAN" "$SCAN.tmp"
+echo "ORIGINAL" > "$SANDBOX/canary"
+ln -s "$SANDBOX/canary" "$SCAN.tmp"
+req wifi_scan ""
+run
+[ "$(cat "$SANDBOX/canary")" = "ORIGINAL" ]
+ok $? "root does NOT write through a symlink at the old staging path"
+[ -L "$SCAN.tmp" ]; ok $? "and does not go near that path at all"
+
+# The destination is safe for a different reason (rename, not redirect), and
+# that property is worth pinning too -- it is what lets the publish stay a mv.
+rm -f "$SCAN" "$SCAN.tmp"
+echo "ORIGINAL" > "$SANDBOX/canary"
+ln -s "$SANDBOX/canary" "$SCAN"
+req wifi_scan ""
+run
+[ "$(cat "$SANDBOX/canary")" = "ORIGINAL" ]
+ok $? "nor through one at the destination -- mv replaces, it does not follow"
+[ ! -L "$SCAN" ]; ok $? "the destination symlink is replaced by the real result"
+grep -q MeshNet "$SCAN"; ok $? "and the scan still lands correctly"
 
 echo
 if [ "$errors" = 0 ]; then echo "=== ALL $checks CHECKS PASSED ==="; exit 0; fi
