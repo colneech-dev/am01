@@ -142,9 +142,28 @@ void loop(void)
          * silent, but it must not become the permanent display either: the
          * panel is still running its old firmware and still has a miner to
          * report on. */
+        static uint32_t err_shown_ms;
         const char *ota_err = cyd_ota_take_error();
-        if (ota_err[0] != '\0')
+        if (ota_err[0] != '\0') {
             cyd_ui_draw_ota(0, ota_err);
+            err_shown_ms = millis();
+            if (err_shown_ms == 0) err_shown_ms = 1;
+        }
+
+        /* CLEAR IT ON A TIMER, not on the next status.
+         *
+         * The comment above says "the next status redraws the normal screen
+         * over the top", and that only holds if a status arrives. The common
+         * cause of a failed update is the CM4 going away -- which is also why
+         * no status arrives, and link_down is latched by then, so the stale
+         * branch below (gated on !link_down) does not fire either. The panel
+         * sat on UPDATE FAILED indefinitely with the miner's last-known
+         * numbers hidden. A touch cleared it, which is no help on a panel
+         * whose job is to be read unattended. */
+        if (err_shown_ms && (uint32_t)(millis() - err_shown_ms) > 8000u) {
+            err_shown_ms = 0;
+            cyd_ui_draw(&g_ui, &g_status);
+        }
     }
 
     /* The BUSY screen counts seconds and the model has no clock, so it is

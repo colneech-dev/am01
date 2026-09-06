@@ -175,7 +175,11 @@ static bool handle_line(cyd_link_t *l, char *line, cyd_status_t *out)
         return false;
     }
 
-    if (strncmp(line, CYD_MSG_PING, strlen(CYD_MSG_PING)) == 0) {
+    /* EXACT, not a prefix. strncmp over the token's own length matches
+     * anything beginning "PING" -- a future PINGREQ would draw a PONG. The
+     * OTAEND handling in this file already uses strcmp for the same reason
+     * and says so; this one was inconsistent with it. */
+    if (strcmp(line, CYD_MSG_PING) == 0) {
         LINK.print(CYD_MSG_PONG);
         LINK.print('\n');
         return false;
