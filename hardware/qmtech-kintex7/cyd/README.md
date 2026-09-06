@@ -63,7 +63,7 @@ constrains 15.
 | 49/50 | | +5V | VIN |
 
 **Its own pins.** No mux, no build-time parameter, no either/or: the display
-block is untouched, one bitstream serves both panels, and a CYD can be brought
+block is GONE as of 2026-09-05 (this text predates that), so a CYD is brought
 up on a board whose ILI9341 is still wired -- which matters, because the
 ILI9341 is the thing that does not work and is being diagnosed.
 
@@ -129,16 +129,22 @@ on four wires instead of nine.
 |---|---|
 | `docs/PLAN-cyd-display.md` | written |
 | `case/v4-cyd` lid | rendered, printable |
-| `host/am01-uartd` | register accessors done, cross-builds; `selftest` usable. PTY layer not started |
+| `host/am01-uartd` | register accessors, `selftest`, PTY and TCP bridges all implemented |
 | `host/cyd_proto.h` | protocol defined, compiled by BOTH halves |
 | `firmware/cyd_link.h` | link interface; UART only, WiFi removed |
 | `firmware/cyd_ui.h` | screen model, ported from odo-ui |
-| `firmware/cyd_ui.c` | navigation + touch, 41/41 checks |
-| `firmware/cyd_fmt.c` | value formatters, 29/29 checks |
+| `firmware/cyd_ui.c` | navigation + touch, keyboard, editor — 105 checks |
+| `firmware/cyd_fmt.c` | value formatters, 30 checks |
+| `firmware/cyd_status_parse.c` | status-line parser, 30 checks |
+| `firmware/cyd_ota.cpp` | self-reflash over the UART, with a 30s stall timeout |
+| `host/cyd_ota_send.c` + `cyd_md5.c` | host half of OTA, 22 + 15 checks |
+| `host/cyd_cmd.c` | command parser, 53 checks |
 | `firmware/board_probe.cpp` | **FLASHED AND PASSING on real hardware, 2026-09-01** |
-| `firmware/main.cpp` | does NOT link -- cyd_link_uart_* and cyd_ui_draw unimplemented |
+| `firmware/main.cpp` | builds and runs; `pio run -e cyd` |
+| `firmware/cyd_link_uart.cpp` | the link, on Serial2 (CN1 IO27/IO22) |
+| `firmware/cyd_ui_draw.cpp` | banded rendering, two 320x120 sprites |
 | `hdl/uart_bridge.v` | 22/22, instantiated on JP5 15-18 |
-| bitstream | VERSION 0x0202 built; the 158 MHz build carries it at the current epoch |
+| bitstream | VERSION 0x0207 built at 237.5 MHz; 225 MHz flashed and mining |
 
 ## Hardware bring-up result, 2026-09-01
 

@@ -120,7 +120,11 @@
 // nine pins. Less logic and less congestion in the same fabric.
 //
 // VCO = 50 * 19 = 950MHz, inside the -1 grade's 600-1200MHz range. clk_2x
-// becomes 475MHz and still nothing consumes it in the 2-instance design.
+// becomes 475MHz. Nothing consumes it in the 2-INSTANCE design, which is what
+// ships -- but hdl/mux4 DOES consume it (its shared-BRAM S-boxes toggle on
+// clk_2x), so a mux4 build inherits 475MHz from this change. It closed at
+// ~104MHz when last measured, so it has room, but the blanket "nothing
+// consumes it" I wrote here was wrong about half the tree.
 // bus_clk remains sys_clk_50m, so uart_bridge's CLK_HZ=50_000_000 and the
 // fan PWM divider are unaffected -- the panel does not rebaud.
 //
