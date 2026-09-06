@@ -295,6 +295,19 @@ module odocrypt_gpio_wrapper #(
      * exist -- but the next omission will not be, and the cost of a bump is
      * one line.
      *
+     * 0x0208: IDENTICAL RTL to 0x0207 except this number and the clock --
+     * back to MULT 18 / 225MHz. It exists so the two can be told apart on a
+     * board, because 0x0207 was flashed at 237.5MHz and DID NOT HASH: the
+     * core ran and flooded the found-FIFO with wrong digests (STATUS 0x0003,
+     * FIFO_STAT 0xff08, lost saturated at 255, zero accepted shares).
+     *
+     * That failure had TWO possible causes and this build separates them. The
+     * clock went 225 -> 237.5 at the same time as the display removal and the
+     * 0x0207 reset/rx_err/fan changes reached hardware for the first time. If
+     * 0x0208 mines at 225, the RTL is exonerated and 237.5 is simply past
+     * what this silicon does. If it does not, the clock was never the
+     * problem. Reusing 0x0207 here would have made the answer unreadable from
+     * the board -- which is the whole reason this rule exists.
      * 0x0207: the fan reaches 100% at 78C rather than 85C (the part's Tj
      * limit); UART_STAT's rx_err saturates instead of wrapping; the two UART
      * strobes and esp_ctrl_r are reset.
@@ -315,7 +328,7 @@ module odocrypt_gpio_wrapper #(
      * REPORTS 0203 -- it was built before this was bumped. Nothing
      * depends on telling them apart: UART_STAT is identical in all
      * three, and 0x1C simply reads 0 on a bitstream that lacks it. */
-    localparam [15:0] VERSION = 16'h0207;
+    localparam [15:0] VERSION = 16'h0208;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;
