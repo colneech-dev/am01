@@ -1,0 +1,5 @@
+# render_cases.sh splits each variant into tray-only and lid-only copies to
+# render them, then deletes them. Staging the case directory while a render is
+# in flight otherwise commits both -- which happened once.
+_tray.scad
+_lid.scad

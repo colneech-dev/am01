@@ -273,9 +273,33 @@ lid_thickness = 6.0;
 // fan screws. Written as a sum rather than a new constant so each term stays
 // attributable -- and so the sealed/vented variants, whose VARIANT_WALL_HEIGHT
 // render_cases.sh rewrites to 24, get the same compensation automatically.
-extra_headroom_mm = (standoff_clearance - 3.0)   // item 4, taller standoffs
-                  + (lid_thickness - 2.4)        // item 1, thicker lid
-                  + 2.0;                         // item 12, fan screw heads
+// CORRECTED 2026-09-06: all three terms were wrong, and together they made
+// the case 7.6mm taller than anything required.
+//
+//   (standoff_clearance - 3.0): tray_height is already
+//       floor + standoff_clearance + board_thickness + wall_height,
+//       and wall_height is BY CONSTRUCTION the space above the board. Raising
+//       standoff_clearance lifts the board and grows the tray by the same
+//       amount automatically; it takes nothing away from the headroom. Adding
+//       it here put standoff_clearance in the expression twice, so a 2mm
+//       change to under-board clearance grew the case by 4mm.
+//
+//   (lid_thickness - 2.4): the lid seats ON TOP of the tray -- lid_panel()
+//       extrudes upward from z=0 and the skirt from -3 to 0 -- so its
+//       thickness is material above the interior, not inside it. This is the
+//       same correction already made twelve lines above at
+//       case_interior_clearance_mm ("The lid used to be ADDED here, which is
+//       backwards ... with a 6mm lid it would have overstated the clearance by
+//       the same 6mm"). The reasoning was right there and was not applied.
+//
+//   +2.0 for fan screw heads: there is no fan in this model -- no mounting
+//       holes, no cutout, no envelope. The 40mm intake fan being added lives
+//       on a WALL, not the lid, so it does not want lid headroom either.
+//
+// VARIANT_WALL_HEIGHT alone is already generous: the render reports 33.1mm of
+// clearance margin against a 22.5mm heatsink stack, and the two tallest
+// internal mounts (FT232H 40.5mm, switch 34.65mm) both still fit inside 48mm.
+extra_headroom_mm = 0;
 wall_height = VARIANT_WALL_HEIGHT + extra_headroom_mm;
 
 // ---- FPGA/heatsink clearance check (informational + drives the vent
@@ -596,7 +620,19 @@ right_connector_positions_mm = [
 // was in the wrong wall AND 10mm too high.
 dc_jack_y_mm             = 22.0; // board-local Y of the barrel centre
 dc_jack_diameter         = 7;    // measured barrel outer diameter
-dc_jack_centre_above_pcb = 6;    // measured, PCB top surface to barrel centre
+// THE HOLE IS SIZED FOR THE PLUG BODY, NOT THE BARREL. Measured 2026-09-06:
+// the 6V adapter needs 13mm to pass. The barrel is 7mm, but what has to fit
+// through the wall is the moulded shell around it, and sizing the hole to the
+// barrel is why the printed case would not take the power lead.
+dc_jack_hole_d           = 13;
+// RAISED 6.0 -> 6.5. At 6.0 a 13mm hole reaches down to 15.4 - 6.5 = 8.9mm,
+// which is 0.5mm BELOW the board's top surface at 9.4 -- so it would breach
+// the 2mm band of solid wall alongside the PCB edge that wall_cutout_z0()
+// exists to preserve. 6.5 puts the bottom of the hole exactly on the board
+// top. The jack's real centre is still 6.0, so the hole now sits 0.5mm high on
+// it; with 6.5mm of hole radius against a 3.5mm barrel there is 2.5mm of slack
+// below centre, so the barrel still passes comfortably.
+dc_jack_centre_above_pcb = 6.5;
 
 // WiFi antenna pass-through, right wall -- the power end, which is also the
 // end JP5 runs to. Clear of JP1 (board y 17-27) and SW4 (31-44); y=78 puts it
@@ -604,7 +640,12 @@ dc_jack_centre_above_pcb = 6;    // measured, PCB top surface to barrel centre
 // FIT-CHECK item 3a: 6mm would not pass the bulkhead thread. An RP-SMA
 // bulkhead is a 1/4-36 or M6.5 thread, i.e. about 6.35mm over the crest, so a
 // 6mm hole was under-size before the D-flat took anything off it.
-antenna_hole_d       = 6.8;
+// 6.8 -> 6.5. The SMA bulkhead thread is 6.35mm, so 6.8 left 0.45mm of slop
+// and the connector could sit visibly off-centre. 6.5 is 0.15mm clearance
+// before print shrinkage, which on a horizontal hole prints slightly under
+// anyway. Note this interacts with antenna_flat_from_centre below: at 3.1 from
+// centre the D-flat is now 1.95mm wide rather than 2.79mm.
+antenna_hole_d       = 6.5;
 // The bulkhead thread has a flat on it for anti-rotation, so the hole is a D
 // rather than a circle -- a round hole lets the connector spin when the
 // antenna is screwed on or off, which eventually twists the pigtail off.
@@ -697,7 +738,11 @@ ft232h_pcb_t       = 1.8;   // 1.6mm board plus fit
 //
 // Worth keeping the history: the inset guess happened to be correct, which is
 // luck rather than method. It is measured now either way.
-ft232h_hole_pitch  = [37, 23];
+// MEASURED 2026-09-06 against the actual breakout: 36 x 23, not 37 x 23. The
+// 23 was right. The comment above says the printed tray was offered up and
+// "the posts line up", which is true of a 1mm error on a 5mm post in a 2.4mm
+// hole -- it lines up enough to look right and fights the second screw.
+ft232h_hole_pitch  = [36, 23];
 ft232h_post_od     = 5.0;
 ft232h_post_ht     = 4.0;   // lifts the board off the wall for its solder side
 ft232h_post_pilot  = 2.4;   // M2.5 self-tap
@@ -1045,10 +1090,28 @@ wall_roof_min_mm = 3.0;
 // should be solid alongside the PCB, and every window ended up low.
 //
 // Lifted by a full board thickness and the margin removed from the bottom
-// edge, which leaves at least board_thickness of unbroken wall below every
+// edge, which leaves exactly board_thickness of unbroken wall below every
 // opening -- the "2mm bit around the bottom" this was missing.
-cutout_lift_mm = 2.0;
-function wall_cutout_z0() = lip_z + board_thickness + cutout_lift_mm;
+//
+// FIT-CHECK 2026-09-06: THE OFFSET WAS APPLIED TWICE. The line above already
+// reads lip_z + board_thickness, which IS the fix it describes; a separate
+// cutout_lift_mm = 2.0 then added the same 2mm again, so every rectangular
+// window started 4mm above the lip instead of 2mm.
+//
+// The gap between the bottom of a window and the surface the board rests on
+// must equal the board's thickness, and nothing else: the board's edge fills
+// exactly that space, and a connector standing on the board begins at its top
+// face. At +4mm the bottom 2mm of every connector was blocked by solid wall.
+//
+// The tell was internal inconsistency. Every ROUND feature -- the DC jack,
+// the antenna hole, the KAN28 switch, the FT232H window -- is placed at
+// lip_z + board_thickness + <height above the PCB top surface>, with no lift.
+// Only the rectangular windows carried the extra 2mm, so they sat 2mm above
+// the round holes in the same walls.
+//
+// Written as board_thickness rather than a literal so it tracks the board:
+// this is a datum, not an allowance, and there is nothing to tune here.
+function wall_cutout_z0() = lip_z + board_thickness;
 function wall_cutout_h(body_h) =
     min(body_h + 2*cutout_margin,
         (tray_height - wall_roof_min_mm) - wall_cutout_z0());
@@ -1211,7 +1274,10 @@ module right_edge_dc_jack() {
                board_y(dc_jack_y_mm),
                lip_z + board_thickness + dc_jack_centre_above_pcb])
         rotate([0, 90, 0])
-            cylinder(h = wall_thickness + 2, d = dc_jack_diameter + cutout_margin, $fn = 32);
+            // No cutout_margin: dc_jack_hole_d IS the required hole, measured
+            // as such. Adding a margin to a measured clearance figure is how
+            // the round features ended up with three different conventions.
+            cylinder(h = wall_thickness + 2, d = dc_jack_hole_d, $fn = 48);
 }
 
 module corner_standoff(x, y) {
@@ -1344,17 +1410,51 @@ module lid_skirt() {
 module lid_snap_bead() {
     z0 = -lid_skirt_depth + snap_lead_in;
     inset = wall_thickness + lid_fit_clearance;
-    translate([0, 0, z0])
-        difference() {
-            linear_extrude(height = snap_bead_h)
-                translate([inset - snap_bead_mm, inset - snap_bead_mm])
-                    square([outer_length - 2*(inset - snap_bead_mm),
-                            outer_width  - 2*(inset - snap_bead_mm)]);
-            translate([0, 0, -1])
-                linear_extrude(height = snap_bead_h + 2)
-                    translate([inset + wall_thickness, inset + wall_thickness])
-                        square([outer_length - 2*(inset + wall_thickness),
-                                outer_width  - 2*(inset + wall_thickness)]);
+
+    /* THE CLEARANCE WAS SUBTRACTED TWICE, so the bead never reached the groove.
+     *
+     * The groove is cut into the TRAY wall and its floor sits at
+     * wall_thickness - snap_bead_mm = 2.05mm in from the outer face. The bead
+     * hangs off the SKIRT, whose outer face is already lid_fit_clearance
+     * further in at wall_thickness + lid_fit_clearance = 2.70mm. Offsetting
+     * the bead by snap_bead_mm from THAT put its outer face at 2.35mm:
+     *
+     *   interference on the way in : 2.40 - 2.35 = 0.05mm
+     *   radial gap once seated     : 2.35 - 2.05 = 0.30mm
+     *
+     * 0.05mm is inside print tolerance and the seated bead touched nothing at
+     * all -- the lid was held on by skirt friction across a 0.3mm/side gap,
+     * which is why it lifted straight off. Taking lid_fit_clearance out as
+     * well lands the bead's outer face exactly on the groove floor at 2.05mm,
+     * making the interference the full snap_bead_mm the parameter promises.
+     *
+     * Note the failure was a cliff, not a slope, which is why tuning
+     * snap_bead_mm never fixed it: at 0.35 the engagement was 0.05mm, and at
+     * anything <= 0.30 the bead would have been flush with or inside the skirt
+     * face and ceased to exist. FIT-CHECK item 2 lowered it from 0.6 (which
+     * did engage, by 0.30mm) and made it worse while looking like a refinement. */
+    bead_out = inset - lid_fit_clearance - snap_bead_mm;
+
+    difference() {
+        /* Tapered, because the comment above has always promised a lead-in and
+         * the geometry was a square shoulder. hull() from the skirt's own face
+         * at the bottom up to the full bead gives the ramp; without it a 0.35mm
+         * interference has to be forced past a 90-degree edge. */
+        hull() {
+            translate([0, 0, -lid_skirt_depth])
+                linear_extrude(height = 0.01)
+                    translate([inset, inset])
+                        square([outer_length - 2*inset, outer_width - 2*inset]);
+            translate([0, 0, z0])
+                linear_extrude(height = snap_bead_h)
+                    translate([bead_out, bead_out])
+                        square([outer_length - 2*bead_out, outer_width - 2*bead_out]);
+        }
+        translate([0, 0, -lid_skirt_depth - 1])
+            linear_extrude(height = lid_skirt_depth + snap_bead_h + 2)
+                translate([inset + wall_thickness, inset + wall_thickness])
+                    square([outer_length - 2*(inset + wall_thickness),
+                            outer_width  - 2*(inset + wall_thickness)]);
         }
 }
 
