@@ -175,43 +175,99 @@ halving for ~13% more LUTs, which is roughly thirty times cheaper.
 **Reducing rounds, throughput tricks, wider miners.** All excluded by §2:
 84 rounds is consensus, and `T` cancels.
 
-## 7. The one idea I think is genuinely new
+## 7. The placement idea — proposed, then measured, then withdrawn
 
-The permutation is not arbitrary — it is highly structured, and the structure
-is *known to the generator*:
+An earlier draft of this review proposed absorbing the permutation into the
+*placement* of the pipeline registers: since the same two P-boxes are applied
+every round, place stage *n+1*'s bit where the permutation sends stage *n*'s
+bit and the wire becomes short by construction. The word shuffle is
+`word → word × 3 mod 10`, with cycles `(1 3 9 7)` and `(2 6 8 4)`; the
+rotations are constants. Both look absorbable.
 
-- **Word shuffle** is `word → word × 3 mod 10`, whose cycle structure is
-  `(1 3 9 7)`, `(2 6 8 4)`, with 0 and 5 fixed — two 4-cycles.
-- **Rotations** are constant cyclic shifts within 64-bit words.
-- **Masked swaps** act between fixed word *pairs*.
+**I measured it, and it does not work.** The reasoning below is kept because
+the failure is more informative than the proposal.
 
-A permutation costs wire only relative to a *layout*. Because the same two
-P-boxes are applied every round, a layout that is good for one stage is good
-for all of them — and the constant rotations and the word shuffle can be
-**absorbed into the physical placement of the pipeline registers**: place
-stage *n+1*'s bit where the permutation sends stage *n*'s bit, and the wire
-becomes short by construction rather than by luck.
+### First check: is the structure still there after composition?
 
-That is a sharper version of the "derive a floorplan from netlist structure"
-idea already recorded: don't derive it from the netlist, derive it from the
-**algebra**, which `odo_gen` has in hand and currently discards. `odo_gen`
-could emit placement constraints alongside the RTL — placing the 10 words in
-multiplicative-cycle order so the shuffle is a neighbour hop, and offsetting
-each stage's bit placement by the accumulated rotation.
+No. Counting how many of each word's 64 bits land in each destination word:
 
-**The honest obstruction:** the linear mix XORs six *different* rotations of
-the same word, so six bits at unrelated distances must meet at one LUT. That
-term cannot be made local, and it sets a floor. The BRAM sites are fixed too,
-which constrains the layout around the S-boxes. So this would not eliminate
-the routing cost — but the design is 70–91% routing, the placer currently
-discovers its layout by annealing from naming heuristics, and the seed spread
-of **36% (145–197 MHz on an identical netlist)** is direct evidence that
-placement quality, not the netlist, is what sets the clock. That spread is
-the size of the prize.
+    pbox0, source word 0 -> [7, 10, 3, 7, 5, 7, 7, 8, 4, 6]
+           source word 4 -> [10, 9, 6, 4, 9, 8, 4, 6, 4, 4]
 
-This is speculative and unmeasured. It is also the only remaining idea I can
-see that attacks the actual binding constraint.
+Essentially uniform at 64/10 = 6.4. Each `apply_pbox` is the composition of
+six subrounds of *masked swap → word shuffle → rotation*, and the masked swaps
+use random 64-bit masks. Six rounds of that destroys the tidy word-shuffle
+structure completely. No word-level layout can help, because every word talks
+to every other word equally.
 
+### Second check: cycle structure, which is what layout cost really depends on
+
+Randomness alone would not have settled it. A permutation costs wire relative
+to a layout, and even a "random-looking" permutation that is one long cycle can
+be laid out around a ring so every element moves by exactly one slot.
+
+    pbox1 o pbox0:  8 cycles, longest 228, lengths [228, 222, 88, 66, 27, 4, 3, 2]
+
+Long cycles — so a cycle-order layout should make the permutation nearly free.
+
+### The measurement
+
+Model: one round maps register bits to register bits by `comp = pbox1 ∘ pbox0`
+(the S-box is position-wise the identity — it permutes *values*, not
+positions). The linear mix then XORs six constant rotations of each word
+(measured amounts: 30, 51, 24, 23, 61, 60). Cost is total wirelength over a
+1-D layout, which is the right question to ask of *any* relabeling.
+
+| layout | permutation | linear mix | total |
+|---|---|---|---|
+| natural (bit *i* at slot *i*) | 135,052 | 80,180 | **215,232** |
+| cycle-order | **1,264** | 818,694 | 819,958 (+281%) |
+| annealed on the true cost | — | — | **184,540 (−14.3%)** |
+
+The idea works exactly as claimed on the term it targets: cycle-order makes
+the permutation **107× cheaper**. And it is a **3.8× net loss**, because the
+linear mix has **3,840 wires against the permutation's 640**. Optimising the
+minority term by wrecking the majority term is a bad trade, and the natural
+layout already keeps the linear mix local — its taps stay inside one 64-bit
+word.
+
+Two further readings of that table:
+
+- The natural layout's permutation cost of 135,052 over 640 wires is 211 per
+  wire, against the 640/3 ≈ 213 expected for a *uniformly random* permutation
+  on 640 slots. The permutation is, for layout purposes, indistinguishable
+  from random.
+- Annealing on the real combined cost finds only **−14.3%** (reproducible:
+  −14.3% and −14.1% from two seeds). So the natural layout is already within
+  about 15% of what any relabeling achieves. There is no large win hiding in a
+  middle ground between the two extremes.
+
+### Why this was always going to fail
+
+OdoCrypt's permutation exists to diffuse. A permutation that could be made
+*local* by any relabeling is one whose bits stay near their neighbours — which
+is precisely a permutation with poor diffusion. **The wire cost is not an
+implementation artifact; it is the algorithm's diffusion requirement expressed
+physically.** Any layout that made the wiring cheap would correspond to a
+weaker cipher. This is a floor, not an inefficiency, and no placer — annealing,
+analytic, or algebra-derived — can go under it.
+
+### A correction to my own earlier argument
+
+The first draft cited the 36% seed spread (145–197 MHz on an identical
+netlist) as "the size of the prize" for better placement. That was wrong. The
+spread is *variance in outcomes* — routing luck and congestion on the critical
+path — not evidence that a systematically better layout exists. The measured
+headroom for a better layout is the −14.3% above, in total wirelength, which
+is not the same quantity as Fmax and would translate to considerably less.
+
+### What, if anything, survives
+
+Only a weak version: feeding the placer an algebra-derived *initial* placement
+might reach a good layout faster or more reliably than annealing from naming
+heuristics, and might narrow the seed spread rather than raise its ceiling.
+That is a tooling convenience, not a hashrate lever, and on a 14% wirelength
+budget it is not worth building. **Recommend dropping this line.**
 ## 8. Recommendation
 
 1. **Measure `clk_2x` in Vivado** (`build_mux4.tcl`). One number decides
@@ -222,7 +278,7 @@ see that attacks the actual binding constraint.
    predictable so bitstreams can be built ahead.
 3. **Do not** make the cipher configurable, convert S-boxes to LUTs, or
    pipeline the datapath further. Each is quantified above as a loss.
-4. If §7 appeals, the cheapest test is to have `odo_gen` emit word-order and
-   per-stage rotation-offset placement hints and re-run a seed sweep. A
-   result anywhere in the upper half of the existing 145–197 MHz spread,
-   *reliably* rather than by seed luck, would be the proof.
+4. **Do not pursue the placement idea of §7.** It was measured and refuted:
+   cycle-order layout makes the permutation 107x cheaper and is a 3.8x net
+   loss, and the best layout any relabeling reaches is only 14% better than
+   the naive one.
