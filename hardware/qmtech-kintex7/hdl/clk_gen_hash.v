@@ -87,6 +87,46 @@
 // If this does not close, fall back to MULT 18 before anything else: it is
 // still +12.5% and has more than twice the predicted margin.
 //
+// ============================================================================
+// 237.50MHz DOES NOT WORK ON THIS SILICON. FLASHED AND REVERTED 2026-09-06.
+//
+// The build closed at WNS +0.335ns with 0 DRC errors, and the hardware
+// disagreed. Flashed at 16:44, the miner produced ZERO valid shares:
+//
+//   STATUS    0x0003  -> HASH_ACTIVE=1, NONCE_VALID=1  (the core WAS running)
+//   FIFO_STAT 0xff08  -> depth 8, lost counter SATURATED at 255
+//
+// So it was not a failure to start and not an MMCM lock problem. The core ran
+// and flooded the found-FIFO with nonces, every one of which failed host
+// validation -- i.e. it computed WRONG DIGESTS at speed. Garbage meets a low
+// share target often, which is why the find rate went up while the accept
+// rate went to nothing.
+//
+// THE "IMPLIED CEILING" REASONING WAS WRONG, and this is the important part.
+// Each build closing with slack implies a higher Fmax, and I chased that:
+//
+//   built at 200MHz -> closed +0.763ns -> implies 236MHz
+//   built at 225MHz -> closed +0.273ns -> implies 239.7MHz
+//   built at 237.5  -> closed +0.335ns -> implies 258MHz   <- and does not run
+//
+// A static-timing number is a statement about the paths the tool MODELS. It
+// is not a promise about silicon at 0.977V core (measured, 2.3% below
+// nominal) and 79C. Somewhere past 225MHz this design leaves the region where
+// Vivado's model is conservative enough, and it does so silently: the build
+// is clean, the DRC passes, and the failure appears only as bad hashes.
+//
+// 225MHz IS THE PROVEN CEILING until something measures otherwise. Do not
+// re-derive a higher one from slack alone -- that is exactly the reasoning
+// that produced this.
+//
+// WHAT WOULD ACTUALLY SETTLE IT: two variables changed between the working
+// 225MHz build and this one -- the clock AND the display removal plus the
+// 0x0207 reset/rx_err/fan changes, none of which had ever been on hardware.
+// Building the CURRENT RTL at 225MHz separates them. If that mines, the RTL
+// is fine and the clock is the problem; if it does not, the clock is
+// exonerated and something in those changes is not.
+// ============================================================================
+//
 // SPEED BUMP, 2026-09-05 (second of the day): MULT 18 -> 19, clk_h
 // 225.00 -> 237.50MHz (+5.6%). DIVIDE_2X stays 2.
 //
@@ -167,8 +207,8 @@
 
 module clk_gen_hash #(
     parameter CLKIN_PERIOD_NS = 20.000, // 50MHz input
-    parameter CLKFBOUT_MULT   = 19,     // VCO = 50MHz * 19 = 950MHz (7-series -1: 600-1200MHz range)
-    parameter CLKOUT_DIVIDE_2X = 2      // clk_2x = 950/2 = 475MHz, clk_h = 950/4 = 237.5MHz
+    parameter CLKFBOUT_MULT   = 18,     // VCO = 50MHz * 18 = 900MHz -- 225MHz, the PROVEN value; 19 does not run
+    parameter CLKOUT_DIVIDE_2X = 2      // clk_2x = 900/2 = 450MHz, clk_h = 900/4 = 225MHz
 )
 (
     input  wire clk_in,     // from sys_clk_50m (via IBUF upstream)
