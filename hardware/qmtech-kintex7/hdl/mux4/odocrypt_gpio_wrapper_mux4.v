@@ -294,7 +294,18 @@ module odocrypt_gpio_wrapper_mux4 #(
     // permanently -- surviving restarts, recoverable only by reconfiguring
     // the FPGA. It cost an hour of mining on 2026-09-01. OP_SOFT_RESET now
     // reaches it and the daemon issues one at startup.
-    localparam [15:0] VERSION = 16'h0203;
+    /* 0x0207, not 0x0203. This wrapper's register map is byte-identical to
+     * the shipping one -- display block removed (0x0205), ADDR_UART_RXCNT
+     * present (0x0204) -- and it inherited the clock bump (0x0206) and the
+     * fan/rx_err/reset fixes (0x0207) with it. It reported 0x0203 through all
+     * of that, so if this experiment were ever flashed, the one register that
+     * answers "which bitstream is running" would lie -- the exact problem that
+     * cost a ten-minute hashrate measurement on 2026-09-05 when the 200MHz and
+     * 225MHz builds could not be told apart.
+     *
+     * VERSION describes the REGISTER INTERFACE, which is the same here; the
+     * 4-vs-2 instance count is not visible through it and does not need to be. */
+    localparam [15:0] VERSION = 16'h0207;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;

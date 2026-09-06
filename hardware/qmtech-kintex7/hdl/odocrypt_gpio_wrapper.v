@@ -295,14 +295,27 @@ module odocrypt_gpio_wrapper #(
      * exist -- but the next omission will not be, and the cost of a bump is
      * one line.
      *
+     * 0x0207: the fan reaches 100% at 78C rather than 85C (the part's Tj
+     * limit); UART_STAT's rx_err saturates instead of wrapping; the two UART
+     * strobes and esp_ctrl_r are reset.
+     * 0x0206: clk_h 225.00 -> 237.50MHz (clk_gen_hash MULT 18 -> 19). A
+     * clock change IS a behaviour change and gets a bump, and this one
+     * earns it twice over -- see below.
      * 0x0205: the ILI9341/XPT2046 block is gone and 0x10-0x17 are free.
      * 0x0204 was the 256-byte RX FIFO and the exact rx_count at 0x1C.
+     *
+     * THE COST OF NOT BUMPING, paid on 2026-09-05. Flashing the 225MHz
+     * build over the 200MHz one, there was NO WAY to confirm from the
+     * board which was running: both reported 0x0203, so the one register
+     * that exists to answer that question could not. Verification fell
+     * back to measuring the hashrate for ten minutes. That is the whole
+     * argument for the rule above, and it is why the clock is in here.
      *
      * NOTE: one interim bitstream carries the 0x0204 changes but still
      * REPORTS 0203 -- it was built before this was bumped. Nothing
      * depends on telling them apart: UART_STAT is identical in all
      * three, and 0x1C simply reads 0 on a bitstream that lacks it. */
-    localparam [15:0] VERSION = 16'h0205;
+    localparam [15:0] VERSION = 16'h0207;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;
@@ -341,6 +354,16 @@ module odocrypt_gpio_wrapper #(
     (* ASYNC_REG = "TRUE" *) reg [15:0] data_in_sync0;
     reg [15:0] data_in_sync1;
 
+    // CAVEAT, 2026-09-06: this paragraph is not true of the whole file. The
+    // XADC DRP poller and the fan controller below are both
+    // `always @(posedge bus_clk or negedge bus_rst_n)` and so infer FDCE/FDPE
+    // -- about 60 async-reset flops on bus_clk, in the same half-slices as the
+    // FDREs this comment is describing. Vivado is unaffected and that is the
+    // flow in use, so the RTL is left alone rather than rewritten immediately
+    // before a build; but the invariant below is an aspiration for those two
+    // blocks, not a description of them, and an openXC7 build could still hit
+    // the control-set contention it describes.
+    //
     // Synchronous reset deliberately, not async: bus_rst_n is already
     // deasserted synchronously (see am01_qmtech_top.v's rst_stretch
     // counter), so nothing here needs true async behaviour. Kept sync
@@ -613,6 +636,22 @@ module odocrypt_gpio_wrapper #(
     localparam [15:0] TEMP_55C = 16'hA6E0;
     localparam [15:0] TEMP_70C = 16'hAEB0;
     localparam [15:0] TEMP_85C = 16'hB680;
+    /* 100% AT 78C, NOT 85C.
+     *
+     * 85C is the commercial Tj limit for this part, so the old curve only
+     * reached full speed once the die was already AT its rating -- the one
+     * point at which more airflow is no longer optional. 78C leaves the fan
+     * quiet through normal load (the board sits at 74C mining at 225MHz) and
+     * still gives 7C of margin to act in.
+     *
+     * Code from the XADC transfer function T = code*503.975/4096 - 273.15,
+     * checked against the constants above rather than assumed: 0x9F1 = 2545
+     * gives 39.99C and 0xAEB = 2795 gives 70.75C, so the encoding is
+     * confirmed. 78C -> (78+273.15)*4096/503.975 = 2854 = 0xB26.
+     *
+     * TEMP_85C is kept: it still documents where the part's limit actually
+     * is, and the >= TEMP_78C arm covers it. */
+    localparam [15:0] TEMP_78C = 16'hB260;
 
     reg  [7:0]  fan_duty;        // 0-255, what we are actually driving
     reg  [7:0]  fan_floor;       // host-settable minimum, 0 = pure auto
@@ -624,7 +663,7 @@ module odocrypt_gpio_wrapper #(
 
     wire [7:0] fan_auto =
           (xadc_temp_bus == 16'h0000) ? 8'd255 :   // unknown -> full
-          (xadc_temp_bus >= TEMP_85C) ? 8'd255 :
+          (xadc_temp_bus >= TEMP_78C) ? 8'd255 :
           (xadc_temp_bus >= TEMP_70C) ? 8'd191 :
           (xadc_temp_bus >= TEMP_55C) ? 8'd140 :
           (xadc_temp_bus >= TEMP_40C) ? 8'd102 :
@@ -715,6 +754,27 @@ module odocrypt_gpio_wrapper #(
             header_lo_stage <= 16'h0;
             target_lo_stage <= 16'h0;
             nonce_valid_clear_pulse <= 1'b0;
+            /* THE UART STROBES BELONG HERE TOO.
+             *
+             * Both are one-shots, defaulted to 0 in the else branch and set
+             * for a single cycle by the S_WRITE/S_READ arms -- so a reset
+             * landing on the cycle one of them is high leaves it high for the
+             * whole reset window. uart_bridge's ports are themselves
+             * reset-guarded, so nothing moves DURING reset; the damage is on
+             * the first cycle after rst_n returns, when tx_wr && !tx_full is
+             * still true and one stale wdata_latched byte is pushed to the
+             * panel out of protocol. rx_rd does the mirror image and eats a
+             * received byte. Same class of miss as fan_floor's ownership
+             * note below -- these two simply never got an owner. */
+            uart_tx_wr      <= 1'b0;
+            uart_rx_rd      <= 1'b0;
+            /* And the ESP control bits, which have an initial value but were
+             * not cleared here. If the host had written 2'b00 to hold the
+             * panel in reset -- which is exactly what the OTA sequence does --
+             * a bus reset left it held, with no software running on the panel
+             * to release itself. 2'b11 is EN=1, IO0=1 -- run normally, and
+             * the same value the declaration initialises it to. */
+            esp_ctrl_r      <= 2'b11;
             // Host-settable fan floor. Owned here because this block writes it
             // (S_WRITE/ADDR_FAN); the fan controller only reads it.
             //
@@ -910,8 +970,18 @@ module odocrypt_gpio_wrapper #(
                         // along one at a time. rx_err drops to 4 bits and
                         // still saturates -- it is a "framing errors are
                         // happening" flag, and 15 says that as well as 255.
+                        //
+                        // SATURATED ON THE WAY OUT, which the previous version
+                        // did not do. uart_bridge.v counts to 8'hFF and only
+                        // the low nibble was published, so the field WRAPPED:
+                        // exactly 16 framing errors read back as 0 --
+                        // indistinguishable from a clean link, and 16 errors
+                        // during an OTA is an ordinary number. The corrupted
+                        // transfer then gets blamed on the panel firmware.
+                        // Any error in the high nibble now pins it at 15.
                         ADDR_UART_STAT: rdata_reg <=
-                            {uart_rx_err[3:0], uart_tx_cnt,
+                            {(|uart_rx_err[7:4]) ? 4'hF : uart_rx_err[3:0],
+                             uart_tx_cnt,
                              (uart_rx_cnt > 16'd31) ? 5'd31 : uart_rx_cnt[4:0],
                              uart_tx_full, uart_rx_empty};
                         /* The WHOLE count, exact, in its own register. */
