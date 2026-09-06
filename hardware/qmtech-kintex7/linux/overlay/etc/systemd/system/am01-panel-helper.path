@@ -4,6 +4,16 @@ Description=Watch for privileged requests from the CYD front panel
 # /etc/wpa_supplicant or call systemctl. It drops a request file into
 # /run/odod/request/ instead; this notices and starts the root-side helper.
 Documentation=man:am01-panel-helper(8)
+# AFTER the miner, because /run/odod is ITS RuntimeDirectory and must be
+# created by it, owned by miner. odo-miner.service's own comment records what
+# happens otherwise: "The request directory used to be created by the daemon
+# itself on first use -- which worked until something running as root created
+# it first, after which the miner could not write into its own request
+# directory and every panel action failed with EACCES." This unit, with
+# MakeDirectory=yes below, was exactly such a root creator racing the service
+# it exists to complement -- and RuntimeDirectoryPreserve=yes means a
+# wrongly-owned directory would survive restarts.
+After=odo-miner.service
 
 [Path]
 # /run/odod is odo-miner.service's RuntimeDirectory (mode 0755, owned by
@@ -12,8 +22,12 @@ Documentation=man:am01-panel-helper(8)
 PathExistsGlob=/run/odod/request/*
 # Re-arm immediately, so a second request queued while the first is being
 # applied is not lost.
-MakeDirectory=yes
-DirectoryMode=0755
+#
+# NO MakeDirectory. It was here so the unit could arm before the directory
+# existed, and the cost was root creating /run/odod root-owned whenever this
+# unit won the race -- silently disabling every panel button. The After=
+# ordering above removes the need: odo-miner's RuntimeDirectory=odod has
+# created it, owned by miner, before this unit starts.
 
 [Install]
 WantedBy=multi-user.target

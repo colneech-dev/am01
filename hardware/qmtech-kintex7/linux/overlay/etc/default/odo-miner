@@ -15,7 +15,19 @@
 #
 # Set your pool and wallet here before starting the miner. The value below is
 # a placeholder and will not connect to anything.
-DAEMON_OPTS="--host test-pool.example.com --port 3333 --worker YOUR_WALLET.am01"
+# POSITIONAL: <host> <port> <worker> [password]. There is no option parser.
+#
+# This file used to read
+#   DAEMON_OPTS="--host test-pool.example.com --port 3333 --worker ..."
+# and odo-miner's main() takes argv[1..4] positionally -- so a user editing it
+# per its own instructions got "--host" resolved as the hostname and their
+# pool name resolved as the port. The daemon then failed, Restart=on-failure
+# with StartLimitIntervalSec=0 retried for ever, and the journal reported a
+# DNS error naming a string the user never typed.
+#
+# post-image.sh and am01-panel-helper both already wrote it correctly; this
+# file, the one a user actually finds on the running board, did not.
+DAEMON_OPTS="test-pool.example.com 3333 YOUR_WALLET.am01 x"
 
 # Leave DAEMON_OPTS empty to bring the daemon up without mining, which is
 # useful when bringing up the FPGA bus for the first time:

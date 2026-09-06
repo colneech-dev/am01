@@ -1,6 +1,14 @@
 # Vivado project working directory and logs -- large, machine-specific,
 # reproducible via build.tcl/build_full.tcl. Never commit these.
-build/
+# build*/ , not build/ : build_mux4.tcl writes build_mux4/, and the
+# experiment directories (build_3m/, build_cydpins_*/, build_epoch*_DONE/)
+# are the same thing under other names. Only "build/" was ignored, so several
+# multi-gigabyte Vivado project trees sat untracked AND unignored -- one
+# `git add -A` from being committed, and enough noise in `git status` to hide
+# a real change. The root .gitignore's own comment makes that argument: a
+# broken encrypt.v sat in the working tree for a day because it was one line
+# among that noise.
+build*/
 *.log
 *.jou
 webtalk*
@@ -11,3 +19,12 @@ webtalk*
 # commit hash is the provenance -- see the artifact's filename and the build
 # log, not a blob here.
 artifacts/
+
+# Per-run report files dropped beside the scripts by build_mux4.tcl and the
+# experiment flows. Same argument as build*/: reproducible output, and noise
+# that hides real changes in git status.
+mux4_*.rpt
+*_impl_util.rpt
+*_impl_timing.rpt
+*_synth_util.rpt
+*_synth_timing.rpt
