@@ -88,6 +88,15 @@ int  thermal_init(void);
  * microseconds after configuration, before the first conversion completes). */
 int  thermal_read_c(int *temp_c);
 
+/* The XADC supply rails in volts (VCCINT nominal 1.0, VCCAUX 1.8,
+ * VCCBRAM 1.0). Any pointer may be NULL. Returns 0 on success.
+ *
+ * Read from the MINING LOOP, not by stopping the miner. This board has no
+ * current sense, so a drooping VCCINT is the only signal it can give about
+ * how hard the core is being driven -- and an idle reading, which is all that
+ * was available before, is precisely the one that cannot show it. */
+int  thermal_read_rails(double *vccint, double *vccaux, double *vccbram);
+
 /* Raise the fan to at least `pct`. CLAMPED TO [0,100] and applied as a FLOOR:
  * the fabric curve still runs above it, so this can only ever increase
  * cooling. 0 restores fully automatic control. */

@@ -845,6 +845,24 @@ static void draw_detail(const cyd_status_t *st, uint32_t now)
      * "--" rather than as a board fault. */
     cyd_fmt_temp(st->temp_c, b, (int)sizeof b);
     DROW_L("TEMP", b, st->temp_c >= 65 ? C_WARN : C_TEXT);
+
+    /* VCORE shares the row, because TEMP's right column was empty and this is
+     * the other half of the same question: how hard the chip is being pushed.
+     *
+     * There is no current sense on this board -- XADC gives temperature and
+     * three voltages, nothing else -- so a drooping core rail is the only
+     * indication available that the MP8712 is at its limit. Amber outside the
+     * 0.95-1.05V spec band; dim when the miner did not report it (an older
+     * odo-miner) or the bitstream has no such register (reads 0.000). */
+    if (st->vccint < 0)
+        DROW_R("VCORE", "--", C_DIM);
+    else if (st->vccint < 0.01)
+        DROW_R("VCORE", "n/a", C_DIM);
+    else {
+        snprintf(b2, sizeof b2, "%.3f V", st->vccint);
+        DROW_R("VCORE", b2,
+               (st->vccint < 0.95 || st->vccint > 1.05) ? C_WARN : C_TEXT);
+    }
     y += 17;
 
     /* FAN gets the WHOLE ROW, so the rpm can be labelled.

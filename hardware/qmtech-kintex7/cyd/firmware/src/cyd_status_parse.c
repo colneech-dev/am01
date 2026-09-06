@@ -176,6 +176,12 @@ bool cyd_status_parse(const char *json, cyd_status_t *st)
      * render as "0 C" and "0 rpm" -- a cold board and a stopped fan, both
      * untrue and both alarming. */
     get_int(json, "temp_c",       &st->temp_c);
+    /* Rails. Absent on an older odo-miner, so seed the sentinel first and
+     * let get_double leave it alone if the key is not there. */
+    st->vccint = st->vccaux = st->vccbram = -1.0;
+    (void)get_double(json, "vccint",  &st->vccint);
+    (void)get_double(json, "vccaux",  &st->vccaux);
+    (void)get_double(json, "vccbram", &st->vccbram);
     get_int(json, "fan_rpm",      &st->fan_rpm);
     get_int(json, "fan_duty_pct", &st->fan_duty_pct);
 

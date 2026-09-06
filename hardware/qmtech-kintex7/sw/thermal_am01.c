@@ -73,6 +73,34 @@ int thermal_init(void)
     return -1;
 }
 
+/* The three XADC supply rails, in volts.
+ *
+ * Transfer function is the XADC supply sensor's: V = code/4096 * 3.0, with
+ * the 12-bit code in bits [15:4]. Verified against the live board -- VCCAUX
+ * read 0x9A7 = 2471 -> 1.810V against an 1.8V nominal.
+ *
+ * A bitstream without these registers returns 0 from an unmapped read, which
+ * surfaces as 0.000V rather than as a plausible-looking voltage. */
+int thermal_read_rails(double *vccint, double *vccaux, double *vccbram)
+{
+    am01_bus_t *b = bus();
+    if (!b)
+        return -1;
+
+    static const uint8_t addr[3] = { 0x0C, 0x0D, 0x0E };  /* VCCINT/AUX/BRAM */
+    double *out[3] = { vccint, vccaux, vccbram };
+
+    for (int i = 0; i < 3; i++) {
+        uint16_t raw = 0;
+        if (!out[i])
+            continue;
+        if (am01_bus_read_reg(b, addr[i], &raw) < 0)
+            return -1;
+        *out[i] = (double)(raw >> 4) / 4096.0 * 3.0;
+    }
+    return 0;
+}
+
 int thermal_read_c(int *temp_c)
 {
     am01_bus_t *b = bus();

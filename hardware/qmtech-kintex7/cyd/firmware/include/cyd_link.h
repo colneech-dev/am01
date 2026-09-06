@@ -113,6 +113,20 @@ typedef struct {
     int      fan_rpm;           /* -1 = unknown                            */
     int      fan_duty_pct;
 
+    /* XADC supply rails, volts. -1 = the miner did not report them, which is
+     * what an older odo-miner looks like -- distinct from 0.000, which means
+     * the BITSTREAM has no such register.
+     *
+     * VCCINT is the interesting one. This board has no current sense, so the
+     * core rail sagging is the only signal available that the FPGA is being
+     * driven harder than its MP8712 likes. Measured 0.979V both idle and at
+     * full mining load on 2026-09-06 -- i.e. no droop, a fixed setpoint
+     * offset -- which is why it is worth showing: a CHANGE in it means
+     * something. */
+    double   vccint;
+    double   vccaux;
+    double   vccbram;
+
     uint32_t uptime;
     uint32_t last_share;
     /* THE MINER'S WALL CLOCK, and the only trustworthy one here: a CYD has no

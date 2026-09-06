@@ -53,6 +53,8 @@ static const char REAL[] =
 "  \"blocks_found\": 0,\n"
 "  \"last_block\": 0,\n"
 "  \"temp_c\": 55,\n"
+"  \"vccint\": 0.979,\n"
+"  \"vccaux\": 1.808,\n"
 "  \"fan_duty_pct\": -1,\n"
 "  \"fan_rpm\": 3030,\n"
 "  \"backend\": \"gpio\",\n"
@@ -95,6 +97,16 @@ int main(void)
     ok(st.updated != st.epoch + st.uptime,
        "and differs from epoch+uptime, which was the bug");
     ok(st.temp_c == 55,         "temp_c 55");
+
+    /* The rails. VCCINT is the one that matters: no current sense exists on
+     * this board, so a change in the core rail is the only signal available
+     * that the FPGA is being pushed harder than the MP8712 likes. */
+    ok(st.vccint > 0.978 && st.vccint < 0.980, "vccint parsed as 0.979");
+    ok(st.vccaux > 1.807 && st.vccaux < 1.809, "vccaux parsed as 1.808");
+    /* ABSENT is not the same as ZERO. An older odo-miner omits the key
+     * entirely and must leave the -1 sentinel, so the panel can show "--"
+     * rather than a confident 0.000V that looks like a dead rail. */
+    ok(st.vccbram < 0, "a rail the miner did not report stays at the -1 sentinel");
     ok(st.fan_rpm == 3030,      "fan_rpm 3030");
 
     /* THE SENTINEL. -1 must survive as -1 so cyd_fmt_fan renders "--".

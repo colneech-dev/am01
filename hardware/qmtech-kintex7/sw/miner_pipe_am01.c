@@ -142,6 +142,17 @@ static struct {
                                   * not just a pool share */
     time_t   last_block;        /* unix time of the most recent block (0 = none yet) */
     int      temp_c;            /* DS18B20 reading, -1 = no sensor/no reading yet */
+    /* XADC supply rails, volts. -1 = not read yet.
+     *
+     * This board has NO current sense: XADC gives temperature and these
+     * three voltages and nothing else. The 1.0V core rail comes from an
+     * MP8712 rated 12A, and the panel firmware already notes the miner
+     * drawing about that -- so how hard the core is being pushed shows up
+     * only as VCCINT drooping. Read from the thermal thread, which holds
+     * the bus once a second anyway. Reading them by stopping the miner,
+     * the only way before, gives an IDLE value: exactly the case that
+     * cannot show load. */
+    double   vccint, vccaux, vccbram;
     int      fan_pct;           /* current commanded fan speed, 0-100 (%) */
     int      fan_rpm;           /* tach-measured RPM, -1 = no tach */
     int      pool_slot;         /* active pool: 1 = primary, 2 = backup */
@@ -182,8 +193,13 @@ static void *thermal_thread(void *arg)
             else
                 thermal_fan_update(t);       /* normal temperature ramp */
             int rpm = thermal_tach_rpm(200);
+            double vi = -1, va = -1, vb = -1;
+            (void)thermal_read_rails(&vi, &va, &vb);   /* best effort */
             pthread_mutex_lock(&g_therm_mu);
             g_st.temp_c  = t;
+            g_st.vccint  = vi;
+            g_st.vccaux  = va;
+            g_st.vccbram = vb;
             g_st.fan_pct = thermal_fan_state();
             g_st.fan_rpm = rpm;
             pthread_mutex_unlock(&g_therm_mu);
@@ -531,6 +547,7 @@ static void status_write(void)
                ? (long long)g_st.epoch + (long long)g_st.epoch_interval : 0LL;
     pthread_mutex_lock(&g_therm_mu);
     int temp_c = g_st.temp_c, fan_pct = g_st.fan_pct, fan_rpm = g_st.fan_rpm;
+    double vccint = g_st.vccint, vccaux = g_st.vccaux, vccbram = g_st.vccbram;
     pthread_mutex_unlock(&g_therm_mu);
     fprintf(f,
         "{\n"
@@ -559,6 +576,9 @@ static void status_write(void)
         "  \"blocks_found\": %" PRIu64 ",\n"
         "  \"last_block\": %lld,\n"
         "  \"temp_c\": %d,\n"
+        "  \"vccint\": %.3f,\n"
+        "  \"vccaux\": %.3f,\n"
+        "  \"vccbram\": %.3f,\n"
         "  \"fan_duty_pct\": %d,\n"
         "  \"fan_rpm\": %d,\n"
         "  \"backend\": \"%s\",\n"
@@ -585,7 +605,7 @@ static void status_write(void)
         (long long)g_st.last_share,
         g_st.best_diff_session, g_st.best_diff_alltime,
         g_st.blocks_found, (long long)g_st.last_block,
-        temp_c, fan_pct, fan_rpm, miner_io_pipe_backend(),
+        temp_c, vccint, vccaux, vccbram, fan_pct, fan_rpm, miner_io_pipe_backend(),
         g_st.pool_slot, g_st.pool_count,
         (long long)up, (long long)now);
     fclose(f);
@@ -644,6 +664,9 @@ int main(int argc, char **argv)
     g_st.bitstream_epoch = seed;   /* fixed: what's actually baked into the FPGA */
     g_st.started = time(NULL);
     g_st.temp_c  = -1;             /* no reading yet */
+    g_st.vccint  = -1;
+    g_st.vccaux  = -1;
+    g_st.vccbram = -1;
     g_st.fan_rpm = -1;
     g_mono_start = mono_s();       /* clock-step-safe uptime baseline */
     stats_load();                  /* best_diff_alltime, survives reboots */
