@@ -660,7 +660,8 @@ bottom_connector_positions_mm = [
 // this is a WALL cutout (round hole through top_edge_dc_jack() below),
 // not a lid-panel hole like v4 had it. JP8 (a jumper next to JP1) and
 // the general power-switch/user-button cluster are internal or lid
-// features -- see lid_top_cutouts_mm below. No rectangular top-wall
+// features -- but see the note where lid_top_cutouts_mm used to be: those
+// lid holes were never built. No rectangular top-wall
 // cutouts are needed right now (top_edge_cutouts() stays here, empty,
 // for symmetry with the other two walls in case a future revision
 // needs one), so the DC jack gets its own round-hole module below
@@ -835,22 +836,32 @@ ft232h_above_pcb   = 12;    // bottom edge of the PCB, above the board surface
 // (it doesn't sit flush against the y=0 edge). SW2/SW3 are real user
 // push-buttons already referenced in ../xdc/qmtech_xc7k325t_pinout.xdc
 // -- v4 didn't expose these at all.
-lid_top_cutouts_mm = [
-    ["J11", 90,  0, 16, 12],
-    ["J12", 110, 0, 16, 12],
-    ["J13", 130, 0, 16, 12],
-    // SW4 removed: it is a right-WALL cutout now, measured on the board.
-    // This lid hole was a leftover from when it was thought to be on the
-    // top edge, and at [148,14] it does not match the measured position
-    // either -- it would simply have been a spurious hole in the lid.
-];
-// Small round holes for the two user push-buttons (SW2/SW3), near JP5
-// on the board's lower-right, above the bottom-wall GPIO header window.
-lid_button_positions_mm = [
-    ["SW2", 144, 72],
-    ["SW3", 151, 72],
-];
-lid_button_d = 6;
+// REMOVED 2026-09-06 -- THESE WERE DEAD CODE, AND THE POSITIONS WERE GUESSES.
+//
+// There were three tables here: lid_top_cutouts_mm (J11/J12/J13 header
+// windows), lid_button_positions_mm (SW2/SW3) and sensor_hole_* below. Not
+// one of them was ever read: module lid() differences exactly
+// lid_fpga_vent_holes() and lid_screen_cutout(), and grep found each name
+// appearing only at its own definition. So the printed lid has never had a
+// hole for a Pmod header, a user button or the sensor lead -- invisible in a
+// render, because the 54.6%-open vent grid covers those coordinates with
+// holes that look deliberate.
+//
+// They are deleted rather than wired up, because every coordinate in them was
+// read off the vendor drawing by eye -- the same method that put J6 and J7
+// out by about 10mm and cost a printed tray. Cutting holes from unverified
+// positions is worse than cutting none: a hole in the wrong place cannot be
+// filled, and it looks correct until the board is in the case.
+//
+// TO ADD THEM PROPERLY, measure on the board, in board-local coordinates
+// (x from the low-x edge, y_from_top from the HIGH-y edge -- see board_y(),
+// and note that convention has caught me once already):
+//   - J11/J12/J13: centre of each 2x6 header, plus its body span
+//   - SW2/SW3:     centre of each push-button actuator
+//   - DS18B20:     where the cable should leave the board
+// then reinstate the tables and give module lid() something that consumes
+// them. An assert that each hole clears screen_module_mm and the vent zone
+// would be worth having at the same time.
 
 // Ventilation, if VARIANT_VENTED, is a grid of small drilled holes
 // straight through the solid lid over the FPGA (see
@@ -858,12 +869,10 @@ lid_button_d = 6;
 // chimney: the box stays fully enclosed either way, this variant knob
 // only decides whether that one region is solid or perforated.
 
-// DS18B20 sensor cable pass-through, tucked into the gap between the
-// display and the FPGA vent zone (checked clear of both below).
-// Moved clear of the screen. At [70,50] this fell INSIDE the screen's
-// 82x50 footprint, so it would have been a hole into the back of the display.
-sensor_hole_center_mm = [90, 80];
-sensor_hole_d = 5;
+// The DS18B20 pass-through went with them -- same reason. Its history is
+// worth keeping: at [70,50] it fell INSIDE the screen's footprint and would
+// have been a hole into the back of the display, which is the kind of error a
+// by-eye coordinate produces and an assert catches.
 
 // ---- Display mounting (KMRTM28028-SPI 2.8" ILI9341+XPT2046, see design
 // note 5 at the top of this file). Module PCB footprint/hole-spacing
@@ -1595,8 +1604,8 @@ module lid_snap_bead() {
 }
 
 
-// Two small round holes for the real user push-buttons SW2/SW3 (see
-// lid_button_positions_mm above) -- v4 didn't expose these at all.
+// (The SW2/SW3 holes referred to here were never implemented; the table they
+// pointed at is gone -- see the note where lid_top_cutouts_mm used to be.)
 
 // ---- FPGA vent zone: EITHER nothing (fully solid lid, VARIANT_VENTED
 // = false) OR a grid of small drilled holes through the solid lid
