@@ -989,14 +989,34 @@ lid_fan_recess      = 4;     // of lid_thickness (6), leaving 2mm of floor
 // A fan's hub is dead air -- the axis moves nothing. Peak velocity sits out
 // around 0.6-0.7 of the radius, which for a 40mm fan is 12-14mm off centre.
 // Putting the target under the hub is the one placement that wastes the fan.
-// Centre (140, 62) leaves 1R5 10.8mm off-axis, inside that annulus, while
-// keeping the frame 3.6mm clear of the lid edge (spans board x 120..160,
-// y_from_top 42..82). Offsetting AWAY from the heatsink rather than toward it
-// also trims the overlap with its footprint.
+// CENTRE (136, 46), and the earlier reasoning for offsetting it was wrong.
+//
+// I first pushed the fan off-target on the grounds that a fan's hub is dead
+// air and peak velocity sits out at 0.6-0.7 of the radius. That is true for
+// IMPINGEMENT -- a jet a few millimetres off the surface. This fan is in the
+// lid, about 45mm above the board, by which distance the jet has spread and
+// merged and there is no hub shadow left to dodge. The rule was imported from
+// the wrong regime and used to aim the fan away from the thing it cools.
+//
+// What actually matters is which REGION is under it. The heat is the whole
+// input section along that edge -- jack, switch, inductor, regulator -- not
+// one part, so y is set midway between 1R5 (y_from_top 52) and SW4 (37.5).
+//
+// X IS CAPPED BY THE SKIRT, not by choice. The lid skirt's inner face is at
+// model x 162.1; the 41.2mm pocket centred at board x=140 reached model
+// 164.2 and cut 2.1mm INTO it. 136 is the furthest outboard that clears, with
+// 1.9mm to spare. The assert below only compared against outer_length and did
+// not catch that, so it now checks the skirt.
+//
+// SW4 ends up 22.7mm away, outside the frame, and cannot be brought inside:
+// 1R5 and SW4 are 19.5mm apart, so covering both needs the centre near board
+// x=150, which hangs 7mm off the lid. That is acceptable -- SW4 is a
+// mechanical slide switch and dissipates nothing. The inductor and the
+// regulator are the heat.
 //
 // It overlaps the heatsink's plan area on its inboard side. That air is not
 // lost: it goes into the fins.
-lid_fan_center_mm   = [140, 62];
+lid_fan_center_mm   = [136, 46];
 
 // ---- selected by VARIANT_SCREEN --------------------------------------
 is_cyd            = (VARIANT_SCREEN == "cyd");
@@ -1688,10 +1708,17 @@ module lid() {
 }
 
 // The fan must sit entirely on the lid, and its screws must land in material.
+// AGAINST THE SKIRT, not against outer_length. The first version of this
+// compared with the lid's outer edge and passed a pocket that was cutting
+// 2.1mm into the skirt -- the structure the snap bead hangs off.
+lid_fan_pocket_half = lid_fan_size/2 + 0.6;
+lid_skirt_inner_x   = outer_length - (wall_thickness + lid_fit_clearance);
 assert(!lid_fan_enable ||
-       (board_origin[0] + lid_fan_center_mm[0] - lid_fan_size/2 > 0 &&
-        board_origin[0] + lid_fan_center_mm[0] + lid_fan_size/2 < outer_length),
-       "lid fan overhangs the lid in X -- move lid_fan_center_mm");
+       (board_origin[0] + lid_fan_center_mm[0] - lid_fan_pocket_half
+            > wall_thickness + lid_fit_clearance &&
+        board_origin[0] + lid_fan_center_mm[0] + lid_fan_pocket_half
+            < lid_skirt_inner_x - wall_thickness),
+       "lid fan pocket reaches the skirt -- reduce lid_fan_center_mm[0]");
 assert(!lid_fan_enable || lid_fan_recess < lid_thickness,
        "lid fan recess must leave a floor for the screws to pull against");
 
