@@ -240,7 +240,23 @@ fit_gap        = 1.2;    // extra clearance around the board footprint
 //     plug with an unusually fat boot will not seat.
 extra_side_gap_mm = 9.0;
 fit_gap_x      = fit_gap;                      // short walls, unchanged
-fit_gap_y      = fit_gap + extra_side_gap_mm;  // long walls
+// ASYMMETRIC, as of 2026-09-06. The extra room is only needed on the wall
+// that has things standing off it.
+//
+//   HIGH-Y wall (model y = outer_width): the FT232H holder stands 5.8mm off
+//     it and the KAN-28 switch nest 7.0mm, both directly over where the board
+//     drops in, and the right-angle USB adapter lives in this gap too.
+//   LOW-Y wall (model y = 0): J6/J7/P1 only, all edge-mounted flush. Nothing
+//     stands off it at all.
+//
+// Applying 9mm to both cost 9mm of dead width AND left every socket on the
+// low-Y wall 10.2 + 2.4 = 12.6mm behind its opening. An RJ45 release latch
+// cannot be reached 12.6mm inside a 19 x 15mm window, so the Ethernet lead
+// went in and did not come out.
+fit_gap_y_lo   = fit_gap;                      // low-Y wall: the connectors
+fit_gap_y_hi   = fit_gap + extra_side_gap_mm;  // high-Y wall: FT232H, switch
+fit_gap_y      = fit_gap_y_hi;  // kept for anything still reasoning about the
+                                // worst case; prefer the two above
 // The lip must reach past the board's edge by more than fit_gap, or there
 // is nothing under the board to carry it. At fit_gap 1.2 a 1.5mm ledge
 // would leave only 0.3mm of bearing surface; 3.0 leaves 1.8mm all round.
@@ -260,7 +276,9 @@ lip_thickness  = 2.0;    // HISTORICAL -- no longer used, see retaining_lip_ridg
 // lip would stop 7mm short of the board and only the standoffs would carry it.
 lip_bearing_target = 1.8;               // how far the lip reaches under the board
 lip_ledge_x = lip_ledge;                            // short walls
-lip_ledge_y = fit_gap_y + lip_bearing_target;       // long walls, spans the gap
+lip_ledge_y_lo = fit_gap_y_lo + lip_bearing_target;  // low-Y, spans its gap
+lip_ledge_y_hi = fit_gap_y_hi + lip_bearing_target;  // high-Y, spans its gap
+lip_ledge_y    = lip_ledge_y_hi;                     // legacy alias
 
 // ---- Tray shell ----
 wall_thickness  = 2.4;
@@ -1101,10 +1119,10 @@ screen_center_mm  = is_cyd ? cyd_center_mm : ili_center_mm;
 // Derived geometry
 // ============================================================
 outer_length = board_length + 2*(fit_gap_x + wall_thickness);
-outer_width  = board_width  + 2*(fit_gap_y + wall_thickness);
+outer_width  = board_width  + fit_gap_y_lo + fit_gap_y_hi + 2*wall_thickness;
 tray_height  = floor_thickness + standoff_clearance + board_thickness + wall_height;
 lip_z = floor_thickness + standoff_clearance; // board rests here
-board_origin = [wall_thickness + fit_gap_x, wall_thickness + fit_gap_y]; // XY of board's own (0,0)
+board_origin = [wall_thickness + fit_gap_x, wall_thickness + fit_gap_y_lo]; // XY of board's own (0,0)
 
 // See vent_border_mm above for why this is assigned here and not there.
 vent_zone_mm = [outer_length - 2*vent_border_mm,
@@ -1166,10 +1184,16 @@ module retaining_lip_ridge() {
     difference() {
         linear_extrude(height = h)
             square([outer_length, outer_width]);
-        translate([wall_thickness + lip_ledge_x, wall_thickness + lip_ledge_y, -1])
+        // PER-SIDE in Y, because the two long walls no longer sit the same
+        // distance from the board. A symmetric inset would either leave no
+        // bearing surface on the high-Y side or eat into the board on the
+        // low-Y one.
+        translate([wall_thickness + lip_ledge_x,
+                   wall_thickness + lip_ledge_y_lo, -1])
             linear_extrude(height = h + 2)
                 square([outer_length - 2*(wall_thickness + lip_ledge_x),
-                        outer_width  - 2*(wall_thickness + lip_ledge_y)]);
+                        outer_width - (wall_thickness + lip_ledge_y_lo)
+                                    - (wall_thickness + lip_ledge_y_hi)]);
     }
 }
 
@@ -1797,7 +1821,8 @@ echo(str("   ANTENNA      board ", antenna_hole_y_mm,
          " (i.e. that far from the case's bottom outer face)"));
 echo(str("TOP wall: KAN-28 switch at board x ", kan28_x_mm,
          ", FT232H at board x ", ft232h_x_mm));
-echo(str("gap between the board edge and each LONG wall (mm): ", fit_gap_y,
+echo(str("gap to the LONG walls (mm) -- low-Y ", fit_gap_y_lo,
+         ", high-Y ", fit_gap_y_hi,
          " -- FT232H needs ", ft232h_post_ht + ft232h_pcb_t,
          ", switch nest needs ", kan28_body_depth));
 
@@ -1851,7 +1876,8 @@ ft232h_x1 = ft232h_x_mm + ft232h_pcb_mm[0]/2;
 // can be compared with the heatsink zone. Before item 5 the wall was 1.2mm from
 // the board edge and the two were treated as the same number; with a 10.2mm gap
 // they are not, and the check would have been 9mm pessimistic.
-ft232h_y1 = ft232h_post_ht + ft232h_pcb_t - fit_gap_y;
+ft232h_y1 = ft232h_post_ht + ft232h_pcb_t - fit_gap_y_hi;  // it is on the
+                                                          // high-Y wall
 hs_x0 = heatsink_center_mm[0] - heatsink_lwh_mm[0]/2 - heatsink_xy_margin_mm;
 hs_x1 = heatsink_center_mm[0] + heatsink_lwh_mm[0]/2 + heatsink_xy_margin_mm;
 hs_y0 = heatsink_center_mm[1] - heatsink_lwh_mm[1]/2 - heatsink_xy_margin_mm;
@@ -1876,7 +1902,9 @@ echo(str("vent: ", vent_shape, " ", vent_hole_d, "mm at ", vent_hole_pitch,
 // long edges hanging in air -- exactly the kind of thing a whole-case scalar
 // hides.
 lip_bearing_x_mm = lip_ledge_x - fit_gap_x;
-lip_bearing_y_mm = lip_ledge_y - fit_gap_y;
+lip_bearing_y_lo_mm = lip_ledge_y_lo - fit_gap_y_lo;
+lip_bearing_y_hi_mm = lip_ledge_y_hi - fit_gap_y_hi;
+lip_bearing_y_mm    = min(lip_bearing_y_lo_mm, lip_bearing_y_hi_mm);
 echo(str("lip bearing under board edge (mm) -- short walls: ", lip_bearing_x_mm,
          ", long walls: ", lip_bearing_y_mm));
 assert(lip_bearing_x_mm >= 1.0,
