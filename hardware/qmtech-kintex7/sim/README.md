@@ -6,9 +6,13 @@ licensed simulator needed.
 ```sh
 ODO=../../../hdl/odocrypt
 iverilog -g2005 -DTHROUGHPUT=4 -o /tmp/tb tb_nonce_split.v \
-    $ODO/miner.v $ODO/encrypt.v $ODO/keccak800.v
+    $ODO/miner_pipelined.v $ODO/miner.v $ODO/encrypt.v $ODO/keccak800.v
 vvp /tmp/tb
 ```
+
+The core under test is `miner_pipelined`. `miner.v` stays on that line
+because it is where `odo_keccak` is defined; `miner_top` and `miner` come
+along with it and are simply unused.
 
 **These are slow.** The full OdoCrypt/keccak core simulates at roughly
 **2 seconds per simulated clock cycle** here, so anything that has to
