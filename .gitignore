@@ -81,3 +81,8 @@ hardware/qmtech-kintex7/cyd/firmware/.pio/
 # CYD unit-test binaries (built by `make -C hardware/qmtech-kintex7/cyd/sim`)
 hardware/qmtech-kintex7/cyd/sim/test_cyd_*
 !hardware/qmtech-kintex7/cyd/sim/test_cyd_*.c
+
+# iverilog compiles each testbench to a bare executable next to its source.
+# Same shape as the cyd/sim rule above: ignore the binaries, keep the sources.
+hardware/qmtech-kintex7/sim/tb_*
+!hardware/qmtech-kintex7/sim/tb_*.v
