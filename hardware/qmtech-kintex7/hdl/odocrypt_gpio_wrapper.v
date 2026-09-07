@@ -328,7 +328,7 @@ module odocrypt_gpio_wrapper #(
      * REPORTS 0203 -- it was built before this was bumped. Nothing
      * depends on telling them apart: UART_STAT is identical in all
      * three, and 0x1C simply reads 0 on a bitstream that lacks it. */
-    localparam [15:0] VERSION = 16'h0208;
+    localparam [15:0] VERSION = 16'h0209;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;
@@ -1079,7 +1079,7 @@ module odocrypt_gpio_wrapper #(
     // One-cycle resync pulse for found_path, from OP_SOFT_RESET.
     reg found_soft_reset_h = 1'b0;
 
-    reg [4:0]  header_word_cnt_h; // 0..18, 19 words total
+    reg [4:0]  header_word_cnt_h = 5'h0; // 0..18, 19 words total
     // THREE bits, not four. MEASURED ON HARDWARE 2026-08-30.
     //
     // This was reg [3:0] while being compared against 7, so it wrapped at 16
@@ -1103,7 +1103,7 @@ module odocrypt_gpio_wrapper #(
     // Proven by working around it before fixing it: dispatching twice covers
     // both parities, and with that am01_smoke returned 6 nonces out of 6 valid
     // against a 1-in-256 target. Six chance passes would be 1 in 2.8e14.
-    reg [2:0]  target_word_cnt_h; // 0..7, wraps at 8 -- see above
+    reg [2:0]  target_word_cnt_h = 3'h0; // 0..7, wraps at 8 -- see above
 
     // COMMIT, not ARM. v2.0 replaced the AtomMiner core (miner.v, halts on
     // every find and must be re-armed) with the free-running miner_pipelined.
@@ -1120,6 +1120,30 @@ module odocrypt_gpio_wrapper #(
     reg        commit_arm_h   = 1'b0;
     reg        commit_pulse_h = 1'b0;
 
+    // ---------------------------------------------------------------
+    // bus_rst_n, brought into clk_h.
+    //
+    // Everything else in this domain was cleared ONLY by OP_SOFT_RESET, and
+    // the daemon issues that once at miner_io_pipe_init and never again. So a
+    // reset landing mid-dispatch -- SW2, or a momentary MMCM unlock -- left
+    // header_word_cnt_h/target_word_cnt_h misaligned for the life of the
+    // process: every later job would commit on the wrong target word, snapshot
+    // a half-loaded header/target, and the cores would hash a block the host
+    // never sent. Found nonces then fail revalidation on the host and are
+    // counted stale, indefinitely, across job changes and reconnects.
+    //
+    // Two flops are enough: this is a level, sampled every cycle, and a cycle
+    // of extra skew on either edge is harmless. The ASYNC_REG attribute asks
+    // the placer to keep the pair together (Vivado only -- see the XDC note
+    // about nextpnr ignoring it).
+    (* ASYNC_REG = "TRUE" *) reg rst_n_sync1_h = 1'b0;
+    reg rst_n_sync2_h = 1'b0;
+
+    always @(posedge clk_h) begin
+        rst_n_sync1_h <= bus_rst_n;
+        rst_n_sync2_h <= rst_n_sync1_h;
+    end
+
     always @(posedge clk_h) begin
         get_block_pulse_h  <= 1'b0;
         get_target_pulse_h <= 1'b0;
@@ -1128,7 +1152,15 @@ module odocrypt_gpio_wrapper #(
         commit_arm_h       <= 1'b0;
         commit_pulse_h     <= commit_arm_h;
 
-        if (req_pulse_h) begin
+        // Held at zero for the whole of reset, so the first dispatch after
+        // release starts from word 0 whatever was in flight when it asserted.
+        // Deliberately NOT gating req_pulse_h: the toggle synchroniser is
+        // three deep and self-correcting, and a request that arrives during
+        // reset has nothing valid to act on anyway.
+        if (!rst_n_sync2_h) begin
+            header_word_cnt_h <= 5'h0;
+            target_word_cnt_h <= 3'h0;
+        end else if (req_pulse_h) begin
             data_from_host_h <= req_data_bus;
             case (req_op_bus)
                 OP_HEADER_WORD: begin
@@ -1300,7 +1332,12 @@ module odocrypt_gpio_wrapper #(
     ) found_path_inst (
         .clk          (clk_h),
         .commit       (commit_pulse_h),
-        .soft_reset   (found_soft_reset_h),
+        // OR'd with the synchronised bus reset. `busy` in found_path is
+        // cleared only by soft_reset or by the host's ack, so a reset while a
+        // nonce was outstanding used to be a coin flip: if no ack edge
+        // happened to be produced, busy latched and the found path never
+        // reported another nonce for the life of the configuration.
+        .soft_reset   (found_soft_reset_h | ~rst_n_sync2_h),
         .found_in     (found_arr),
         .nonce_in_flat(nonce_flat_h),
         .ack_toggle   (nonce_ack_toggle_bus),
