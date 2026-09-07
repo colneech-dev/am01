@@ -749,6 +749,38 @@ int main(int argc, char **argv)
     uint64_t found = 0, shares = 0, stale = 0;
     time_t last_status = 0;
 
+    /* Per-core validity accounting.
+     *
+     * The two miner_pipelined instances are given INONCE
+     * gi * ((32'hFFFFFFFF / NUM_MINERS) + 1), i.e. 0x00000000 and 0x80000000
+     * (odocrypt_gpio_wrapper.v, the NUM_MINERS generate loop). Each sweeps its
+     * own half of the nonce space and takes ~43s at 50MH/s to get round it, so
+     * bit 31 of a returned nonce identifies the instance that found it and
+     * stays put for the whole run.
+     *
+     * Split found/ok on that bit and a core that is producing bad digests
+     * shows up immediately as a lopsided pass rate. An even split says the
+     * corruption is global, and FIFO_STAT.lost then says whether the found
+     * path is congested or the cipher itself is wrong. */
+    uint64_t core_found[2] = { 0, 0 };
+    uint64_t core_ok[2]    = { 0, 0 };
+
+    /* Neighbour histogram for stale finds: index d+4 counts stales whose
+     * digest at nonce+d WOULD have met the target. Index 4 (d = 0) stays zero
+     * by construction -- that case is a share, not a stale. */
+    uint64_t nbr_hit[2][9] = { { 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+                               { 0, 0, 0, 0, 0, 0, 0, 0, 0 } };
+    uint64_t nbr_none[2]   = { 0, 0 };
+    uint64_t recovered[2]  = { 0, 0 };   /* shares saved by the -1 retry */
+    time_t   last_corestat = 0;
+
+    /* Whole-job clustering. A commit that snapshots a half-loaded header makes
+     * EVERY find for that job invalid, so runs of stale bounded by job changes
+     * look different from corruption scattered across jobs. */
+    char     stale_job[64]  = "";
+    uint32_t stale_run      = 0;
+    uint32_t stale_run_max  = 0;
+
     while (!g_term) {
         if (stratum_connect(&st) != 0) {
             fprintf(stderr, "[pipe] connect %s:%s failed; retry in 5 s\n",
@@ -836,12 +868,15 @@ int main(int argc, char **argv)
                     }
                     found++;
                     g_st.found = found;
+                    core_found[nonce >> 31]++;
                     uint8_t h[32];
                     /* `disp`, NOT `cur` -- see the job_t disp declaration. */
                     compute_pow(disp.header, nonce, h);
                     if (target_met(h, disp.share_target)) {
                         if (stratum_submit_share(&st, &disp, nonce) == 0) {
                             shares++;
+                            core_ok[nonce >> 31]++;
+                            stale_run = 0;
                             g_st.shares     = shares;
                             g_st.last_share = time(NULL);
                             g_st.work_acc  += share_work(disp.share_target);
@@ -852,10 +887,78 @@ int main(int argc, char **argv)
                         } else {
                             fprintf(stderr, "[pipe] stratum_submit_share failed\n");
                         }
+                    } else if (compute_pow(disp.header, nonce - 1u, h),
+                               target_met(h, disp.share_target)) {
+                        /* OFF BY ONE, not stale. The digest at nonce-1 meets
+                         * the target, so the core hashed correctly and the
+                         * found path mislabelled the result. Submit the nonce
+                         * that actually works. See the note at `recovered`. */
+                        if (stratum_submit_share(&st, &disp, nonce - 1u) == 0) {
+                            shares++;
+                            core_ok[nonce >> 31]++;
+                            recovered[nonce >> 31]++;
+                            stale_run = 0;
+                            g_st.shares     = shares;
+                            g_st.last_share = time(NULL);
+                            g_st.work_acc  += share_work(disp.share_target);
+                            double d = account_share(h, &disp, nonce - 1u,
+                                                     " (off-by-one)");
+                            /* Also one in 64: this fires on 40% of finds
+                             * when the fault is active, and the RECOVERED
+                             * counters already carry the rate. */
+                            if ((shares & 63u) == 0u)
+                                printf("[pipe] SHARE (off-by-one) job=%s "
+                                       "nonce=0x%08" PRIx32 " diff=%.6g\n",
+                                       cur.job_id, nonce - 1u, d);
+                        } else {
+                            fprintf(stderr, "[pipe] stratum_submit_share"
+                                            " failed (off-by-one)\n");
+                        }
                     } else {
-                        /* A REAL stale: the nonce did not satisfy the job it was
-                         * actually dispatched for. */
+                        /* A REAL stale: neither this nonce nor its predecessor
+                         * satisfied the job it was dispatched for. */
                         stale++;
+                        if (strcmp(stale_job, disp.job_id) == 0) {
+                            stale_run++;
+                        } else {
+                            snprintf(stale_job, sizeof stale_job, "%s",
+                                     disp.job_id);
+                            stale_run = 1;
+                        }
+                        if (stale_run > stale_run_max)
+                            stale_run_max = stale_run;
+
+                        /* Was a nonce NEAR this one valid? See the note on
+                         * nbr_hit. Nine extra OdoCrypt evaluations per stale
+                         * is nothing next to 100 MH/s in fabric, and it only
+                         * runs on the failing path. */
+                        {
+                            int hit = 0;
+                            for (int d = -4; d <= 4; d++) {
+                                if (d == 0)
+                                    continue;
+                                uint8_t hn[32];
+                                compute_pow(disp.header,
+                                            (uint32_t)(nonce + (uint32_t)d),
+                                            hn);
+                                if (target_met(hn, disp.share_target)) {
+                                    nbr_hit[nonce >> 31][d + 4]++;
+                                    hit = 1;
+                                    break;
+                                }
+                            }
+                            if (!hit)
+                                nbr_none[nonce >> 31]++;
+                        }
+                        /* One in 64. A recurrence still leaves nonces in
+                         * the log to inspect, without burying everything else
+                         * behind a block-buffered flood. */
+                        if ((stale & 63u) == 0u)
+                            printf("[pipe] STALE nonce=0x%08" PRIx32
+                                   " core=%u job=%s run=%u (stale=%" PRIu64
+                                   " of found=%" PRIu64 ")\n",
+                                   nonce, (unsigned)(nonce >> 31), disp.job_id,
+                                   stale_run, stale, found);
                     }
 
                     /* RE-ARM after every find, solution or not. The AtomMiner
@@ -975,6 +1078,34 @@ int main(int argc, char **argv)
             /* Refresh status.json ~every 3 s for odo-ui / odo-webd. */
             {
                 time_t now = time(NULL);
+                if (now - last_corestat >= 60) {
+                    last_corestat = now;
+                    printf("[pipe] CORESTAT "
+                           "core0 found=%" PRIu64 " ok=%" PRIu64 " (%.1f%%)  "
+                           "core1 found=%" PRIu64 " ok=%" PRIu64 " (%.1f%%)  "
+                           "longest_stale_run=%u\n",
+                           core_found[0], core_ok[0],
+                           core_found[0] ? 100.0 * (double)core_ok[0]
+                                                 / (double)core_found[0] : 0.0,
+                           core_found[1], core_ok[1],
+                           core_found[1] ? 100.0 * (double)core_ok[1]
+                                                 / (double)core_found[1] : 0.0,
+                           stale_run_max);
+                    for (int c = 0; c < 2; c++)
+                        printf("[pipe] NEIGHBOUR core%d stale digests valid at "
+                               "nonce+d: -4=%" PRIu64 " -3=%" PRIu64 " -2=%"
+                               PRIu64 " -1=%" PRIu64 " +1=%" PRIu64 " +2=%"
+                               PRIu64 " +3=%" PRIu64 " +4=%" PRIu64
+                               "  none=%" PRIu64 "\n", c,
+                               nbr_hit[c][0], nbr_hit[c][1], nbr_hit[c][2],
+                               nbr_hit[c][3], nbr_hit[c][5], nbr_hit[c][6],
+                               nbr_hit[c][7], nbr_hit[c][8], nbr_none[c]);
+                    printf("[pipe] RECOVERED core0=%" PRIu64 " core1=%" PRIu64
+                           " (shares saved by the -1 retry)\n",
+                           recovered[0], recovered[1]);
+                    fflush(stdout);
+                }
+
                 if (now - last_status >= 3) {
                     last_status = now;
                     /* UI-requested session reset: clear best-diff + restart the
