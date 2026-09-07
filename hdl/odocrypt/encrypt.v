@@ -4,14 +4,14 @@
 // Valid from:          2026-09-04 00:00 UTC
 // Stale after:         2026-09-14 00:00 UTC
 // Throughput:          4    Prefix: encrypt_4
-// odo_gen flags:       (none)
-// Round cycles:        2  (sbox read, state register)
+// odo_gen flags:       --bram-out-reg
+// Round cycles:        3  (sbox read, output register, state register)
 //
 // OdoCrypt mutates every 10 days (ntime - ntime % 864000). A bitstream
 // built from this file produces valid shares only while the chain's job
 // epoch equals the seed above; past that it mines rejects. Regenerate:
 //   cd tools/odo_gen && make odo_gen
-//   ./odo_gen <seed> 4 encrypt_4 > ../../hdl/odocrypt/encrypt.v
+//   ./odo_gen <seed> 4 encrypt_4 --bram-out-reg > ../../hdl/odocrypt/encrypt.v
 // and update ODO_SEED in
 // hardware/qmtech-kintex7/hdl/odocrypt_gpio_wrapper.v to match.
 // tools/check-epoch.sh verifies the two agree.
@@ -42,8 +42,10 @@ module encrypt_4sbox_small0(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h38;
@@ -118,8 +120,10 @@ module encrypt_4sbox_small1(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h09;
@@ -194,8 +198,10 @@ module encrypt_4sbox_small2(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h2e;
@@ -270,8 +276,10 @@ module encrypt_4sbox_small3(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h0a;
@@ -346,8 +354,10 @@ module encrypt_4sbox_small4(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h07;
@@ -422,8 +432,10 @@ module encrypt_4sbox_small5(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h1f;
@@ -498,8 +510,10 @@ module encrypt_4sbox_small6(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h0e;
@@ -574,8 +588,10 @@ module encrypt_4sbox_small7(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h3e;
@@ -650,8 +666,10 @@ module encrypt_4sbox_small8(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h06;
@@ -726,8 +744,10 @@ module encrypt_4sbox_small9(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h3a;
@@ -802,8 +822,10 @@ module encrypt_4sbox_small10(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h26;
@@ -878,8 +900,10 @@ module encrypt_4sbox_small11(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h27;
@@ -954,8 +978,10 @@ module encrypt_4sbox_small12(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h1c;
@@ -1030,8 +1056,10 @@ module encrypt_4sbox_small13(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h05;
@@ -1106,8 +1134,10 @@ module encrypt_4sbox_small14(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h2a;
@@ -1182,8 +1212,10 @@ module encrypt_4sbox_small15(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h0d;
@@ -1258,8 +1290,10 @@ module encrypt_4sbox_small16(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h0e;
@@ -1334,8 +1368,10 @@ module encrypt_4sbox_small17(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h25;
@@ -1410,8 +1446,10 @@ module encrypt_4sbox_small18(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h2b;
@@ -1486,8 +1524,10 @@ module encrypt_4sbox_small19(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h11;
@@ -1562,8 +1602,10 @@ module encrypt_4sbox_small20(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h23;
@@ -1638,8 +1680,10 @@ module encrypt_4sbox_small21(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h24;
@@ -1714,8 +1758,10 @@ module encrypt_4sbox_small22(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h3b;
@@ -1790,8 +1836,10 @@ module encrypt_4sbox_small23(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h10;
@@ -1866,8 +1914,10 @@ module encrypt_4sbox_small24(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h27;
@@ -1942,8 +1992,10 @@ module encrypt_4sbox_small25(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h20;
@@ -2018,8 +2070,10 @@ module encrypt_4sbox_small26(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h25;
@@ -2094,8 +2148,10 @@ module encrypt_4sbox_small27(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h09;
@@ -2170,8 +2226,10 @@ module encrypt_4sbox_small28(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h2b;
@@ -2246,8 +2304,10 @@ module encrypt_4sbox_small29(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h1b;
@@ -2322,8 +2382,10 @@ module encrypt_4sbox_small30(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h11;
@@ -2398,8 +2460,10 @@ module encrypt_4sbox_small31(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h16;
@@ -2474,8 +2538,10 @@ module encrypt_4sbox_small32(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h1b;
@@ -2550,8 +2616,10 @@ module encrypt_4sbox_small33(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h2e;
@@ -2626,8 +2694,10 @@ module encrypt_4sbox_small34(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h26;
@@ -2702,8 +2772,10 @@ module encrypt_4sbox_small35(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h0b;
@@ -2778,8 +2850,10 @@ module encrypt_4sbox_small36(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h03;
@@ -2854,8 +2928,10 @@ module encrypt_4sbox_small37(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h16;
@@ -2930,8 +3006,10 @@ module encrypt_4sbox_small38(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h11;
@@ -3006,8 +3084,10 @@ module encrypt_4sbox_small39(clk, in, out);
     input [5:0] in;
     output reg [5:0] out;
     reg [5:0] mem[0:63];
+    reg [5:0] q1;
     always @(posedge clk) begin
-        out <= mem[in];
+        q1 <= mem[in];
+        out <= q1;
     end
     initial begin
         mem[0] = 6'h0f;
@@ -3084,11 +3164,15 @@ module encrypt_4sbox_large0(clk, a_in, b_in, a_out, b_out);
     input [9:0] b_in;
     output reg [9:0] b_out;
     (* ram_style = "block" *) reg [9:0] mem[0:1023];
+    reg [9:0] a_q1;
+    reg [9:0] b_q1;
     always @(posedge clk) begin
-        a_out <= mem[a_in];
+        a_q1 <= mem[a_in];
+        a_out <= a_q1;
     end
     always @(posedge clk) begin
-        b_out <= mem[b_in];
+        b_q1 <= mem[b_in];
+        b_out <= b_q1;
     end
     initial begin
         mem[0] = 10'h122;
@@ -4125,11 +4209,15 @@ module encrypt_4sbox_large1(clk, a_in, b_in, a_out, b_out);
     input [9:0] b_in;
     output reg [9:0] b_out;
     (* ram_style = "block" *) reg [9:0] mem[0:1023];
+    reg [9:0] a_q1;
+    reg [9:0] b_q1;
     always @(posedge clk) begin
-        a_out <= mem[a_in];
+        a_q1 <= mem[a_in];
+        a_out <= a_q1;
     end
     always @(posedge clk) begin
-        b_out <= mem[b_in];
+        b_q1 <= mem[b_in];
+        b_out <= b_q1;
     end
     initial begin
         mem[0] = 10'h0e5;
@@ -5166,11 +5254,15 @@ module encrypt_4sbox_large2(clk, a_in, b_in, a_out, b_out);
     input [9:0] b_in;
     output reg [9:0] b_out;
     (* ram_style = "block" *) reg [9:0] mem[0:1023];
+    reg [9:0] a_q1;
+    reg [9:0] b_q1;
     always @(posedge clk) begin
-        a_out <= mem[a_in];
+        a_q1 <= mem[a_in];
+        a_out <= a_q1;
     end
     always @(posedge clk) begin
-        b_out <= mem[b_in];
+        b_q1 <= mem[b_in];
+        b_out <= b_q1;
     end
     initial begin
         mem[0] = 10'h2ad;
@@ -6207,11 +6299,15 @@ module encrypt_4sbox_large3(clk, a_in, b_in, a_out, b_out);
     input [9:0] b_in;
     output reg [9:0] b_out;
     (* ram_style = "block" *) reg [9:0] mem[0:1023];
+    reg [9:0] a_q1;
+    reg [9:0] b_q1;
     always @(posedge clk) begin
-        a_out <= mem[a_in];
+        a_q1 <= mem[a_in];
+        a_out <= a_q1;
     end
     always @(posedge clk) begin
-        b_out <= mem[b_in];
+        b_q1 <= mem[b_in];
+        b_out <= b_q1;
     end
     initial begin
         mem[0] = 10'h19f;
@@ -7248,11 +7344,15 @@ module encrypt_4sbox_large4(clk, a_in, b_in, a_out, b_out);
     input [9:0] b_in;
     output reg [9:0] b_out;
     (* ram_style = "block" *) reg [9:0] mem[0:1023];
+    reg [9:0] a_q1;
+    reg [9:0] b_q1;
     always @(posedge clk) begin
-        a_out <= mem[a_in];
+        a_q1 <= mem[a_in];
+        a_out <= a_q1;
     end
     always @(posedge clk) begin
-        b_out <= mem[b_in];
+        b_q1 <= mem[b_in];
+        b_out <= b_q1;
     end
     initial begin
         mem[0] = 10'h3a3;
@@ -8289,11 +8389,15 @@ module encrypt_4sbox_large5(clk, a_in, b_in, a_out, b_out);
     input [9:0] b_in;
     output reg [9:0] b_out;
     (* ram_style = "block" *) reg [9:0] mem[0:1023];
+    reg [9:0] a_q1;
+    reg [9:0] b_q1;
     always @(posedge clk) begin
-        a_out <= mem[a_in];
+        a_q1 <= mem[a_in];
+        a_out <= a_q1;
     end
     always @(posedge clk) begin
-        b_out <= mem[b_in];
+        b_q1 <= mem[b_in];
+        b_out <= b_q1;
     end
     initial begin
         mem[0] = 10'h027;
@@ -9330,11 +9434,15 @@ module encrypt_4sbox_large6(clk, a_in, b_in, a_out, b_out);
     input [9:0] b_in;
     output reg [9:0] b_out;
     (* ram_style = "block" *) reg [9:0] mem[0:1023];
+    reg [9:0] a_q1;
+    reg [9:0] b_q1;
     always @(posedge clk) begin
-        a_out <= mem[a_in];
+        a_q1 <= mem[a_in];
+        a_out <= a_q1;
     end
     always @(posedge clk) begin
-        b_out <= mem[b_in];
+        b_q1 <= mem[b_in];
+        b_out <= b_q1;
     end
     initial begin
         mem[0] = 10'h0df;
@@ -10371,11 +10479,15 @@ module encrypt_4sbox_large7(clk, a_in, b_in, a_out, b_out);
     input [9:0] b_in;
     output reg [9:0] b_out;
     (* ram_style = "block" *) reg [9:0] mem[0:1023];
+    reg [9:0] a_q1;
+    reg [9:0] b_q1;
     always @(posedge clk) begin
-        a_out <= mem[a_in];
+        a_q1 <= mem[a_in];
+        a_out <= a_q1;
     end
     always @(posedge clk) begin
-        b_out <= mem[b_in];
+        b_q1 <= mem[b_in];
+        b_out <= b_q1;
     end
     initial begin
         mem[0] = 10'h346;
@@ -11412,11 +11524,15 @@ module encrypt_4sbox_large8(clk, a_in, b_in, a_out, b_out);
     input [9:0] b_in;
     output reg [9:0] b_out;
     (* ram_style = "block" *) reg [9:0] mem[0:1023];
+    reg [9:0] a_q1;
+    reg [9:0] b_q1;
     always @(posedge clk) begin
-        a_out <= mem[a_in];
+        a_q1 <= mem[a_in];
+        a_out <= a_q1;
     end
     always @(posedge clk) begin
-        b_out <= mem[b_in];
+        b_q1 <= mem[b_in];
+        b_out <= b_q1;
     end
     initial begin
         mem[0] = 10'h2e0;
@@ -12453,11 +12569,15 @@ module encrypt_4sbox_large9(clk, a_in, b_in, a_out, b_out);
     input [9:0] b_in;
     output reg [9:0] b_out;
     (* ram_style = "block" *) reg [9:0] mem[0:1023];
+    reg [9:0] a_q1;
+    reg [9:0] b_q1;
     always @(posedge clk) begin
-        a_out <= mem[a_in];
+        a_q1 <= mem[a_in];
+        a_out <= a_q1;
     end
     always @(posedge clk) begin
-        b_out <= mem[b_in];
+        b_q1 <= mem[b_in];
+        b_out <= b_q1;
     end
     initial begin
         mem[0] = 10'h244;
@@ -15226,8 +15346,8 @@ module encrypt_4encrypt_loop(clk, in, read, out, write);
     input read;
     output reg [639:0] out;
     output write;
-    reg [639:0] state[21:0];
-    wire [639:0] next[21:0];
+    reg [639:0] state[22:0];
+    wire [639:0] next[22:0];
     always @(posedge clk) state[1] <= next[0];
     always @(posedge clk) state[2] <= next[1];
     always @(posedge clk) state[3] <= next[2];
@@ -15249,9 +15369,11 @@ module encrypt_4encrypt_loop(clk, in, read, out, write);
     always @(posedge clk) state[19] <= next[18];
     always @(posedge clk) state[20] <= next[19];
     always @(posedge clk) state[21] <= next[20];
+    always @(posedge clk) state[22] <= next[21];
     assign next[21] = state[21];
+    assign next[22] = state[22];
     wire [9:0] roundkey[20:0];
-    reg [1:0] period[42:0];
+    reg [1:0] period[64:0];
     always @(posedge clk) period[1] <= period[0];
     always @(posedge clk) period[2] <= period[1];
     always @(posedge clk) period[3] <= period[2];
@@ -15294,47 +15416,69 @@ module encrypt_4encrypt_loop(clk, in, read, out, write);
     always @(posedge clk) period[40] <= period[39];
     always @(posedge clk) period[41] <= period[40];
     always @(posedge clk) period[42] <= period[41];
-    encrypt_4get_round_key0 get_key0(clk, period[0], roundkey[0]);
+    always @(posedge clk) period[43] <= period[42];
+    always @(posedge clk) period[44] <= period[43];
+    always @(posedge clk) period[45] <= period[44];
+    always @(posedge clk) period[46] <= period[45];
+    always @(posedge clk) period[47] <= period[46];
+    always @(posedge clk) period[48] <= period[47];
+    always @(posedge clk) period[49] <= period[48];
+    always @(posedge clk) period[50] <= period[49];
+    always @(posedge clk) period[51] <= period[50];
+    always @(posedge clk) period[52] <= period[51];
+    always @(posedge clk) period[53] <= period[52];
+    always @(posedge clk) period[54] <= period[53];
+    always @(posedge clk) period[55] <= period[54];
+    always @(posedge clk) period[56] <= period[55];
+    always @(posedge clk) period[57] <= period[56];
+    always @(posedge clk) period[58] <= period[57];
+    always @(posedge clk) period[59] <= period[58];
+    always @(posedge clk) period[60] <= period[59];
+    always @(posedge clk) period[61] <= period[60];
+    always @(posedge clk) period[62] <= period[61];
+    always @(posedge clk) period[63] <= period[62];
+    always @(posedge clk) period[64] <= period[63];
+    encrypt_4get_round_key0 get_key0(clk, period[1], roundkey[0]);
     encrypt_4full_round round0(clk, roundkey[0], state[0], next[0]);
-    encrypt_4get_round_key1 get_key1(clk, period[2], roundkey[1]);
+    encrypt_4get_round_key1 get_key1(clk, period[4], roundkey[1]);
     encrypt_4full_round round1(clk, roundkey[1], state[1], next[1]);
-    encrypt_4get_round_key2 get_key2(clk, period[4], roundkey[2]);
+    encrypt_4get_round_key2 get_key2(clk, period[7], roundkey[2]);
     encrypt_4full_round round2(clk, roundkey[2], state[2], next[2]);
-    encrypt_4get_round_key3 get_key3(clk, period[6], roundkey[3]);
+    encrypt_4get_round_key3 get_key3(clk, period[10], roundkey[3]);
     encrypt_4full_round round3(clk, roundkey[3], state[3], next[3]);
-    encrypt_4get_round_key4 get_key4(clk, period[8], roundkey[4]);
+    encrypt_4get_round_key4 get_key4(clk, period[13], roundkey[4]);
     encrypt_4full_round round4(clk, roundkey[4], state[4], next[4]);
-    encrypt_4get_round_key5 get_key5(clk, period[10], roundkey[5]);
+    encrypt_4get_round_key5 get_key5(clk, period[16], roundkey[5]);
     encrypt_4full_round round5(clk, roundkey[5], state[5], next[5]);
-    encrypt_4get_round_key6 get_key6(clk, period[12], roundkey[6]);
+    encrypt_4get_round_key6 get_key6(clk, period[19], roundkey[6]);
     encrypt_4full_round round6(clk, roundkey[6], state[6], next[6]);
-    encrypt_4get_round_key7 get_key7(clk, period[14], roundkey[7]);
+    encrypt_4get_round_key7 get_key7(clk, period[22], roundkey[7]);
     encrypt_4full_round round7(clk, roundkey[7], state[7], next[7]);
-    encrypt_4get_round_key8 get_key8(clk, period[16], roundkey[8]);
+    encrypt_4get_round_key8 get_key8(clk, period[25], roundkey[8]);
     encrypt_4full_round round8(clk, roundkey[8], state[8], next[8]);
-    encrypt_4get_round_key9 get_key9(clk, period[18], roundkey[9]);
+    encrypt_4get_round_key9 get_key9(clk, period[28], roundkey[9]);
     encrypt_4full_round round9(clk, roundkey[9], state[9], next[9]);
-    encrypt_4get_round_key10 get_key10(clk, period[20], roundkey[10]);
+    encrypt_4get_round_key10 get_key10(clk, period[31], roundkey[10]);
     encrypt_4full_round round10(clk, roundkey[10], state[10], next[10]);
-    encrypt_4get_round_key11 get_key11(clk, period[22], roundkey[11]);
+    encrypt_4get_round_key11 get_key11(clk, period[34], roundkey[11]);
     encrypt_4full_round round11(clk, roundkey[11], state[11], next[11]);
-    encrypt_4get_round_key12 get_key12(clk, period[24], roundkey[12]);
+    encrypt_4get_round_key12 get_key12(clk, period[37], roundkey[12]);
     encrypt_4full_round round12(clk, roundkey[12], state[12], next[12]);
-    encrypt_4get_round_key13 get_key13(clk, period[26], roundkey[13]);
+    encrypt_4get_round_key13 get_key13(clk, period[40], roundkey[13]);
     encrypt_4full_round round13(clk, roundkey[13], state[13], next[13]);
-    encrypt_4get_round_key14 get_key14(clk, period[28], roundkey[14]);
+    encrypt_4get_round_key14 get_key14(clk, period[43], roundkey[14]);
     encrypt_4full_round round14(clk, roundkey[14], state[14], next[14]);
-    encrypt_4get_round_key15 get_key15(clk, period[30], roundkey[15]);
+    encrypt_4get_round_key15 get_key15(clk, period[46], roundkey[15]);
     encrypt_4full_round round15(clk, roundkey[15], state[15], next[15]);
-    encrypt_4get_round_key16 get_key16(clk, period[32], roundkey[16]);
+    encrypt_4get_round_key16 get_key16(clk, period[49], roundkey[16]);
     encrypt_4full_round round16(clk, roundkey[16], state[16], next[16]);
-    encrypt_4get_round_key17 get_key17(clk, period[34], roundkey[17]);
+    encrypt_4get_round_key17 get_key17(clk, period[52], roundkey[17]);
     encrypt_4full_round round17(clk, roundkey[17], state[17], next[17]);
-    encrypt_4get_round_key18 get_key18(clk, period[36], roundkey[18]);
+    encrypt_4get_round_key18 get_key18(clk, period[55], roundkey[18]);
     encrypt_4full_round round18(clk, roundkey[18], state[18], next[18]);
-    encrypt_4get_round_key19 get_key19(clk, period[38], roundkey[19]);
+    encrypt_4get_round_key19 get_key19(clk, period[58], roundkey[19]);
     encrypt_4full_round round19(clk, roundkey[19], state[19], next[19]);
-    encrypt_4get_round_key20 get_key20(clk, period[40], roundkey[20]);
+    encrypt_4get_round_key20 get_key20(clk, period[61], roundkey[20]);
     encrypt_4full_round round20(clk, roundkey[20], state[20], next[20]);
     always @(posedge clk) begin
         if (read)
@@ -15344,13 +15488,13 @@ module encrypt_4encrypt_loop(clk, in, read, out, write);
         end
         else
         begin
-            period[0] <= period[42]+1;
-            state[0] <= next[21];
+            period[0] <= period[64]+1;
+            state[0] <= next[22];
         end
         out <= next[20];
     end
-    reg [171:0] progress;
-    initial progress = 172'h0;
+    reg [258:0] progress;
+    initial progress = 259'h0;
     always @(posedge clk) progress[0] <= read;
     always @(posedge clk) progress[1] <= progress[0];
     always @(posedge clk) progress[2] <= progress[1];
@@ -15523,7 +15667,94 @@ module encrypt_4encrypt_loop(clk, in, read, out, write);
     always @(posedge clk) progress[169] <= progress[168];
     always @(posedge clk) progress[170] <= progress[169];
     always @(posedge clk) progress[171] <= progress[170];
-    assign write = progress[171];
+    always @(posedge clk) progress[172] <= progress[171];
+    always @(posedge clk) progress[173] <= progress[172];
+    always @(posedge clk) progress[174] <= progress[173];
+    always @(posedge clk) progress[175] <= progress[174];
+    always @(posedge clk) progress[176] <= progress[175];
+    always @(posedge clk) progress[177] <= progress[176];
+    always @(posedge clk) progress[178] <= progress[177];
+    always @(posedge clk) progress[179] <= progress[178];
+    always @(posedge clk) progress[180] <= progress[179];
+    always @(posedge clk) progress[181] <= progress[180];
+    always @(posedge clk) progress[182] <= progress[181];
+    always @(posedge clk) progress[183] <= progress[182];
+    always @(posedge clk) progress[184] <= progress[183];
+    always @(posedge clk) progress[185] <= progress[184];
+    always @(posedge clk) progress[186] <= progress[185];
+    always @(posedge clk) progress[187] <= progress[186];
+    always @(posedge clk) progress[188] <= progress[187];
+    always @(posedge clk) progress[189] <= progress[188];
+    always @(posedge clk) progress[190] <= progress[189];
+    always @(posedge clk) progress[191] <= progress[190];
+    always @(posedge clk) progress[192] <= progress[191];
+    always @(posedge clk) progress[193] <= progress[192];
+    always @(posedge clk) progress[194] <= progress[193];
+    always @(posedge clk) progress[195] <= progress[194];
+    always @(posedge clk) progress[196] <= progress[195];
+    always @(posedge clk) progress[197] <= progress[196];
+    always @(posedge clk) progress[198] <= progress[197];
+    always @(posedge clk) progress[199] <= progress[198];
+    always @(posedge clk) progress[200] <= progress[199];
+    always @(posedge clk) progress[201] <= progress[200];
+    always @(posedge clk) progress[202] <= progress[201];
+    always @(posedge clk) progress[203] <= progress[202];
+    always @(posedge clk) progress[204] <= progress[203];
+    always @(posedge clk) progress[205] <= progress[204];
+    always @(posedge clk) progress[206] <= progress[205];
+    always @(posedge clk) progress[207] <= progress[206];
+    always @(posedge clk) progress[208] <= progress[207];
+    always @(posedge clk) progress[209] <= progress[208];
+    always @(posedge clk) progress[210] <= progress[209];
+    always @(posedge clk) progress[211] <= progress[210];
+    always @(posedge clk) progress[212] <= progress[211];
+    always @(posedge clk) progress[213] <= progress[212];
+    always @(posedge clk) progress[214] <= progress[213];
+    always @(posedge clk) progress[215] <= progress[214];
+    always @(posedge clk) progress[216] <= progress[215];
+    always @(posedge clk) progress[217] <= progress[216];
+    always @(posedge clk) progress[218] <= progress[217];
+    always @(posedge clk) progress[219] <= progress[218];
+    always @(posedge clk) progress[220] <= progress[219];
+    always @(posedge clk) progress[221] <= progress[220];
+    always @(posedge clk) progress[222] <= progress[221];
+    always @(posedge clk) progress[223] <= progress[222];
+    always @(posedge clk) progress[224] <= progress[223];
+    always @(posedge clk) progress[225] <= progress[224];
+    always @(posedge clk) progress[226] <= progress[225];
+    always @(posedge clk) progress[227] <= progress[226];
+    always @(posedge clk) progress[228] <= progress[227];
+    always @(posedge clk) progress[229] <= progress[228];
+    always @(posedge clk) progress[230] <= progress[229];
+    always @(posedge clk) progress[231] <= progress[230];
+    always @(posedge clk) progress[232] <= progress[231];
+    always @(posedge clk) progress[233] <= progress[232];
+    always @(posedge clk) progress[234] <= progress[233];
+    always @(posedge clk) progress[235] <= progress[234];
+    always @(posedge clk) progress[236] <= progress[235];
+    always @(posedge clk) progress[237] <= progress[236];
+    always @(posedge clk) progress[238] <= progress[237];
+    always @(posedge clk) progress[239] <= progress[238];
+    always @(posedge clk) progress[240] <= progress[239];
+    always @(posedge clk) progress[241] <= progress[240];
+    always @(posedge clk) progress[242] <= progress[241];
+    always @(posedge clk) progress[243] <= progress[242];
+    always @(posedge clk) progress[244] <= progress[243];
+    always @(posedge clk) progress[245] <= progress[244];
+    always @(posedge clk) progress[246] <= progress[245];
+    always @(posedge clk) progress[247] <= progress[246];
+    always @(posedge clk) progress[248] <= progress[247];
+    always @(posedge clk) progress[249] <= progress[248];
+    always @(posedge clk) progress[250] <= progress[249];
+    always @(posedge clk) progress[251] <= progress[250];
+    always @(posedge clk) progress[252] <= progress[251];
+    always @(posedge clk) progress[253] <= progress[252];
+    always @(posedge clk) progress[254] <= progress[253];
+    always @(posedge clk) progress[255] <= progress[254];
+    always @(posedge clk) progress[256] <= progress[255];
+    always @(posedge clk) progress[257] <= progress[256];
+    always @(posedge clk) progress[258] <= progress[257];
+    assign write = progress[258];
 endmodule
 
 module encrypt_4encrypt(clk, in, read, out, write);
