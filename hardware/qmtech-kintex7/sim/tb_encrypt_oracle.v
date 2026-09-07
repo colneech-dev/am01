@@ -31,17 +31,26 @@
 //
 // LATENCY. encrypt_4encrypt registers `in` for two cycles before the loop sees
 // it (progress[0], progress[1]), and encrypt_4encrypt_loop asserts `write` from
-// progress[171]. So the result appears ~174 cycles after `read`. This waits for
+// the LAST progress stage -- progress[171] on a 2-cycle core, progress[258] on
+// the --bram-out-reg 3-cycle core that ships today, whose result lands at cycle
+// 265. This waits for
 // `write` rather than counting, and fails on timeout instead of comparing
 // against X -- an all-X output compared against a real vector must read as a
 // FAIL, never as "no mismatch seen".
 
 module tb_encrypt_oracle;
 
-    // ---- vector, from the software oracle at epoch 1787616000 -------------
-    // Regenerate with:  gen_encrypt_vector 1787616000
+    // ---- vector, from the software oracle at epoch 1788480000 -------------
+    // Regenerate with:  tools/gen_encrypt_vector 1788480000
+    //
+    // MUST be regenerated every epoch, i.e. every 10 days. A vector from the
+    // wrong epoch fails for a reason that has nothing to do with correctness,
+    // and that is exactly what happened here: this test sat failing against an
+    // epoch-1787616000 vector while the shipped core was 1788480000, so
+    // nothing could be read from it either way. The generator it names did not
+    // exist in the tree until 2026-09-07, so it could not be refreshed.
     localparam [639:0] VEC_IN  = 640'h00000000b16a45338345e0bfeaf7c2a05a432f210e50525619f8ea60e031a5b81235dd2e7e1ebb795f0ef696012ab25cccfc28e42cfc30cacd56cf5b2e32522f8513b1c66d0c322fdfe388ca6969f7a5;
-    localparam [639:0] VEC_OUT = 640'h36c339a46792f34a5316a8477df1828c2b0776a99e13df493c805599ce99127b34e0ae6e53c6497b21e0dce108695430f52ca79409234ae9c544bcb1ae036464e28a0933e0e5283c3e8a110d0f08ce8d;
+    localparam [639:0] VEC_OUT = 640'h99ed4e7cd8812ba809339c66d852e544bfb147935110bb833f6e458f1ee5dc92a1f3b9091c692da0d56246dfebaa46858b97df8884a492c21aed83274e279fb30e5d394d1696d7c4d0bf581f4453af46;
 
     reg clk = 1'b0;
     always #5 clk = ~clk;          // 100 MHz, arbitrary -- this is functional
@@ -114,9 +123,10 @@ module tb_encrypt_oracle;
         read <= 1'b1;
         @(posedge clk);
         read <= 1'b0;
-        $display("  block presented, waiting for write (expect ~174 cycles)");
+        $display("  block presented, waiting for write (~265 cycles on");
+        $display("  the --bram-out-reg core, ~174 on a 2-cycle one)");
 
-        // Generous ceiling: the pipeline is 172 deep and this is slow, but a
+        // Generous ceiling: the pipeline is 259 deep on the shipping core, but a
         // run that never asserts write must end as a FAIL, not hang.
         repeat (600) @(posedge clk);
         if (!done) begin
