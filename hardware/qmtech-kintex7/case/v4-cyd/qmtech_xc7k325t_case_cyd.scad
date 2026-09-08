@@ -555,6 +555,9 @@ rim_bot_height_mm = 8.0;    // bottom rim: must stay under the cutouts at 9.4
 rim_chamfer_mm    = 2.5;    // 45-degree flare, so nothing needs support
 rib_pitch_mm      = 22.0;   // nominal spacing; ribs that foul a window drop out
 rib_clear_mm      = 1.5;    // extra gap each side of a window
+band_z_mm         = 28.0;   // horizontal band: above every window (tallest is
+                            // USB_A_J7, a stacked pair reaching 26.9)
+band_height_mm    = 4.0;
 
 snap_bead_mm   = 0.35;  // radial interference
 snap_bead_h    = 1.2;   // bead height
@@ -1754,13 +1757,52 @@ module wall_stiffeners() {
     for (py = rib_ys(1))
         translate([outer_length, py - rib_width_mm/2, 0])
             cube([rib_out_mm, rib_width_mm, z1]);
+
+    // ---- horizontal band, all four walls, over the window row ----
+    //
+    // The verticals cannot cover the window row -- on the LEFT wall the four
+    // windows take all five candidate positions, so without this that wall
+    // gets no rib at all. A band above them ties every vertical together and
+    // spans what they cannot reach.
+    //
+    // It flares out at 45 degrees from the wall face to full projection, so
+    // its underside is self-supporting: no support material, same treatment as
+    // the top rim. Where it crosses a window the cutouts punch through it --
+    // see base_tray(), where the stiffeners are now subtracted from.
+    difference() {
+        hull() {
+            translate([0, 0, band_z_mm - rim_out_mm])
+                cube([outer_length, outer_width, 0.01]);
+            translate([-rim_out_mm, -rim_out_mm, band_z_mm])
+                cube([outer_length + 2*rim_out_mm,
+                      outer_width  + 2*rim_out_mm, 0.01]);
+        }
+        translate([0, 0, band_z_mm - rim_out_mm - 1])
+            cube([outer_length, outer_width, rim_out_mm + band_height_mm + 2]);
+    }
+    difference() {
+        translate([-rim_out_mm, -rim_out_mm, band_z_mm])
+            cube([outer_length + 2*rim_out_mm,
+                  outer_width  + 2*rim_out_mm, band_height_mm]);
+        translate([0, 0, band_z_mm - 1])
+            cube([outer_length, outer_width, band_height_mm + 2]);
+    }
 }
 
 module base_tray() {
     difference() {
         union() {
             difference() {
-                tray_shell();
+                union() {
+                    tray_shell();
+                    // INSIDE this difference on purpose. Unioned after it, any
+                    // stiffener crossing a window would fill the window back
+                    // in -- which is how a mis-spaced rib closed the switch
+                    // hole rather than merely touching it. Here the cutouts
+                    // win, so a stiffener cannot block a port even if the
+                    // placement logic is wrong.
+                    if (stiffen_walls) wall_stiffeners();
+                }
                 union() {
                     snap_groove();
                     left_edge_cutouts();
@@ -1772,7 +1814,6 @@ module base_tray() {
                     if (kan28_fits) top_edge_switch_hole();
                 }
             }
-            if (stiffen_walls) wall_stiffeners();
             retaining_lip_ridge();
             standoffs();
             if (kan28_fits) top_edge_switch_clips();
