@@ -452,7 +452,12 @@ vent_hole_pitch   = 4.6;     // centre to centre -> 1.2mm webs
 
 // ---- Lid ----
 lid_skirt_depth = 3.0;   // how far the lid's alignment skirt reaches down inside the tray
-lid_fit_clearance = 0.3; // per-side gap between skirt and tray inner wall
+// FIT-CHECK 2026-09-08: the lip was a little tight on the printed pair, so
+// the skirt comes in 0.1mm per side. Small on purpose -- this clearance also
+// sets how far the snap bead engages (bead_out below subtracts it), and the
+// bead is only 0.35mm of interference to begin with. 0.4 keeps roughly
+// three-quarters of the engagement while taking the bind out.
+lid_fit_clearance = 0.4; // per-side gap between skirt and tray inner wall
 
 // ---- Corner standoffs (board support, short -- see v1 note 3) ----
 // OFF by default now. These were placed at a generic 5mm inset that was
@@ -537,6 +542,20 @@ standoff_pilot_od  = 2.6;
 // thickness. If it is STILL tight, the next knob is lid_fit_clearance (0.3 per
 // side): the bead and the skirt are in series, and a tight skirt reads exactly
 // the same way from outside.
+// ---- External stiffening -------------------------------------------
+// See the module wall_stiffeners() for why these are all on the outside and
+// why they start above z = stiffener_z0.
+stiffen_walls     = true;
+rim_height_mm     = 12.0;   // band down from the top edge
+rim_out_mm        = 2.5;    // how far it stands proud
+gusset_leg_mm     = 10.0;   // 45-degree corner fillet, each leg
+rib_out_mm        = 3.0;    // rib depth
+rib_width_mm      = 3.0;
+rim_bot_height_mm = 8.0;    // bottom rim: must stay under the cutouts at 9.4
+rim_chamfer_mm    = 2.5;    // 45-degree flare, so nothing needs support
+rib_pitch_mm      = 22.0;   // nominal spacing; ribs that foul a window drop out
+rib_clear_mm      = 1.5;    // extra gap each side of a window
+
 snap_bead_mm   = 0.35;  // radial interference
 snap_bead_h    = 1.2;   // bead height
 snap_lead_in   = 0.6;   // chamfer under the bead, for assembly
@@ -611,9 +630,22 @@ connector_positions_mm = [
     // and this window starts at 70.0, so 1.5mm. It is left centred on the
     // measured connector rather than nudged along to widen the pillar -- a
     // window that does not line up with its plug is the worse failure.
-    // FIT-CHECK 2026-08-31: 11mm wide x 8mm high at the opening (was 11 x 6).
-    // With cutout_margin 0.5 that is a 10 x 7 body entry.
-    ["MINI_USB_J14", 75.5, 10, 7],
+    // FIT-CHECK 2026-09-08, from a printed case. Three changes:
+    //
+    //  * 1mm wider and 1mm taller again (10x7 -> 11x8 body entry, so 12x8.5
+    //    at the opening with cutout_margin 0.5).
+    //  * DROPPED 2.5mm. The 5th field extends the window BELOW the board's top
+    //    surface, which every other wall cutout starts at. The mini-USB
+    //    receptacle sits low on a 2mm-thick PCB and the plug's overmould
+    //    reaches below the board line, so a window starting exactly at the
+    //    board top fouls it. It also means the board edge is visible through
+    //    the opening, which is how the fit gets checked without opening the
+    //    case.
+    //  * Centre moved from 27.1mm to 25.0mm from the low-Y box edge, i.e.
+    //    board-local 75.5 -> 77.6. board_y() maps board-local to case Y as
+    //    origin_y + (board_width - t) with origin_y = 12.6, so 25.0 needs
+    //    t = 90 - (25.0 - 12.6) = 77.6.
+    ["MINI_USB_J14", 77.6, 11, 8, 2.5],
 ];
 
 // BOTTOM wall (y=board_width, board_length=160mm long): mini-USB (J14,
@@ -710,7 +742,7 @@ dc_jack_diameter         = 7;    // measured barrel outer diameter
 // the 6V adapter needs 13mm to pass. The barrel is 7mm, but what has to fit
 // through the wall is the moulded shell around it, and sizing the hole to the
 // barrel is why the printed case would not take the power lead.
-dc_jack_hole_d           = 13;
+dc_jack_hole_d           = 14;   // FIT-CHECK 2026-09-08: +1mm, centre unchanged
 // RAISED 6.0 -> 6.5. At 6.0 a 13mm hole reaches down to 15.4 - 6.5 = 8.9mm,
 // which is 0.5mm BELOW the board's top surface at 9.4 -- so it would breach
 // the 2mm band of solid wall alongside the PCB edge that wall_cutout_z0()
@@ -1048,6 +1080,24 @@ cyd_center_mm     = [30, 45];
 // For the record, the old from_glass = 4 put the near edge at 36.0 for a
 // 1.0mm gap, which is what was measured on the print and reported.
 cyd_ldr_from_module_mm = 6.5;
+// ---- Screw pilots for the display module ----------------------------
+// MEASURED on the module 2026-09-08: hole centres 42mm apart across the
+// module (the 50mm axis) and 83mm along it (the 91mm axis) -- i.e. 4mm in
+// from each edge, which is what a 50x91 board with corner mounts gives.
+//
+// These are PILOTS, not clearance holes: something for a self-tapper to bite
+// into, as asked. 1.8mm suits the 2-2.5mm screws these modules ship with; go
+// larger only if the screw splits the boss.
+//
+// Depth is bounded by what is under the recess. The lid is 6mm and the module
+// pocket takes 2mm, so there is 4mm of ledge; 2mm of pilot leaves 2mm solid
+// and cannot perforate the outside face. If screen_recess_mm ever grows, the
+// assert below catches it rather than letting a hole break through onto the
+// visible surface.
+cyd_screw_pitch_mm    = [42, 83];  // [across the 50mm axis, along the 91mm]
+cyd_screw_pilot_d     = 1.8;
+cyd_screw_pilot_depth = 2.0;
+
 cyd_ldr_band_mm       = [8, 14];   // measured, from the short edge
 cyd_ldr_clear_mm      = 1;         // each side, for print tolerance
 cyd_ldr_both_ends     = false;     // one hole only
@@ -1316,8 +1366,13 @@ module left_edge_cutouts() {
     for (c = connector_positions_mm) {
         y_center = board_y(c[1]);
         h = c[2] + 2*cutout_margin;
-        translate([-1, y_center - h/2, wall_cutout_z0()])
-            cube([wall_thickness + 2, h, wall_cutout_h(c[3])]);
+        // Optional 5th field: how far BELOW the board's top surface this
+        // window starts. Everything else begins exactly at the board line
+        // (wall_cutout_z0), which is right for a connector whose body sits on
+        // the board and wrong for one whose plug reaches under it.
+        drop = (len(c) > 4) ? c[4] : 0;
+        translate([-1, y_center - h/2, wall_cutout_z0() - drop])
+            cube([wall_thickness + 2, h, wall_cutout_h(c[3]) + drop]);
     }
 }
 
@@ -1573,6 +1628,104 @@ echo(str("internal mounts vs wall_height ", wall_height, ": FT232H needs ",
          ft232h_stack_mm, " (", ft232h_fits ? "fits" : "OMITTED",
          "), switch needs ", kan28_stack_mm, " (", kan28_fits ? "fits" : "OMITTED", ")"));
 
+// The bottom rim must stay clear of the lowest wall cutout. Everything above
+// it is handled by rib_clear_*(), which tests real geometry rather than
+// assuming a spacing -- an evenly spaced rib landed on the switch boss once.
+assert(!stiffen_walls || rim_bot_height_mm < wall_cutout_z0(),
+       "the bottom rim now reaches the wall cutouts -- lower rim_bot_height_mm");
+
+// Everything here is OUTSIDE the shell. The lid seats on the inner wall face
+// and the top edge, so none of it touches a fitting surface -- a lid printed
+// before these existed still fits.
+//
+// PRINTABILITY. Both rims are chamfered rather than square: the top one flares
+// outward at 45 degrees so its underside is self-supporting, and the bottom one
+// is widest at the build plate so its transition faces upward. Nothing here
+// needs support material.
+
+// Does a rib at model-X px clear every opening in the long walls?
+//
+// Checked against the real geometry, not against a spacing rule. An evenly
+// spaced rib landed exactly on the switch boss once already.
+function rib_clear_bottom(px) =
+    len([for (c = bottom_connector_positions_mm)
+         if (abs(px - (board_origin[0] + c[1]))
+             < c[2]/2 + cutout_margin + rib_width_mm/2 + rib_clear_mm) 1]) == 0;
+
+function rib_clear_top(px) =
+    !kan28_fits
+    || abs(px - (board_origin[0] + kan28_x_mm))
+       >= kan28_boss_d/2 + rib_width_mm/2 + rib_clear_mm;
+
+// Candidates on a nominal pitch, then filtered. Ribs are placed per wall, so a
+// window on one long wall does not cost a rib on the other.
+function rib_xs(clear_fn) =
+    [for (i = [1 : floor(outer_length / rib_pitch_mm)])
+        let (px = outer_length * i / (floor(outer_length / rib_pitch_mm) + 1))
+        if (clear_fn == 0 ? rib_clear_bottom(px) : rib_clear_top(px)) px];
+
+module wall_stiffeners() {
+    z1 = tray_height;
+    zr = z1 - rim_height_mm;            // top rim starts here
+    zb = rim_bot_height_mm;             // bottom rim ends here
+
+    // ---- top rim: 45-degree flare, then a straight band to the edge ----
+    difference() {
+        union() {
+            hull() {
+                translate([0, 0, zr])
+                    cube([outer_length, outer_width, 0.01]);
+                translate([-rim_out_mm, -rim_out_mm, zr + rim_chamfer_mm])
+                    cube([outer_length + 2*rim_out_mm,
+                          outer_width  + 2*rim_out_mm, 0.01]);
+            }
+            translate([-rim_out_mm, -rim_out_mm, zr + rim_chamfer_mm])
+                cube([outer_length + 2*rim_out_mm,
+                      outer_width  + 2*rim_out_mm,
+                      rim_height_mm - rim_chamfer_mm]);
+        }
+        translate([0, 0, zr - 1])
+            cube([outer_length, outer_width, rim_height_mm + 2]);
+    }
+
+    // ---- bottom rim: widest at the plate, tapering up to the wall ----
+    difference() {
+        hull() {
+            translate([-rim_out_mm, -rim_out_mm, 0])
+                cube([outer_length + 2*rim_out_mm,
+                      outer_width  + 2*rim_out_mm, 0.01]);
+            translate([0, 0, zb])
+                cube([outer_length, outer_width, 0.01]);
+        }
+        translate([0, 0, -1])
+            cube([outer_length, outer_width, zb + 2]);
+    }
+
+    // ---- corner gussets, rim to rim ----
+    for (cx = [0, 1], cy = [0, 1]) {
+        x  = cx ? outer_length : 0;
+        y  = cy ? outer_width  : 0;
+        sx = cx ? -1 : 1;
+        sy = cy ? -1 : 1;
+        translate([x, y, 0])
+            linear_extrude(height = zr)
+                polygon([[0, 0], [sx * gusset_leg_mm, 0], [0, sy * gusset_leg_mm]]);
+    }
+
+    // ---- ribs, full span between the rims, placed around the windows ----
+    for (px = rib_xs(0))
+        translate([px - rib_width_mm/2, -rib_out_mm, zb])
+            cube([rib_width_mm, rib_out_mm, zr - zb]);
+    for (px = rib_xs(1))
+        translate([px - rib_width_mm/2, outer_width, zb])
+            cube([rib_width_mm, rib_out_mm, zr - zb]);
+
+    // Short walls: the DC jack and the antenna hole live here and are separate
+    // modules rather than list entries, so ribs are left off rather than
+    // guessed at. At 115mm these walls are the stiffer pair anyway, and they
+    // get both rims and all four gussets.
+}
+
 module base_tray() {
     difference() {
         union() {
@@ -1589,6 +1742,7 @@ module base_tray() {
                     if (kan28_fits) top_edge_switch_hole();
                 }
             }
+            if (stiffen_walls) wall_stiffeners();
             retaining_lip_ridge();
             standoffs();
             if (kan28_fits) top_edge_switch_clips();
@@ -1722,6 +1876,18 @@ module lid_screen_cutout() {
         cube([screen_module_mm[0] + 2*screen_fit_gap_mm[0],
               screen_module_mm[1] + 2*screen_fit_gap_mm[1],
               screen_recess_mm]);
+
+    // Screw pilots, CYD only. Blind holes in the ledge the module bears on,
+    // drilled from the pocket floor downward -- they must NOT reach the
+    // outside face, which is the visible front of the case.
+    if (is_cyd && cyd_screw_pilot_d > 0) {
+        for (sx = [-1, 1], sy = [-1, 1])
+            translate([cx + sx*cyd_screw_pitch_mm[0]/2,
+                       cy + sy*cyd_screw_pitch_mm[1]/2,
+                       screen_recess_mm - 0.001])
+                cylinder(h = cyd_screw_pilot_depth + 0.001,
+                         d = cyd_screw_pilot_d, $fn = 24);
+    }
 
     // Light-sensor slot, CYD only. Goes all the way through the ledge, which
     // is doing two jobs: the sensor needs light, and at 3mm tall it would
