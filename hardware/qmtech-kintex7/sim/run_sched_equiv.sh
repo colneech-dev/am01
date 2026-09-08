@@ -59,3 +59,13 @@ case "$p:$n" in
     *FAIL*:*)      echo "   => THE SCHEDULING CHANGE IS BROKEN. Do not ship this configuration." ;;
     *)             echo "   => INCONCLUSIVE: see the .out files." ;;
 esac
+
+# EXIT ON THE VERDICT, not just print it. This echoed its conclusion and then
+# returned 0 whatever it found, so any wrapper or CI step checking $? treated a
+# BROKEN core as a pass -- on a change whose failure mode is a core that runs
+# at full speed and computes wrong digests. run_encrypt_equiv.sh already gets
+# this right; these did not.
+case "$p:$n" in
+    *PASS*:*FAIL*) exit 0 ;;
+    *)             exit 1 ;;
+esac
