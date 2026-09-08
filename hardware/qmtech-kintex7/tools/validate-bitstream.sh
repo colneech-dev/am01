@@ -80,6 +80,14 @@ if [ -z "$LINE" ]; then
 fi
 echo "$LINE"
 
+# The pass rate ALONE is not sufficient, because the host recovers off-by-one
+# finds by retrying at nonce-1 and counts the recovered share in core_ok --
+# exactly the number parsed below. A bitstream mislabelling every single find
+# would therefore score ~99% here and pass. Read the recovery counters too.
+REC=$(journalctl -u odo-miner --no-pager -o cat --since "-${MINS} min" \
+      | grep RECOVERED | tail -1)
+echo "$REC"
+
 # core0 found=N ok=M (P%)  core1 found=N ok=M (P%)
 P0=$(echo "$LINE" | sed -n 's/.*core0 [^(]*(\([0-9]*\)\..*/\1/p')
 P1=$(echo "$LINE" | sed -n 's/.*core1 [^(]*(\([0-9]*\)\..*/\1/p')
@@ -91,6 +99,24 @@ echo "  core0 pass ${P0}%   core1 pass ${P1}%   floor ${FLOOR}%"
 RC=0
 [ "$P0" -lt "$FLOOR" ] && { echo "  core0 FAILS"; RC=1; }
 [ "$P1" -lt "$FLOOR" ] && { echo "  core1 FAILS"; RC=1; }
+
+# Any recovery at all is a failure. A correct bitstream needs none: 200MHz
+# measured exactly zero across 2629 finds, while 225MHz needed ~36%. This is
+# not a tight threshold, it is the only honest one -- the recovered shares are
+# real work, but they are evidence the hardware is mislabelling results.
+R0=$(echo "$REC" | sed -n 's/.*core0=\([0-9]*\).*/\1/p')
+R1=$(echo "$REC" | sed -n 's/.*core1=\([0-9]*\).*/\1/p')
+if [ -n "$R0" ] && [ -n "$R1" ]; then
+    echo "  recovered core0=$R0 core1=$R1 (must be 0)"
+    if [ "$R0" -ne 0 ] || [ "$R1" -ne 0 ]; then
+        echo "  OFF-BY-ONE PRESENT -- the host is patching over mislabelled"
+        echo "  nonces. The pass rate above is inflated by exactly these."
+        RC=1
+    fi
+else
+    echo "  no RECOVERED line -- cannot rule out the off-by-one fault"
+    RC=1
+fi
 
 # An asymmetry says the two instances were placed differently and one landed
 # worse -- per-instance, so not shared state like a mis-committed header.

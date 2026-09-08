@@ -86,3 +86,11 @@ hardware/qmtech-kintex7/cyd/sim/test_cyd_*
 # Same shape as the cyd/sim rule above: ignore the binaries, keep the sources.
 hardware/qmtech-kintex7/sim/tb_*
 !hardware/qmtech-kintex7/sim/tb_*.v
+
+# Cross-compiled and native test binaries. Same shape as the rules above:
+# ignore the executables, keep every source.
+hardware/qmtech-kintex7/sw/odo-miner
+hardware/qmtech-kintex7/sw/odo-webd
+hardware/qmtech-kintex7/sw/odo-ui
+hardware/qmtech-kintex7/cyd/sim/test_pow_math
+hardware/qmtech-kintex7/cyd/sim/test_webd_form

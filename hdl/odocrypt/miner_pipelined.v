@@ -92,11 +92,29 @@ module miner_pipelined(clk, header, target, nonce, found);
         found <= 1'b0;            // default: one-cycle pulse
         if (has_res)
         begin
-            if (res)
-            begin
-                nonce <= nonce_out;
-                found <= 1'b1;   // qualifying nonce latched this edge
-            end
+            // `nonce` DELIBERATELY shares nonce_out's enable. It used to sit
+            // inside `if (res)`, giving it a clock enable of (has_res & res) --
+            // a LUT2 -- while nonce_out's was has_res alone, a strictly shorter
+            // path. If that combined term missed the setup window at an edge,
+            // nonce_out incremented anyway and `nonce` loaded one cycle later,
+            // capturing the ALREADY-INCREMENTED value: a nonce reported exactly
+            // one too high.
+            //
+            // Measured on hardware 2026-09-07 at 225MHz: ~36% of finds, both
+            // instances, always +1 and never +2, non-accumulating. The sign is
+            // what localises it -- a slip anywhere on the cipher-input side
+            // would report a nonce too LOW, and a gained or lost strobe pulse
+            // would desync nonce_out cumulatively and show -2, -3, -4. Those
+            // buckets measured exactly zero.
+            //
+            // Loading every result rather than only qualifying ones is
+            // equivalent for the consumer: found_path samples `nonce`
+            // combinationally in the cycle `found` is high, and it holds that
+            // result's nonce then. `res` becomes plain data on `found` instead
+            // of half an enable, so the two registers cannot disagree about
+            // which edge they belong to.
+            nonce     <= nonce_out;
+            found     <= res;        // one-cycle strobe; default above clears it
             nonce_out <= nonce_out + 1;
         end
     end

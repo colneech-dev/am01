@@ -24,19 +24,25 @@ cd "$HERE"
 FAILED=""
 N=0
 
+# Compile into a private directory. Two concurrent runs used to write the same
+# tb_* executables next to the sources and clobber each other mid-compile,
+# which surfaces as a bogus "FAILED TO COMPILE" on whichever lost the race.
+BUILD=$(mktemp -d)
+trap 'rm -rf "$BUILD"' EXIT
+
 # run <name> <sources...>
 run() {
     local name=$1; shift
     N=$((N + 1))
     echo
     echo "$N. Running $name..."
-    if ! iverilog -g2005 -o "$name" "$@" 2>&1; then
+    if ! iverilog -g2005 -o "$BUILD/$name" "$@" 2>&1; then
         echo "   *** $name FAILED TO COMPILE"
         FAILED="$FAILED $name(compile)"
         return
     fi
     local out
-    out=$(vvp "$name" 2>&1) || {
+    out=$(vvp "$BUILD/$name" 2>&1) || {
         echo "$out"
         echo "   *** $name EXITED NON-ZERO"
         FAILED="$FAILED $name(exit)"
@@ -44,7 +50,12 @@ run() {
     }
     echo "$out"
     # $finish exits 0 whatever the testbench concluded, so read what it said.
-    if echo "$out" | grep -qiE 'RESULT: FAIL|\*\*\* FAIL|^ *FAIL|ERROR:'; then
+    # Match FAIL/FAILURE as a word ANYWHERE in the line. The earlier
+    # pattern anchored to line start after optional spaces, which missed
+    # tb_uart_tx_pin's "=== FAIL (timeout) ===" -- a stalled transmitter
+    # reported as a pass. ERROR: is case-SENSITIVE so a benign "error:" in
+    # compiler-ish output is not a false alarm.
+    if echo "$out" | grep -qE 'FAIL(URE)?S?\b|ERROR:'; then
         echo "   *** $name REPORTED FAILURE"
         FAILED="$FAILED $name"
     fi

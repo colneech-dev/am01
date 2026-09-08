@@ -616,6 +616,20 @@ int am01_bus_fan(am01_bus_t *bus, int set_floor, uint8_t floor,
     return 0;
 }
 
+int am01_bus_read_reset_count(am01_bus_t *bus, uint8_t *rst_out)
+{
+    /* ADDR_FIFO_STAT bits [7:4]. Zero on pre-0x020A bitstreams, where the
+     * nibble was a hard-coded 4'h0 -- so an old bitstream simply never reports
+     * a reset, rather than reporting a spurious one. */
+    if (need_version(bus, 0x0200) < 0)
+        return -1;
+    uint16_t v;
+    if (reg_read16(bus, ADDR_FIFO_STAT, &v) < 0)
+        return -1;
+    if (rst_out) *rst_out = (uint8_t)((v >> 4) & 0x0F);
+    return 0;
+}
+
 int am01_bus_read_fifo_stat(am01_bus_t *bus, uint8_t *lost_out,
                             uint8_t *depth_out)
 {

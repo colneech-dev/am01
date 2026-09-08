@@ -137,6 +137,16 @@ int am01_bus_wait_irq(am01_bus_t *bus, int timeout_ms);
  * and a SATURATED value with the core still hashing means the found path is
  * stalled rather than merely behind -- the signature of the 2026-09-01
  * outage. Read it before issuing a soft reset, which clears it. */
+/* The saturating bus-reset count from ADDR_FIFO_STAT's middle nibble,
+ * 0..15. Present from VERSION 0x020A; reads 0 on anything older, which is
+ * indistinguishable from "no resets" and is the safe way round.
+ *
+ * A change in this value means the FPGA reset underneath the host: found_path
+ * discarded whatever was queued, `lost` was cleared, and the clk_h word
+ * counters may be mid-dispatch. The host must reissue OP_SOFT_RESET and
+ * redispatch, or the next job commits on the wrong word. */
+int am01_bus_read_reset_count(am01_bus_t *bus, uint8_t *rst_out);
+
 int am01_bus_read_fifo_stat(am01_bus_t *bus, uint8_t *lost_out,
                             uint8_t *depth_out);
 

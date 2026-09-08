@@ -142,6 +142,34 @@ uint32_t miner_io_pipe_seed(void)
     return g_seed;
 }
 
+int miner_io_pipe_reset_seen(void)
+{
+    static int     have_prev = 0;
+    static uint8_t prev      = 0;
+    uint8_t now;
+
+    if (!g_bus || am01_bus_read_reset_count(g_bus, &now) != 0)
+        return 0;
+
+    if (!have_prev) {                 /* first call establishes the baseline */
+        have_prev = 1;
+        prev      = now;
+        return 0;
+    }
+    if (now == prev)
+        return 0;
+
+    /* Saturated at 15, so once it sticks there further resets are invisible.
+     * Report this one and rebaseline either way. */
+    fprintf(stderr, "[gpio] FPGA reset detected (count %u -> %u); resyncing\n",
+            prev, now);
+    prev = now;
+
+    if (am01_bus_write_ctrl(g_bus, 0x0001) < 0)   /* CTRL[0] = OP_SOFT_RESET */
+        fprintf(stderr, "[gpio] soft reset after FPGA reset FAILED\n");
+    return 1;
+}
+
 int miner_io_pipe_dispatch(const uint8_t header[80], const uint8_t target[32])
 {
     if (!g_bus)

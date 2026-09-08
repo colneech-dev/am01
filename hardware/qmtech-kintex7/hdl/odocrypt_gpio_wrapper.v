@@ -195,7 +195,7 @@ module odocrypt_gpio_wrapper #(
      * wires and can be reflashed from the miner, and carrying two panels
      * cost a shared SPI engine, a touch sequencer and nine JP5 pins.
      * Free for reuse; see docs/JP5-WIRING.md for the pins. */
-    localparam [4:0] ADDR_FIFO_STAT   = 5'h18;  // read: {lost[7:0], 4'h0, depth[3:0]}
+    localparam [4:0] ADDR_FIFO_STAT   = 5'h18;  // r: {lost[7:0], rst[3:0], depth[3:0]}
 
     // CYD front panel, on its own JP5 pins (15-18). Always present, and
     // harmless with no CYD attached: an unread RX FIFO simply stays empty.
@@ -328,7 +328,7 @@ module odocrypt_gpio_wrapper #(
      * REPORTS 0203 -- it was built before this was bumped. Nothing
      * depends on telling them apart: UART_STAT is identical in all
      * three, and 0x1C simply reads 0 on a bitstream that lacks it. */
-    localparam [15:0] VERSION = 16'h0209;
+    localparam [15:0] VERSION = 16'h020A;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;
@@ -999,8 +999,12 @@ module odocrypt_gpio_wrapper #(
                              uart_tx_full, uart_rx_empty};
                         /* The WHOLE count, exact, in its own register. */
                         ADDR_UART_RXCNT: rdata_reg <= uart_rx_cnt;
+                        /* The middle nibble was 4'h0 through 0x0209; it
+                         * now carries a saturating count of bus resets, so a
+                         * spontaneous one leaves evidence. Hosts that mask it
+                         * off are unaffected. */
                         ADDR_FIFO_STAT: rdata_reg <=
-                            {lost_sync2_bus, 4'h0, fifocnt_sync2_bus};
+                            {lost_sync2_bus, rst_events_bus, fifocnt_sync2_bus};
                         default: rdata_reg <= 16'h0;
                     endcase
                     gpio_data_oe <= 1'b1;
@@ -1369,7 +1373,52 @@ module odocrypt_gpio_wrapper #(
     (* ASYNC_REG = "TRUE" *) reg [3:0] fifocnt_sync1_bus;
     reg [3:0] fifocnt_sync2_bus;
 
-    wire nonce_new_pulse_bus = nonce_sync2_bus ^ nonce_sync3_bus;
+    // ---------------------------------------------------------------
+    // Reset visibility.
+    //
+    // bus_rst_n now reaches found_path (VERSION 0x0209), which discards queued
+    // finds and clears `lost` -- correct for a host-issued OP_SOFT_RESET, which
+    // the host knows about, and silent for a spontaneous reset from SW2 or an
+    // MMCM blip, which it does not. Count the events in ADDR_FIFO_STAT's spare
+    // nibble so an unexplained gap in the find stream has evidence attached.
+    //
+    // NOT cleared by reset, on purpose: a counter a reset clears cannot count
+    // resets. Saturating at 15 for the same reason `lost` saturates -- a
+    // counter that wraps reads as "nothing happened" once per wrap.
+    reg [3:0] rst_events_bus = 4'h0;
+    reg       rst_seen_bus   = 1'b0;
+
+    always @(posedge bus_clk) begin
+        if (!bus_rst_n) begin
+            rst_seen_bus <= 1'b1;
+        end else if (rst_seen_bus) begin
+            rst_seen_bus <= 1'b0;
+            if (rst_events_bus != 4'hF)
+                rst_events_bus <= rst_events_bus + 1'b1;
+        end
+    end
+
+    // Edge detection is held off for three bus_clk cycles after reset release.
+    //
+    // found_path deliberately does NOT reset nonce_toggle (found_path.v:298),
+    // while the chain below IS reset to zero. If nonce_toggle_h were 1 at
+    // release the chain would refill 0 -> 1 -> 1 and this XOR would fire on a
+    // transition that never happened, handing the host nonce_latch -- which
+    // soft_reset has just cleared to zero -- as a valid find. Same mistake the
+    // req_toggle_bus note at the top of this file exists to prevent, in the
+    // other direction.
+    //
+    // Nothing is lost by waiting: a real find stays in found_path's latch
+    // behind `busy` until the host acks it.
+    reg [1:0] nonce_warm_bus = 2'd0;
+
+    always @(posedge bus_clk) begin
+        if (!bus_rst_n)                 nonce_warm_bus <= 2'd0;
+        else if (nonce_warm_bus != 2'd3) nonce_warm_bus <= nonce_warm_bus + 1'b1;
+    end
+
+    wire nonce_new_pulse_bus = (nonce_sync2_bus ^ nonce_sync3_bus)
+                               & (nonce_warm_bus == 2'd3);
 
     // Synchronous reset deliberately -- see the sync-vs-async note above
     // wr_sync/rd_sync's always block; same reasoning applies here.

@@ -69,4 +69,16 @@ const char *miner_io_pipe_backend(void);
 struct am01_bus;
 struct am01_bus *miner_io_gpio_bus(void);
 
+/* Has the FPGA reset since the last call?
+ *
+ * Returns 1 if it has, having already reissued OP_SOFT_RESET to clear the
+ * clk_h word counters and found_path. THE CALLER MUST REDISPATCH: a reset can
+ * land mid-dispatch, and zeroing the counter does not put the words already
+ * sent back -- only starting the job again from word 0 restores alignment.
+ *
+ * Returns 0 if nothing happened or the bitstream predates VERSION 0x020A and
+ * cannot report it. Never returns an error: a failed read is indistinguishable
+ * from no reset, and pretending otherwise would restart the job on a glitch. */
+int miner_io_pipe_reset_seen(void);
+
 #endif /* MINER_IO_PIPE_H */

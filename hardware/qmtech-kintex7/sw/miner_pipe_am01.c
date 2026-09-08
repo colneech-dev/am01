@@ -26,6 +26,12 @@
 #include "odocrypt_state.h"
 #include "KeccakP-800-SnP.h"
 #include "miner_io_pipe.h"
+
+/* Declared in miner_io_gpio.h, which this file cannot include: the include
+ * path resolves "miner_io_pipe.h" to the CycloneV header of the same name and
+ * both use the guard MINER_IO_PIPE_H, so pulling in the GPIO one as well
+ * silently does nothing. One prototype is cheaper than fighting that. */
+int miner_io_pipe_reset_seen(void);
 /* thermal_am01.h, NOT the sibling repo's thermal.h. That one drives a
  * DS18B20 over a bit-banged one-wire bus on a Cyclone V Avalon-MM PIO via
  * /dev/mem; none of those three things exist on this board, so
@@ -980,6 +986,22 @@ int main(int argc, char **argv)
                 }
             }
 
+            /* Did the FPGA reset underneath us? SW2 is sampled raw and
+             * undebounced, and an MMCM unlock does it too. found_path will have
+             * discarded whatever was queued, and the clk_h word counters may be
+             * stranded mid-dispatch -- zeroing them does not put the words
+             * already sent back, so only restarting the job from word 0
+             * restores alignment. miner_io_pipe_reset_seen has already issued
+             * OP_SOFT_RESET; the redispatch is ours to do.
+             *
+             * Silent on bitstreams before VERSION 0x020A, which cannot report
+             * the event at all. */
+            if (have_disp && miner_io_pipe_reset_seen()) {
+                miner_io_pipe_dispatch(disp.header, disp.share_target);
+                fprintf(stderr, "[pipe] redispatched job %s after an FPGA"
+                                " reset\n", disp.job_id);
+            }
+
             job_t nj;
             if (stratum_get_job(&st, &nj)) {
                 int same = have_cur && job_same(&nj, &cur);
@@ -1036,11 +1058,33 @@ int main(int argc, char **argv)
                                miner_io_pipe_poll(&gap_nonce) == 0) {
                             found++;
                             g_st.found = found;
+                            core_found[gap_nonce >> 31]++;
                             uint8_t gh[32];
+                            /* The off-by-one applies here too, and so does the
+                             * per-core accounting. This path used to do
+                             * neither, which left CORESTAT's denominators
+                             * computed over a subset of finds -- and
+                             * validate-bitstream.sh signing off on that
+                             * subset. */
+                            uint32_t gap_use = gap_nonce;
+                            int gap_ok = 0;
                             compute_pow(prev.header, gap_nonce, gh);
                             if (target_met(gh, prev.share_target)) {
-                                if (stratum_submit_share(&st, &prev, gap_nonce) == 0) {
+                                gap_ok = 1;
+                            } else {
+                                compute_pow(prev.header, gap_nonce - 1u, gh);
+                                if (target_met(gh, prev.share_target)) {
+                                    gap_use = gap_nonce - 1u;
+                                    gap_ok  = 2;
+                                }
+                            }
+                            if (gap_ok) {
+                                if (stratum_submit_share(&st, &prev, gap_use) == 0) {
                                     shares++;
+                                    core_ok[gap_nonce >> 31]++;
+                                    if (gap_ok == 2)
+                                        recovered[gap_nonce >> 31]++;
+                                    stale_run = 0;
                                     g_st.shares     = shares;
                                     g_st.last_share = time(NULL);
                                     g_st.work_acc  += share_work(prev.share_target);
@@ -1048,14 +1092,26 @@ int main(int argc, char **argv)
                                      * is where a block could previously be
                                      * submitted and never recorded. */
                                     double gd = account_share(gh, &prev,
-                                                              gap_nonce,
-                                                              " (handover)");
-                                    printf("[pipe] SHARE (handover) job=%s "
-                                           "nonce=0x%08" PRIx32 " diff=%.6g\n",
-                                           prev.job_id, gap_nonce, gd);
+                                                              gap_use,
+                                                              gap_ok == 2
+                                                              ? " (handover, off-by-one)"
+                                                              : " (handover)");
+                                    if ((shares & 63u) == 0u)
+                                        printf("[pipe] SHARE (handover%s) job=%s nonce=0x%08" PRIx32 " diff=%.6g\n",
+                                               gap_ok == 2 ? ", off-by-one" : "",
+                                               prev.job_id, gap_use, gd);
                                 }
                             } else {
                                 stale++;
+                                if (strcmp(stale_job, prev.job_id) == 0) {
+                                    stale_run++;
+                                } else {
+                                    snprintf(stale_job, sizeof stale_job, "%s",
+                                             prev.job_id);
+                                    stale_run = 1;
+                                }
+                                if (stale_run > stale_run_max)
+                                    stale_run_max = stale_run;
                             }
                         }
                     }
