@@ -1758,6 +1758,32 @@ module wall_stiffeners() {
         translate([outer_length, py - rib_width_mm/2, 0])
             cube([rib_out_mm, rib_width_mm, z1]);
 
+    // ---- upper ribs: EVERY position, above the window row ----
+    //
+    // Below the band a rib has to dodge the connector windows, which is why
+    // the left wall gets none at all -- its four windows take every candidate.
+    // Above the band there is nothing to dodge: the tallest window is
+    // USB_A_J7, a stacked pair topping out at 26.9, and the band sits at 28.
+    // So the upper section carries a rib at every position on all four walls,
+    // and the left wall finally gets vertical stiffening where it is otherwise
+    // a bare 2.4mm panel 23mm tall.
+    zu0 = band_z_mm + band_height_mm;
+    zu1 = z1 - rim_height_mm;
+    for (i = [1 : floor(outer_length / rib_pitch_mm)]) {
+        px = outer_length * i / (floor(outer_length / rib_pitch_mm) + 1);
+        translate([px - rib_width_mm/2, -rib_out_mm, zu0])
+            cube([rib_width_mm, rib_out_mm, zu1 - zu0]);
+        translate([px - rib_width_mm/2, outer_width, zu0])
+            cube([rib_width_mm, rib_out_mm, zu1 - zu0]);
+    }
+    for (i = [1 : floor(outer_width / rib_pitch_mm)]) {
+        py = outer_width * i / (floor(outer_width / rib_pitch_mm) + 1);
+        translate([-rib_out_mm, py - rib_width_mm/2, zu0])
+            cube([rib_out_mm, rib_width_mm, zu1 - zu0]);
+        translate([outer_length, py - rib_width_mm/2, zu0])
+            cube([rib_out_mm, rib_width_mm, zu1 - zu0]);
+    }
+
     // ---- horizontal band, all four walls, over the window row ----
     //
     // The verticals cannot cover the window row -- on the LEFT wall the four
@@ -1832,8 +1858,18 @@ module base_tray() {
 // ---- Lid -------------------------------------------------------------
 
 module lid_panel() {
-    linear_extrude(height = lid_thickness)
-        square([outer_length, outer_width]);
+    // Sized to the TRAY'S OUTER FACE INCLUDING THE RIM, so the lid covers the
+    // case instead of sitting inset with the rim showing as a frame.
+    //
+    // ONLY THIS PANEL GROWS. Everything else in the lid -- skirt, snap bead,
+    // screen pocket and window, light-sensor slot, fan cutout, vent grid -- is
+    // placed from board_origin/board_y(), which do not move. So this is a
+    // wider lip and nothing else: no feature changes position or size, which
+    // is worth checking against the previous mesh rather than assuming.
+    o = stiffen_walls ? rim_out_mm : 0;
+    translate([-o, -o, 0])
+        linear_extrude(height = lid_thickness)
+            square([outer_length + 2*o, outer_width + 2*o]);
 }
 
 module lid_skirt() {
