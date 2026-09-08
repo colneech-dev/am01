@@ -3,8 +3,16 @@
 End-to-end: build image -> flash eMMC -> first boot -> prove the FPGA bus ->
 mine. Written for a CM4 **with eMMC** docked on the QMTECH XC7K325T board.
 
-**This has been run on real hardware.** The board mines: 129.21 MH/s measured
-2026-09-06 at 225 MHz, with 2389 shares accepted and 0 rejected.
+**This has been run on real hardware.** The board mines: 99.4 MH/s measured
+2026-09-08 over 23 unattended hours at 200 MHz, 9574 of 9575 finds submitted,
+zero rejected.
+
+Flash the **200 MHz** bitstream, not a 225 MHz one. At 225 the fabric
+mislabels ~36% of finds and the host discards them before submission, so the
+pool shows zero rejects while a third of the hashrate disappears. Judge a
+candidate bitstream with `tools/validate-bitstream.sh`, which measures the
+fraction of finds that survive revalidation -- not with Vivado's WNS, which
+does not predict it.
 
 The FPGA bus bring-up (step 6) was indeed where the work was, and the
 findings are recorded in `docs/JP5-WIRING.md` and the wrapper's own comments

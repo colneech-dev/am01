@@ -1,15 +1,26 @@
 # Vivado-free FPGA builds for the XC7K325T (openXC7)
 
-> **ARCHIVED 2026-09-05 — this flow is no longer used.** The project builds
-> with Vivado (`../vivado/build_full.tcl`). This directory is kept for its
-> research record: the placement and congestion work here is the only place
-> that material exists, and `../openxc7-archive/` holds the scripts and
-> patches.
+> **DORMANT since 2026-09-05 — the project builds with Vivado**
+> (`../vivado/build_full.tcl`). This directory is kept for its research record:
+> the placement and congestion work here is the only place that material
+> exists, and it holds the scripts, patches and results in full. There was a
+> parallel `../openxc7-archive/` copy; it duplicated 112 files that live
+> elsewhere in this repo, had diverged from every one of them, and is gone.
+> Its ten unique files are here — `patches/0008`–`0011` (the congestion-aware
+> placer work), `results/vivado_net_delay_calib*.csv`, and
+> `rtl/am01_qmtech_top_mux1.v`.
+>
+> **This flow does not currently build.** `/opt/openxc7` ships yosys 0.62 and
+> nextpnr-xilinx 0.9.2, and 0.9.2 cannot route this design. It needs yosys
+> v0.68 and nextpnr 0.9.3 built from source with the patches in `patches/` and
+> `patches-yosys/` — see `../BUILD.md` §7.
 >
 > The rest of this file describes the flow as it stood when work stopped. Its
-> headline result — 135.04 MHz, never flashed — was superseded within days:
-> the Vivado flow measured 129.21 MH/s on hardware at 225 MHz and has since
-> closed timing at 237.5 MHz. Do not read the numbers below as current.
+> headline result — 135.04 MHz, never flashed — was superseded by the Vivado
+> flow, which now measures **99.4 MH/s at 200 MHz with 99.99% of finds valid**.
+> An earlier version of this note cited 129.21 MH/s at 225 MHz; that figure was
+> a cumulative counter sampled ten times and 225 MHz has since been shown to
+> mislabel ~36% of finds. Do not read any number below as current.
 
 **Bottom line: you do not need a Vivado licence for this board.** A fully
 open-source toolchain takes Verilog all the way to a valid `.bit` for

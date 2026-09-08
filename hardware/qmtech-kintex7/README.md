@@ -4,9 +4,23 @@ Status: **built, flashed and mining.** Two miner instances on a QMTECH
 XC7K325T, driven by a Raspberry Pi CM4 over a bit-banged 16-bit GPIO bus,
 with an ESP32 front panel on JP5.
 
-Measured 2026-09-06: **129.21 MH/s** mean over ten samples (124.48 min,
-133.94 max) at **225 MHz**, 74 °C, with 2389 shares accepted and 0 rejected.
-A 237.50 MHz bitstream is built and closes timing at WNS +0.335 ns.
+Measured 2026-09-08, 23 hours unattended: **99.4 MH/s** at **200 MHz**
+(MULT 24), 71 °C, 9575 finds and 9574 shares submitted -- **99.99% of the work
+the fabric does reaches the pool**, and zero rejected.
+
+**Do not build this at 225 MHz.** It appears to work and it is not. At 225 the
+fabric mislabels ~36% of its finds with a nonce one too high; the host
+recomputes, the digest misses, and the work is thrown away before submission.
+The pool therefore reports ZERO REJECTS while a third of the output vanishes.
+Measured per-core on 2026-09-07: 30.5% and 44.4% of finds valid at 225 MHz,
+against 100.0% and 99.9% at 200 MHz -- for the same ~99 MH/s, because 225 was
+buying frequency and paying for it in validity. See
+`hdl/odocrypt/IMPLEMENTATION-REVIEW.md` for why the clock is not the lever
+anyway: hashrate = BRAM x clk / 1680, and BRAM is 94% full.
+
+An earlier version of this file led with "129.21 MH/s at 225 MHz, 2389 shares
+accepted and 0 rejected". The number was ten samples of a cumulative counter,
+~99% correlated, off 39 shares -- +-16% -- and the zero rejects meant nothing.
 
 Parts of this file are older than that and still describe the design as
 unbuilt; where a number here disagrees with `hdl/clk_gen_hash.v`, the RTL is

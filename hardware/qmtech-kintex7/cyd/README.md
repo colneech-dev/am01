@@ -144,7 +144,7 @@ on four wires instead of nine.
 | `firmware/cyd_link_uart.cpp` | the link, on Serial2 (CN1 IO27/IO22) |
 | `firmware/cyd_ui_draw.cpp` | banded rendering, two 320x120 sprites |
 | `hdl/uart_bridge.v` | 22/22, instantiated on JP5 15-18 |
-| bitstream | VERSION 0x0207 built at 237.5 MHz; 225 MHz flashed and mining |
+| bitstream | VERSION 0x020A; **200 MHz** flashed and mining. 225 and 237.5 MHz both mislabel finds -- see ../README.md |
 
 ## Hardware bring-up result, 2026-09-01
 

@@ -86,6 +86,14 @@ run tb_encrypt_oracle tb_encrypt_oracle.v ../../../hdl/odocrypt/encrypt.v
 # exercises the module the whole miner depends on, and nothing did before.
 run tb_nonce_label tb_nonce_label.v ../../../hdl/odocrypt/miner_pipelined.v ../../../hdl/odocrypt/miner.v ../../../hdl/odocrypt/encrypt.v ../../../hdl/odocrypt/keccak800.v
 
+# Does INONCE actually split the nonce space between instances? Fast -- it only
+# needs the counters, not a hash. It was written, retargeted at the shipping
+# core on 2026-09-06, and then never wired into any runner, so nobody ran it.
+# It matters more than it looks: the per-core accounting in miner_pipe_am01.c
+# identifies which instance found a nonce from BIT 31, which is only meaningful
+# if this split holds.
+run tb_nonce_split tb_nonce_split.v ../../../hdl/odocrypt/miner_pipelined.v ../../../hdl/odocrypt/miner.v ../../../hdl/odocrypt/encrypt.v ../../../hdl/odocrypt/keccak800.v
+
 echo
 echo "=========================================="
 if [ -n "$FAILED" ]; then

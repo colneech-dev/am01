@@ -123,52 +123,71 @@ def main():
         sys.exit("ERROR: %d BRAMs but %d harvested sites" % (total, len(sites)))
     print("%d BRAMs in %d (miner,round) groups" % (total, len(keys)))
 
-    n = max(1, min(args.cols_per_round, len(cols)))
-    cursor = {x: 0 for x in cols}
+    # ------------------------------------------------------------------
+    # Y-BAND allocation.
+    #
+    # The previous version walked a per-column cursor and picked columns by
+    # remaining capacity. That is wrong because the columns are wildly uneven --
+    # measured on this part: X0:67 X1:98 X2:34 X3:82 X4:67 X5:59 X6:13, all
+    # spanning Y0..Y139. Equal cursor INDEX therefore lands at wildly different
+    # absolute Y, so a "round" was smeared vertically:
+    #
+    #     round  0 -> Y   0..10   (span 10)
+    #     round  9 -> Y  37..129  (span 92)
+    #     round 11 -> Y  44..139  (span 95)
+    #     round 20 -> Y 121..139  but only 2 COLUMNS
+    #
+    # mean per-round Y span 49.8 of 140 rows. Rounds 8-11 covered 70% of the die
+    # height, so their intra-round nets were long BY CONSTRUCTION before HeAP even
+    # ran. And the capacity-greedy column choice degenerated at the end: round 20
+    # -- the critical one -- got 2 columns, reinstating exactly the egress
+    # bottleneck the stripe existed to prevent.
+    #
+    # Sorting all sites globally by Y and taking 20 per round instead gives:
+    #
+    #                        cursor    Y-band
+    #     mean Y span          49.8       6.2
+    #     max  Y span          97         8
+    #     round-20 columns      2         6
+    #     mean cols/round       5.5       6.1
+    #
+    # i.e. strictly better on BOTH axes. The apparent tension between "columns per
+    # round" and "compact round" was an artefact of ranking by cursor rather than
+    # by Y -- there is none. --cols-per-round is therefore retained only to force
+    # a narrower spread for experiments; the default uses every column available
+    # in each band.
+    flat = sorted(sites, key=lambda b: (parse_site(b)[1], parse_site(b)[0]))
+    n_req = args.cols_per_round
+
+    idx = 0
     assigned = 0
-
-    # The columns are very unevenly populated on this part -- measured
-    # {0:67, 1:98, 2:34, 3:82, 4:67, 5:59, 6:13} -- so a fixed rotation exhausts
-    # the small ones (X6 has 13 sites) long before the big ones. Choose each
-    # round's columns by REMAINING capacity instead, which self-balances and
-    # cannot run dry while sites are still free. Rotation is applied as a
-    # tie-break among equally-loaded columns, so it still spreads consecutive
-    # rounds without overriding capacity.
-    for idx, key in enumerate(keys):
+    for key in keys:
         members = sorted(groups[key])
-        rot = (idx * n) if not args.no_rotate else 0
-        avail = [x for x in cols if cursor[x] < len(by_col[x])]
-        avail.sort(key=lambda x: (-(len(by_col[x]) - cursor[x]),
-                                  (cols.index(x) - rot) % len(cols)))
-        chosen = avail[:n]
-        if not chosen:
+        chunk = flat[idx:idx + len(members)]
+        idx += len(members)
+        if len(chunk) < len(members):
             sys.exit("ERROR: ran out of BRAM sites")
-        placed_here = []
-        for j, (_, name) in enumerate(members):
-            # Round-robin within the chosen columns, re-picking by remaining
-            # capacity if one empties mid-round.
-            x = None
-            for k in range(len(chosen)):
-                cand = chosen[(j + k) % len(chosen)]
-                if cursor[cand] < len(by_col[cand]):
-                    x = cand
-                    break
-            if x is None:
-                spill = [q for q in cols if cursor[q] < len(by_col[q])]
-                if not spill:
-                    sys.exit("ERROR: ran out of BRAM sites")
-                x = max(spill, key=lambda q: len(by_col[q]) - cursor[q])
-            bel = by_col[x][cursor[x]][1]
-            cursor[x] += 1
-            if not args.dry_run:
-                cells[name].setdefault("attributes", {})["BEL"] = bel
-            placed_here.append(x)
-            assigned += 1
-        if idx < 3 or idx == len(keys) - 1:
-            print("  miner %d round %2d -> cols %s" % (key[0], key[1], sorted(set(placed_here))))
 
-    print("assigned %d BEL attributes (cols-per-round=%d, rotate=%s)"
-          % (assigned, n, not args.no_rotate))
+        # Optionally narrow to n_req columns by preferring the most-represented
+        # ones in this band. Default (n_req >= columns present) is a no-op.
+        if 0 < n_req < len(cols):
+            from collections import Counter
+            pref = [x for x, _ in Counter(parse_site(b)[0] for b in chunk).most_common(n_req)]
+            keep = [b for b in chunk if parse_site(b)[0] in pref]
+            spill = [b for b in chunk if parse_site(b)[0] not in pref]
+            chunk = keep + spill
+
+        for (_, name), bel in zip(members, chunk):
+            cells[name].setdefault("attributes", {})["BEL"] = bel
+            assigned += 1
+
+        ys = [parse_site(b)[1] for b in chunk]
+        xs = sorted(set(parse_site(b)[0] for b in chunk))
+        if key[1] < 3 or key == keys[-1]:
+            print("  miner %d round %2d -> Y%d..Y%d (span %d) across cols %s"
+                  % (key[0], key[1], min(ys), max(ys), max(ys) - min(ys), xs))
+
+    print("assigned %d BEL attributes (Y-band allocation)" % assigned)
     if args.dry_run:
         print("(dry run)")
         return
