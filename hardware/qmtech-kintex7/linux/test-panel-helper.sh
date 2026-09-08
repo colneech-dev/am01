@@ -108,11 +108,11 @@ echo "-- set_pool accepts a valid request --"
 rm -f "$POOL"
 req set_pool "pool.example.com
 5103
-DTGwfAPbxQaKViGpoy8XfVguMPj5sGxTdS.Odo02
+DExampleAddressForTestsOnly1234567.Odo02
 x"
 run
 [ -f "$POOL" ]; ok $? "a valid pool is written"
-grep -q '^DAEMON_OPTS="pool.example.com 5103 DTGwfAPbxQaKViGpoy8XfVguMPj5sGxTdS.Odo02 x"$' "$POOL"
+grep -q '^DAEMON_OPTS="pool.example.com 5103 DExampleAddressForTestsOnly1234567.Odo02 x"$' "$POOL"
 ok $? "as DAEMON_OPTS -- the only key am01-miner-provision reads"
 [ ! -e "$REQ/set_pool" ]; ok $? "and the request file is consumed"
 

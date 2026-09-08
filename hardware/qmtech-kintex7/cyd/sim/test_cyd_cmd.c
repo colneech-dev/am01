@@ -51,11 +51,11 @@ int main(void)
     ok(k("CMD fan_boost 0", &c) == CYD_CMD_KIND_FAN_BOOST && c.fan_on == 0,
        "fan_boost 0");
 
-    ok(k("CMD set_pool 192.168.1.100 5103 DTGwfAPbxQaKViGpoy8XfVguMPj5sGxTdS.Odo02 x", &c)
+    ok(k("CMD set_pool 10.0.0.2 5103 DExampleAddressForTestsOnly1234567.Odo02 x", &c)
            == CYD_CMD_KIND_SET_POOL
-       && strcmp(c.host, "192.168.1.100") == 0
+       && strcmp(c.host, "10.0.0.2") == 0
        && c.port == 5103
-       && strcmp(c.worker, "DTGwfAPbxQaKViGpoy8XfVguMPj5sGxTdS.Odo02") == 0
+       && strcmp(c.worker, "DExampleAddressForTestsOnly1234567.Odo02") == 0
        && strcmp(c.pass, "x") == 0,
        "set_pool with a real wallet-style worker");
 

@@ -33,7 +33,7 @@ static void ok(int cond, const char *what)
 /* Captured from the board, byte for byte. */
 static const char REAL[] =
 "{\n"
-"  \"pool\": \"192.168.1.100:5103\",\n"
+"  \"pool\": \"10.0.0.2:5103\",\n"
 "  \"connected\": true,\n"
 "  \"core\": \"pipelined\",\n"
 "  \"job_id\": \"0001a101\",\n"
@@ -75,7 +75,7 @@ int main(void)
 
     ok(fabs(st.hashrate - 63132233.0) < 1.0, "hashrate 63132233");
     ok(st.connected,                          "connected true");
-    ok(strcmp(st.pool, "192.168.1.100:5103") == 0, "pool string");
+    ok(strcmp(st.pool, "10.0.0.2:5103") == 0, "pool string");
     ok(strcmp(st.job_id, "0001a101") == 0,    "job_id");
     ok(strcmp(st.backend, "gpio") == 0,       "backend");
     ok(strcmp(st.core, "pipelined") == 0,     "core");

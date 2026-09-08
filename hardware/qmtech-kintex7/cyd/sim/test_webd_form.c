@@ -187,7 +187,7 @@ int main(void)
     printf("\n-- value_safe --\n");
     {
         ok(value_safe("stratum.pool.com") == 1, "valid host name accepted");
-        ok(value_safe("192.168.1.100:3333") == 1, "valid ip:port accepted");
+        ok(value_safe("10.0.0.2:3333") == 1, "valid ip:port accepted");
         ok(value_safe("wallet_user-01@pool") == 1, "valid characters accepted");
 
         ok(value_safe("host;rm -rf /") == 0, "semicolon rejected");
