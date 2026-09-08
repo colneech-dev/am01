@@ -549,7 +549,7 @@ stiffen_walls     = true;
 rim_height_mm     = 12.0;   // band down from the top edge
 rim_out_mm        = 2.5;    // how far it stands proud
 gusset_leg_mm     = 10.0;   // 45-degree corner fillet, each leg
-rib_out_mm        = 3.0;    // rib depth
+rib_out_mm        = rim_out_mm;  // flush with the rims, so the outside is one plane
 rib_width_mm      = 3.0;
 rim_bot_height_mm = 8.0;    // bottom rim: must stay under the cutouts at 9.4
 rim_chamfer_mm    = 2.5;    // 45-degree flare, so nothing needs support
@@ -1657,6 +1657,29 @@ function rib_clear_top(px) =
     || abs(px - (board_origin[0] + kan28_x_mm))
        >= kan28_boss_d/2 + rib_width_mm/2 + rib_clear_mm;
 
+// Short walls. The left one is a list; the right one is PWR_SW4 plus the DC
+// jack and the antenna, which are separate modules -- the same blind spot that
+// let a rib land on the switch boss, so they are tested by name here rather
+// than assumed absent.
+function rib_clear_left(py) =
+    len([for (c = connector_positions_mm)
+         if (abs(py - board_y(c[1]))
+             < c[2]/2 + cutout_margin + rib_width_mm/2 + rib_clear_mm) 1]) == 0;
+
+function rib_clear_right(py) =
+    len([for (c = right_connector_positions_mm)
+         if (abs(py - board_y(c[1]))
+             < c[2]/2 + cutout_margin + rib_width_mm/2 + rib_clear_mm) 1]) == 0
+    && abs(py - board_y(dc_jack_y_mm))
+       >= dc_jack_hole_d/2 + rib_width_mm/2 + rib_clear_mm
+    && abs(py - board_y(antenna_hole_y_mm))
+       >= antenna_hole_d/2 + rib_width_mm/2 + rib_clear_mm;
+
+function rib_ys(which) =
+    [for (i = [1 : floor(outer_width / rib_pitch_mm)])
+        let (py = outer_width * i / (floor(outer_width / rib_pitch_mm) + 1))
+        if (which == 0 ? rib_clear_left(py) : rib_clear_right(py)) py];
+
 // Candidates on a nominal pitch, then filtered. Ribs are placed per wall, so a
 // window on one long wall does not cost a rib on the other.
 function rib_xs(clear_fn) =
@@ -1712,18 +1735,25 @@ module wall_stiffeners() {
                 polygon([[0, 0], [sx * gusset_leg_mm, 0], [0, sy * gusset_leg_mm]]);
     }
 
-    // ---- ribs, full span between the rims, placed around the windows ----
+    // ---- ribs: FLOOR TO TOP EDGE, all four walls, around the windows ----
+    //
+    // Full height on purpose. They used to stop at the rims and that put both
+    // ends where the rim projection is ZERO -- the top rim reaches full depth
+    // 2.5mm above zr, the bottom one has tapered away by zb -- so every rib
+    // floated between two feather edges and tied into neither. Running the
+    // whole height merges them into both rims and makes the wall a frame.
     for (px = rib_xs(0))
-        translate([px - rib_width_mm/2, -rib_out_mm, zb])
-            cube([rib_width_mm, rib_out_mm, zr - zb]);
+        translate([px - rib_width_mm/2, -rib_out_mm, 0])
+            cube([rib_width_mm, rib_out_mm, z1]);
     for (px = rib_xs(1))
-        translate([px - rib_width_mm/2, outer_width, zb])
-            cube([rib_width_mm, rib_out_mm, zr - zb]);
-
-    // Short walls: the DC jack and the antenna hole live here and are separate
-    // modules rather than list entries, so ribs are left off rather than
-    // guessed at. At 115mm these walls are the stiffer pair anyway, and they
-    // get both rims and all four gussets.
+        translate([px - rib_width_mm/2, outer_width, 0])
+            cube([rib_width_mm, rib_out_mm, z1]);
+    for (py = rib_ys(0))
+        translate([-rib_out_mm, py - rib_width_mm/2, 0])
+            cube([rib_out_mm, rib_width_mm, z1]);
+    for (py = rib_ys(1))
+        translate([outer_length, py - rib_width_mm/2, 0])
+            cube([rib_out_mm, rib_width_mm, z1]);
 }
 
 module base_tray() {

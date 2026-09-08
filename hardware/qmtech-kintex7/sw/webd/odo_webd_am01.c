@@ -409,37 +409,52 @@ static void handle_screen(int fd, const char *body)
 /* ------------------------------------------------------------------ */
 static void serve_config(int fd)
 {
-    char host[128]="", port[16]="", worker[160]="", pass[64]="";
-    char testnet[8]="0", host2[128]="", port2[16]="";
+    /* From status.json, NOT from a config file.
+     *
+     * This used to read CONF_PATH (/etc/odod.conf), which is the CycloneV
+     * BusyBox layout and has never existed on this board -- so the form was
+     * always blank. Repointing it at the real file, /etc/default/odo-miner,
+     * would fail just as quietly: that is mode 0600 root:root and this daemon
+     * runs as User=miner.
+     *
+     * status.json is better than either. It is what the miner is ACTUALLY
+     * connected to rather than what a file says it should be, it is already
+     * read here for /poll.json, and it needs no privilege.
+     *
+     * The password is not returned. It is not published, and it should not be
+     * -- echoing a credential into an unauthenticated endpoint to pre-fill a
+     * form is not a trade worth making. See the note on the field label.
+     */
+    char host[128]="", port[16]="", worker[160]="";
 
-    FILE *f = fopen(CONF_PATH, "r");
+    FILE *f = fopen(STATUS_PATH, "r");
     if (f) {
-        char line[256];
+        char line[512];
         while (fgets(line, sizeof(line), f)) {
-            line[strcspn(line, "\n")] = 0;
-            char *eq = strchr(line, '=');
-            if (!eq || line[0] == '#') continue;
-            *eq = 0;
-            const char *key = line, *val = eq + 1;
-            if      (strcmp(key, "ODOD_POOL_HOST")  == 0) snprintf(host,    sizeof(host),    "%s", val);
-            else if (strcmp(key, "ODOD_POOL_PORT")  == 0) snprintf(port,    sizeof(port),    "%s", val);
-            else if (strcmp(key, "ODOD_WORKER")     == 0) snprintf(worker,  sizeof(worker),  "%s", val);
-            else if (strcmp(key, "ODOD_PASSWORD")   == 0) snprintf(pass,    sizeof(pass),    "%s", val);
-            else if (strcmp(key, "ODO_TESTNET")     == 0) snprintf(testnet, sizeof(testnet), "%s", val);
-            else if (strcmp(key, "ODOD_POOL_HOST2") == 0) snprintf(host2,   sizeof(host2),   "%s", val);
-            else if (strcmp(key, "ODOD_POOL_PORT2") == 0) snprintf(port2,   sizeof(port2),   "%s", val);
+            char val[256];
+            /* "pool": "host:port" -- split at the LAST colon so an IPv6
+             * literal, or a host with a colon in it, still parses. */
+            if (sscanf(line, " \"pool\" : \"%255[^\"]\"", val) == 1) {
+                char *c = strrchr(val, ':');
+                if (c) {
+                    *c = 0;
+                    snprintf(port, sizeof(port), "%s", c + 1);
+                }
+                snprintf(host, sizeof(host), "%s", val);
+            } else if (sscanf(line, " \"worker\" : \"%255[^\"]\"", val) == 1) {
+                snprintf(worker, sizeof(worker), "%s", val);
+            }
         }
         fclose(f);
     }
 
-    /* All values were written through value_safe() so contain no '"' or '\' */
+    /* miner_pipe_am01.c writes these through json_str(), so they carry no
+     * unescaped quote or backslash. */
     char body[640];
     int n = snprintf(body, sizeof(body),
         "{\"host\":\"%s\",\"port\":\"%s\",\"worker\":\"%s\","
-        "\"pass\":\"%s\",\"testnet\":%s,\"host2\":\"%s\",\"port2\":\"%s\"}",
-        host, port, worker, pass,
-        testnet[0] == '1' ? "true" : "false",
-        host2, port2);
+        "\"pass\":\"\",\"testnet\":false,\"host2\":\"\",\"port2\":\"\"}",
+        host, port, worker);
     send_response(fd, "200 OK", "application/json", body, (size_t)n);
 }
 

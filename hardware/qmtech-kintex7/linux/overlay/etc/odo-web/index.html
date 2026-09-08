@@ -55,9 +55,9 @@ body{margin:0;background:#100F0B;color:#F2EFE6;font-family:system-ui,sans-serif;
   <div class='brand'>
     <div class='mark'><svg viewBox='0 0 100 100'><polygon points='96,50 73,89.83 27,89.83 4,50 27,10.17 73,10.17' fill='none' stroke='#F0B23C' stroke-width='5'/><polygon points='50,28 30.95,39 30.95,61 50,72 69.05,61 69.05,39' fill='#F0B23C'/></svg></div>
     <div>
-      <div class='eyebrow'>OdoCrypt FPGA miner · Cyclone V SoC</div>
+      <div class='eyebrow'>OdoCrypt FPGA miner · Kintex-7 XC7K325T + CM4</div>
       <h1 class='hero-title'>ODO <span style='color:#F0B23C;'>MINER</span></h1>
-      <div class='hero-copy'>Autonomous OdoCrypt FPGA miner running on a Cyclone V SoC. Monitor live hashrate and shapechange status, or configure pool and WiFi settings.</div>
+      <div class='hero-copy'>Autonomous OdoCrypt FPGA miner running on a QMTECH Kintex-7 XC7K325T with a Raspberry Pi CM4 host. Monitor live hashrate and shapechange status, or configure pool and WiFi settings.</div>
     </div>
   </div>
   <div class='tabs'><button class='tab active' id='tabMonitor' type='button' onclick='showTab("monitor")'>Monitor</button><button class='tab' id='tabSettings' type='button' onclick='showTab("settings")'>Settings</button></div>
@@ -90,7 +90,7 @@ body{margin:0;background:#100F0B;color:#F2EFE6;font-family:system-ui,sans-serif;
       <div class='form-group'><label class='form-label' for='c_host'>Host</label><input class='form-input' id='c_host' name='host' type='text'></div>
       <div class='form-group'><label class='form-label' for='c_port'>Port</label><input class='form-input' id='c_port' name='port' type='text'></div>
       <div class='form-group'><label class='form-label' for='c_worker'>Worker / payout address</label><input class='form-input' id='c_worker' name='worker' type='text'></div>
-      <div class='form-group'><label class='form-label' for='c_pass'>Password</label><input class='form-input' id='c_pass' name='pass' type='password'></div>
+      <div class='form-group'><label class='form-label' for='c_pass'>Password (leave blank only if you mean to clear it)</label><input class='form-input' id='c_pass' name='pass' type='password'></div>
       <div class='form-group' style='flex-direction:row;align-items:center;gap:10px;margin-top:4px;'><input type='checkbox' id='c_testnet' name='testnet' style='width:16px;height:16px;accent-color:#F0B23C;'><label class='form-label' for='c_testnet' style='margin:0;'>Testnet mode (epoch interval 86400 s)</label></div>
       <div style='font-size:11px;color:#7E7868;margin:16px 0 8px;font-family:IBM Plex Mono,monospace;letter-spacing:.12em;text-transform:uppercase;'>Backup pool (optional)</div>
       <div class='form-group'><label class='form-label' for='c_host2'>Host 2</label><input class='form-input' id='c_host2' name='host2' type='text'></div>
