@@ -1768,7 +1768,15 @@ module wall_stiffeners() {
     // and the left wall finally gets vertical stiffening where it is otherwise
     // a bare 2.4mm panel 23mm tall.
     zu0 = band_z_mm + band_height_mm;
-    zu1 = z1 - rim_height_mm;
+    // TO THE TOP EDGE, not to where the rim begins.
+    //
+    // This said z1 - rim_height_mm, which is where the top rim STARTS ITS
+    // FLARE -- its projection there is zero, so the ribs ended against a
+    // feather edge and tied into nothing. Identical to the mistake the
+    // full-length ribs already had, made a second time on the upper set. The
+    // rim only reaches full depth 2.5mm above that point, so anything meeting
+    // it below then is meeting nothing.
+    zu1 = z1;
     for (i = [1 : floor(outer_length / rib_pitch_mm)]) {
         px = outer_length * i / (floor(outer_length / rib_pitch_mm) + 1);
         translate([px - rib_width_mm/2, -rib_out_mm, zu0])
