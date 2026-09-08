@@ -26,6 +26,7 @@
 #include "odocrypt_state.h"
 #include "KeccakP-800-SnP.h"
 #include "miner_io_pipe.h"
+#include "share_recover.h"
 
 /* Declared in miner_io_gpio.h, which this file cannot include: the include
  * path resolves "miner_io_pipe.h" to the CycloneV header of the same name and
@@ -378,6 +379,22 @@ static double hash_to_difficulty(const uint8_t hash_le[32])
         return (double)0xFFFF0000U / h * 18446744073709551616.0;
     }
     return (double)0xFFFF0000U / h;
+}
+
+/* Adapter for share_recover_pick: does this nonce yield a share for the job
+ * in `ctx`? The digest is left in ctx->h, so the caller has it for
+ * account_share without recomputing. */
+struct pow_ctx {
+    const uint8_t *header;      /* 80 bytes */
+    const uint8_t *target;      /* 32 bytes */
+    uint8_t       *h;           /* 32 bytes, written */
+};
+
+static int pow_nonce_valid(uint32_t nonce, void *vctx)
+{
+    struct pow_ctx *c = vctx;
+    compute_pow(c->header, nonce, c->h);
+    return target_met(c->h, c->target);
 }
 
 /* Expected number of hashes represented by one share at this target:
@@ -877,48 +894,43 @@ int main(int argc, char **argv)
                     core_found[nonce >> 31]++;
                     uint8_t h[32];
                     /* `disp`, NOT `cur` -- see the job_t disp declaration. */
-                    compute_pow(disp.header, nonce, h);
-                    if (target_met(h, disp.share_target)) {
-                        if (stratum_submit_share(&st, &disp, nonce) == 0) {
+                    /* Which nonce actually works -- the reported one, or
+                     * its predecessor? See share_recover.h; the logic is out
+                     * of line so it can be unit-tested, and this is the same
+                     * function test_share_recover exercises rather than a
+                     * copy of it. */
+                    struct pow_ctx pc = { disp.header, disp.share_target, h };
+                    uint32_t use  = nonce;
+                    int      pick = share_recover_pick(nonce, &use,
+                                                       pow_nonce_valid, &pc);
+                    if (pick != SHARE_PICK_NONE) {
+                        int off1 = (pick == SHARE_PICK_MINUS_ONE);
+                        if (stratum_submit_share(&st, &disp, use) == 0) {
                             shares++;
                             core_ok[nonce >> 31]++;
+                            if (off1)
+                                recovered[nonce >> 31]++;
                             stale_run = 0;
                             g_st.shares     = shares;
                             g_st.last_share = time(NULL);
                             g_st.work_acc  += share_work(disp.share_target);
-                            double d = account_share(h, &disp, nonce, "");
-                            printf("[pipe] SHARE job=%s nonce=0x%08" PRIx32
-                                   " diff=%.6g (found=%" PRIu64 " shares=%" PRIu64 ")\n",
-                                   cur.job_id, nonce, d, found, shares);
-                        } else {
-                            fprintf(stderr, "[pipe] stratum_submit_share failed\n");
-                        }
-                    } else if (compute_pow(disp.header, nonce - 1u, h),
-                               target_met(h, disp.share_target)) {
-                        /* OFF BY ONE, not stale. The digest at nonce-1 meets
-                         * the target, so the core hashed correctly and the
-                         * found path mislabelled the result. Submit the nonce
-                         * that actually works. See the note at `recovered`. */
-                        if (stratum_submit_share(&st, &disp, nonce - 1u) == 0) {
-                            shares++;
-                            core_ok[nonce >> 31]++;
-                            recovered[nonce >> 31]++;
-                            stale_run = 0;
-                            g_st.shares     = shares;
-                            g_st.last_share = time(NULL);
-                            g_st.work_acc  += share_work(disp.share_target);
-                            double d = account_share(h, &disp, nonce - 1u,
-                                                     " (off-by-one)");
-                            /* Also one in 64: this fires on 40% of finds
-                             * when the fault is active, and the RECOVERED
-                             * counters already carry the rate. */
-                            if ((shares & 63u) == 0u)
+                            double d = account_share(h, &disp, use,
+                                                     off1 ? " (off-by-one)" : "");
+                            /* The off-by-one line is rate-limited: it fires on
+                             * ~40% of finds while the fault is active, and the
+                             * RECOVERED counters already carry the rate. */
+                            if (!off1)
+                                printf("[pipe] SHARE job=%s nonce=0x%08" PRIx32
+                                       " diff=%.6g (found=%" PRIu64 " shares=%" PRIu64 ")\n",
+                                       cur.job_id, use, d, found, shares);
+                            else if ((shares & 63u) == 0u)
                                 printf("[pipe] SHARE (off-by-one) job=%s "
                                        "nonce=0x%08" PRIx32 " diff=%.6g\n",
-                                       cur.job_id, nonce - 1u, d);
+                                       cur.job_id, use, d);
                         } else {
                             fprintf(stderr, "[pipe] stratum_submit_share"
-                                            " failed (off-by-one)\n");
+                                            " failed%s\n",
+                                    off1 ? " (off-by-one)" : "");
                         }
                     } else {
                         /* A REAL stale: neither this nonce nor its predecessor

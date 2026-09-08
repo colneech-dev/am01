@@ -10,11 +10,13 @@ F        = ../firmware/include
 S        = ../firmware/src
 CFLAGS  ?= -std=c11 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -Wall -Wextra \
            -Wno-unused-parameter -O1 -g
-CPPFLAGS = -I$(H) -I$(F) -I.
+CPPFLAGS = -I$(H) -I$(F) -I. -I$(SW)
+SW       = ../../sw
 
 TESTS = test_cyd_cmd test_cyd_md5 test_cyd_ota_send \
         test_cyd_status_parse test_cyd_fmt test_cyd_ui \
-        test_webd_form test_pow_math test_cyd_wifi_flow
+        test_webd_form test_pow_math test_cyd_wifi_flow \
+        test_share_recover test_reset_watch
 
 .PHONY: all check clean
 all: $(TESTS)
@@ -30,6 +32,11 @@ check: $(TESTS)
 	  if ./$$t >/dev/null 2>&1; then echo "PASS $$t"; \
 	  else echo "FAIL $$t"; ./$$t 2>&1 | tail -20; fail=1; fi; \
 	done; exit $$fail
+
+# Miner-side logic, kept here because test_pow_math already is: this is where
+# host-side unit tests live, whatever part of the tree they cover.
+test_share_recover:    test_share_recover.c    $(SW)/share_recover.c
+test_reset_watch:      test_reset_watch.c      $(SW)/reset_watch.c
 
 test_cyd_cmd:          test_cyd_cmd.c          $(H)/cyd_cmd.c
 test_cyd_md5:          test_cyd_md5.c          $(H)/cyd_md5.c

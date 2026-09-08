@@ -10,6 +10,7 @@
 
 #include "miner_io_pipe.h"
 #include "am01_gpio_bus.h"
+#include "reset_watch.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -144,26 +145,23 @@ uint32_t miner_io_pipe_seed(void)
 
 int miner_io_pipe_reset_seen(void)
 {
-    static int     have_prev = 0;
-    static uint8_t prev      = 0;
-    uint8_t now;
+    /* The decision lives in reset_watch.c so it can be unit-tested: the first
+     * observation must not fire, a failed read must not fire, and the counter
+     * saturates rather than wrapping. None of those can be exercised through a
+     * mining loop, and getting any of them wrong makes this a fault of its own
+     * -- a spurious "reset" redispatches the job and reopens the settle
+     * window. test_reset_watch covers this same function, not a copy. */
+    static struct reset_watch watch = RESET_WATCH_INIT;
 
-    if (!g_bus || am01_bus_read_reset_count(g_bus, &now) != 0)
+    uint8_t now = 0;
+    int read_ok = (g_bus && am01_bus_read_reset_count(g_bus, &now) == 0);
+    uint8_t was = watch.prev;
+
+    if (!reset_watch_step(&watch, read_ok, now))
         return 0;
 
-    if (!have_prev) {                 /* first call establishes the baseline */
-        have_prev = 1;
-        prev      = now;
-        return 0;
-    }
-    if (now == prev)
-        return 0;
-
-    /* Saturated at 15, so once it sticks there further resets are invisible.
-     * Report this one and rebaseline either way. */
     fprintf(stderr, "[gpio] FPGA reset detected (count %u -> %u); resyncing\n",
-            prev, now);
-    prev = now;
+            was, now);
 
     if (am01_bus_write_ctrl(g_bus, 0x0001) < 0)   /* CTRL[0] = OP_SOFT_RESET */
         fprintf(stderr, "[gpio] soft reset after FPGA reset FAILED\n");

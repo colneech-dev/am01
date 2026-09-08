@@ -114,11 +114,13 @@ SOURCES_STRATUM := \
 SOURCES_DAEMON := \
 	miner_pipe_am01.c \
 	thermal_am01.c \
+	share_recover.c \
 	$(CYD_HOST)/cyd_panel.c \
 	$(CYD_HOST)/cyd_cmd.c \
 	$(CYD_HOST)/cyd_ota_send.c \
 	$(CYD_HOST)/cyd_md5.c \
 	miner_io_gpio.c \
+	reset_watch.c \
 	$(GPIO_BUS)/am01_gpio_bus.c \
 
 OBJECTS_DAEMON := $(call objects,$(SOURCES_DAEMON) $(SOURCES_CRYPTO) \
@@ -213,6 +215,7 @@ OBJECTS_REG := $(call objects,$(SOURCES_REG))
 SOURCES_SMOKE := \
 	$(GPIO_BUS)/am01_smoke.c \
 	miner_io_gpio.c \
+	reset_watch.c \
 	$(GPIO_BUS)/am01_gpio_bus.c \
 
 OBJECTS_SMOKE := $(call objects,$(SOURCES_SMOKE) $(SOURCES_CRYPTO) \
