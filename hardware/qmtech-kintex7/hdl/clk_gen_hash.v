@@ -207,8 +207,20 @@
 
 module clk_gen_hash #(
     parameter CLKIN_PERIOD_NS = 20.000, // 50MHz input
-    parameter CLKFBOUT_MULT   = 18,     // VCO = 50MHz * 18 = 900MHz -- 225MHz, the PROVEN value; 19 does not run
-    parameter CLKOUT_DIVIDE_2X = 2      // clk_2x = 900/2 = 450MHz, clk_h = 900/4 = 225MHz
+    // 200MHz. MEASURED 2026-09-08 with per-core accounting, same board, same
+    // day: 225MHz passes 37-45% of its finds, 200MHz passes 100.0% (2175 found,
+    // 2175 submitted, 0 rejected). 225 is broken TWICE -- the nonce-capture
+    // race that VERSION 0x020A fixed, and, underneath it, genuinely wrong
+    // digests: 55% of finds there have no valid nonce anywhere in -4..+4.
+    //
+    // This is not a compromise. 2 x 200 / 4 = 100 MH/s at 100% valid beats
+    // 2 x 225 / 4 = 112.5 at 45%, and the part runs 20 C cooler.
+    //
+    // VCO 1200MHz is the -1 grade's ceiling and the QUIETEST point available:
+    // MMCM output jitter scales with VCO period. MULT 18 gave VCO 900 -- a
+    // shorter period and a noisier clock at once.
+    parameter CLKFBOUT_MULT   = 24,     // VCO = 50MHz * 24 = 1200MHz
+    parameter CLKOUT_DIVIDE_2X = 3      // clk_2x = 400MHz, clk_h = 1200/6 = 200MHz
 )
 (
     input  wire clk_in,     // from sys_clk_50m (via IBUF upstream)
