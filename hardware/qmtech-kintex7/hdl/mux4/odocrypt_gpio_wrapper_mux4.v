@@ -204,7 +204,7 @@ module odocrypt_gpio_wrapper_mux4 #(
      * wires and can be reflashed from the miner, and carrying two panels
      * cost a shared SPI engine, a touch sequencer and nine JP5 pins.
      * Free for reuse; see docs/JP5-WIRING.md for the pins. */
-    localparam [4:0] ADDR_FIFO_STAT   = 5'h18;  // read: {lost[7:0], 4'h0, depth[3:0]}
+    localparam [4:0] ADDR_FIFO_STAT   = 5'h18;  // r: {lost[7:0], rst[3:0], depth[3:0]}
 
     // CYD front panel, on its own JP5 pins (15-18). Always present, and
     // harmless with no CYD attached: an unread RX FIFO simply stays empty.
@@ -294,18 +294,67 @@ module odocrypt_gpio_wrapper_mux4 #(
     // permanently -- surviving restarts, recoverable only by reconfiguring
     // the FPGA. It cost an hour of mining on 2026-09-01. OP_SOFT_RESET now
     // reaches it and the daemon issues one at startup.
-    /* 0x0207, not 0x0203. This wrapper's register map is byte-identical to
-     * the shipping one -- display block removed (0x0205), ADDR_UART_RXCNT
-     * present (0x0204) -- and it inherited the clock bump (0x0206) and the
-     * fan/rx_err/reset fixes (0x0207) with it. It reported 0x0203 through all
-     * of that, so if this experiment were ever flashed, the one register that
-     * answers "which bitstream is running" would lie -- the exact problem that
-     * cost a ten-minute hashrate measurement on 2026-09-05 when the 200MHz and
-     * 225MHz builds could not be told apart.
+    /* BUMP THIS IN THE SAME COMMIT AS ANY REGISTER-MAP OR BEHAVIOUR CHANGE.
      *
-     * VERSION describes the REGISTER INTERFACE, which is the same here; the
-     * 4-vs-2 instance count is not visible through it and does not need to be. */
-    localparam [15:0] VERSION = 16'h0207;
+     * It is the only thing a host can ask a bitstream about itself, and it is
+     * worth nothing if it lags. It DID lag: the 256-byte RX FIFO and the
+     * rx_count register at 0x1C went in without a bump, so one bitstream
+     * carries 0x0204 behaviour and reports 0x0203. Harmless in that instance
+     * -- UART_STAT is identical either way and 0x1C reads 0 where it does not
+     * exist -- but the next omission will not be, and the cost of a bump is
+     * one line.
+     *
+     * 0x0208: IDENTICAL RTL to 0x0207 except this number and the clock --
+     * back to MULT 18 / 225MHz. It exists so the two can be told apart on a
+     * board, because 0x0207 was flashed at 237.5MHz and DID NOT HASH: the
+     * core ran and flooded the found-FIFO with wrong digests (STATUS 0x0003,
+     * FIFO_STAT 0xff08, lost saturated at 255, zero accepted shares).
+     *
+     * That failure had TWO possible causes and this build separates them. The
+     * clock went 225 -> 237.5 at the same time as the display removal and the
+     * 0x0207 reset/rx_err/fan changes reached hardware for the first time. If
+     * 0x0208 mines at 225, the RTL is exonerated and 237.5 is simply past
+     * what this silicon does. If it does not, the clock was never the
+     * problem. Reusing 0x0207 here would have made the answer unreadable from
+     * the board -- which is the whole reason this rule exists.
+     * 0x0207: the fan reaches 100% at 78C rather than 85C (the part's Tj
+     * limit); UART_STAT's rx_err saturates instead of wrapping; the two UART
+     * strobes and esp_ctrl_r are reset.
+     * 0x0206: clk_h 225.00 -> 237.50MHz (clk_gen_hash MULT 18 -> 19). A
+     * clock change IS a behaviour change and gets a bump, and this one
+     * earns it twice over -- see below.
+     * 0x0205: the ILI9341/XPT2046 block is gone and 0x10-0x17 are free.
+     * 0x0204 was the 256-byte RX FIFO and the exact rx_count at 0x1C.
+     *
+     * THE COST OF NOT BUMPING, paid on 2026-09-05. Flashing the 225MHz
+     * build over the 200MHz one, there was NO WAY to confirm from the
+     * board which was running: both reported 0x0203, so the one register
+     * that exists to answer that question could not. Verification fell
+     * back to measuring the hashrate for ten minutes. That is the whole
+     * argument for the rule above, and it is why the clock is in here.
+     *
+     * NOTE: one interim bitstream carries the 0x0204 changes but still
+     * REPORTS 0203 -- it was built before this was bumped. Nothing
+     * depends on telling them apart: UART_STAT is identical in all
+     * three, and 0x1C simply reads 0 on a bitstream that lacks it. */
+    // 0x020B: THE CONSTRAINTS CHANGED, WHICH MAKES A DIFFERENT BITSTREAM.
+    //
+    // The rule above is written about the register map, and taken literally an
+    // XDC change does not touch it. But the PURPOSE of this register is to
+    // answer "which bitstream is on this board?", and after the CDC constraint
+    // change it could not: the pre- and post-CDC builds of 2026-09-09 both
+    // report 0x020A and are told apart only by md5. That is the failure the
+    // note below records being paid for on 2026-09-05, repeated four days
+    // later.
+    //
+    // So the rule is wider than it read: bump for anything that produces a
+    // bitstream someone might need to distinguish -- routing and constraints
+    // included, not just registers.
+    //
+    // The flashed CDC build still reports 0x020A. It was built before this
+    // bump and is identified by md5 b6f62c2d435d17c979983be03f89312d; 0x020B
+    // first exists in the epoch rebuild.
+    localparam [15:0] VERSION = 16'h020B;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;
@@ -344,6 +393,16 @@ module odocrypt_gpio_wrapper_mux4 #(
     (* ASYNC_REG = "TRUE" *) reg [15:0] data_in_sync0;
     reg [15:0] data_in_sync1;
 
+    // CAVEAT, 2026-09-06: this paragraph is not true of the whole file. The
+    // XADC DRP poller and the fan controller below are both
+    // `always @(posedge bus_clk or negedge bus_rst_n)` and so infer FDCE/FDPE
+    // -- about 60 async-reset flops on bus_clk, in the same half-slices as the
+    // FDREs this comment is describing. Vivado is unaffected and that is the
+    // flow in use, so the RTL is left alone rather than rewritten immediately
+    // before a build; but the invariant below is an aspiration for those two
+    // blocks, not a description of them, and an openXC7 build could still hit
+    // the control-set contention it describes.
+    //
     // Synchronous reset deliberately, not async: bus_rst_n is already
     // deasserted synchronously (see am01_qmtech_top.v's rst_stretch
     // counter), so nothing here needs true async behaviour. Kept sync
@@ -616,6 +675,22 @@ module odocrypt_gpio_wrapper_mux4 #(
     localparam [15:0] TEMP_55C = 16'hA6E0;
     localparam [15:0] TEMP_70C = 16'hAEB0;
     localparam [15:0] TEMP_85C = 16'hB680;
+    /* 100% AT 78C, NOT 85C.
+     *
+     * 85C is the commercial Tj limit for this part, so the old curve only
+     * reached full speed once the die was already AT its rating -- the one
+     * point at which more airflow is no longer optional. 78C leaves the fan
+     * quiet through normal load (the board sits at 74C mining at 225MHz) and
+     * still gives 7C of margin to act in.
+     *
+     * Code from the XADC transfer function T = code*503.975/4096 - 273.15,
+     * checked against the constants above rather than assumed: 0x9F1 = 2545
+     * gives 39.99C and 0xAEB = 2795 gives 70.75C, so the encoding is
+     * confirmed. 78C -> (78+273.15)*4096/503.975 = 2854 = 0xB26.
+     *
+     * TEMP_85C is kept: it still documents where the part's limit actually
+     * is, and the >= TEMP_78C arm covers it. */
+    localparam [15:0] TEMP_78C = 16'hB260;
 
     reg  [7:0]  fan_duty;        // 0-255, what we are actually driving
     reg  [7:0]  fan_floor;       // host-settable minimum, 0 = pure auto
@@ -627,7 +702,7 @@ module odocrypt_gpio_wrapper_mux4 #(
 
     wire [7:0] fan_auto =
           (xadc_temp_bus == 16'h0000) ? 8'd255 :   // unknown -> full
-          (xadc_temp_bus >= TEMP_85C) ? 8'd255 :
+          (xadc_temp_bus >= TEMP_78C) ? 8'd255 :
           (xadc_temp_bus >= TEMP_70C) ? 8'd191 :
           (xadc_temp_bus >= TEMP_55C) ? 8'd140 :
           (xadc_temp_bus >= TEMP_40C) ? 8'd102 :
@@ -718,6 +793,27 @@ module odocrypt_gpio_wrapper_mux4 #(
             header_lo_stage <= 16'h0;
             target_lo_stage <= 16'h0;
             nonce_valid_clear_pulse <= 1'b0;
+            /* THE UART STROBES BELONG HERE TOO.
+             *
+             * Both are one-shots, defaulted to 0 in the else branch and set
+             * for a single cycle by the S_WRITE/S_READ arms -- so a reset
+             * landing on the cycle one of them is high leaves it high for the
+             * whole reset window. uart_bridge's ports are themselves
+             * reset-guarded, so nothing moves DURING reset; the damage is on
+             * the first cycle after rst_n returns, when tx_wr && !tx_full is
+             * still true and one stale wdata_latched byte is pushed to the
+             * panel out of protocol. rx_rd does the mirror image and eats a
+             * received byte. Same class of miss as fan_floor's ownership
+             * note below -- these two simply never got an owner. */
+            uart_tx_wr      <= 1'b0;
+            uart_rx_rd      <= 1'b0;
+            /* And the ESP control bits, which have an initial value but were
+             * not cleared here. If the host had written 2'b00 to hold the
+             * panel in reset -- which is exactly what the OTA sequence does --
+             * a bus reset left it held, with no software running on the panel
+             * to release itself. 2'b11 is EN=1, IO0=1 -- run normally, and
+             * the same value the declaration initialises it to. */
+            esp_ctrl_r      <= 2'b11;
             // Host-settable fan floor. Owned here because this block writes it
             // (S_WRITE/ADDR_FAN); the fan controller only reads it.
             //
@@ -913,14 +1009,28 @@ module odocrypt_gpio_wrapper_mux4 #(
                         // along one at a time. rx_err drops to 4 bits and
                         // still saturates -- it is a "framing errors are
                         // happening" flag, and 15 says that as well as 255.
+                        //
+                        // SATURATED ON THE WAY OUT, which the previous version
+                        // did not do. uart_bridge.v counts to 8'hFF and only
+                        // the low nibble was published, so the field WRAPPED:
+                        // exactly 16 framing errors read back as 0 --
+                        // indistinguishable from a clean link, and 16 errors
+                        // during an OTA is an ordinary number. The corrupted
+                        // transfer then gets blamed on the panel firmware.
+                        // Any error in the high nibble now pins it at 15.
                         ADDR_UART_STAT: rdata_reg <=
-                            {uart_rx_err[3:0], uart_tx_cnt,
+                            {(|uart_rx_err[7:4]) ? 4'hF : uart_rx_err[3:0],
+                             uart_tx_cnt,
                              (uart_rx_cnt > 16'd31) ? 5'd31 : uart_rx_cnt[4:0],
                              uart_tx_full, uart_rx_empty};
                         /* The WHOLE count, exact, in its own register. */
                         ADDR_UART_RXCNT: rdata_reg <= uart_rx_cnt;
+                        /* The middle nibble was 4'h0 through 0x0209; it
+                         * now carries a saturating count of bus resets, so a
+                         * spontaneous one leaves evidence. Hosts that mask it
+                         * off are unaffected. */
                         ADDR_FIFO_STAT: rdata_reg <=
-                            {lost_sync2_bus, 4'h0, fifocnt_sync2_bus};
+                            {lost_sync2_bus, rst_events_bus, fifocnt_sync2_bus};
                         default: rdata_reg <= 16'h0;
                     endcase
                     gpio_data_oe <= 1'b1;
@@ -999,7 +1109,7 @@ module odocrypt_gpio_wrapper_mux4 #(
     // One-cycle resync pulse for found_path, from OP_SOFT_RESET.
     reg found_soft_reset_h = 1'b0;
 
-    reg [4:0]  header_word_cnt_h; // 0..18, 19 words total
+    reg [4:0]  header_word_cnt_h = 5'h0; // 0..18, 19 words total
     // THREE bits, not four. MEASURED ON HARDWARE 2026-08-30.
     //
     // This was reg [3:0] while being compared against 7, so it wrapped at 16
@@ -1023,7 +1133,7 @@ module odocrypt_gpio_wrapper_mux4 #(
     // Proven by working around it before fixing it: dispatching twice covers
     // both parities, and with that am01_smoke returned 6 nonces out of 6 valid
     // against a 1-in-256 target. Six chance passes would be 1 in 2.8e14.
-    reg [2:0]  target_word_cnt_h; // 0..7, wraps at 8 -- see above
+    reg [2:0]  target_word_cnt_h = 3'h0; // 0..7, wraps at 8 -- see above
 
     // COMMIT, not ARM. v2.0 replaced the AtomMiner core (miner.v, halts on
     // every find and must be re-armed) with the free-running miner_pipelined.
@@ -1040,6 +1150,30 @@ module odocrypt_gpio_wrapper_mux4 #(
     reg        commit_arm_h   = 1'b0;
     reg        commit_pulse_h = 1'b0;
 
+    // ---------------------------------------------------------------
+    // bus_rst_n, brought into clk_h.
+    //
+    // Everything else in this domain was cleared ONLY by OP_SOFT_RESET, and
+    // the daemon issues that once at miner_io_pipe_init and never again. So a
+    // reset landing mid-dispatch -- SW2, or a momentary MMCM unlock -- left
+    // header_word_cnt_h/target_word_cnt_h misaligned for the life of the
+    // process: every later job would commit on the wrong target word, snapshot
+    // a half-loaded header/target, and the cores would hash a block the host
+    // never sent. Found nonces then fail revalidation on the host and are
+    // counted stale, indefinitely, across job changes and reconnects.
+    //
+    // Two flops are enough: this is a level, sampled every cycle, and a cycle
+    // of extra skew on either edge is harmless. The ASYNC_REG attribute asks
+    // the placer to keep the pair together (Vivado only -- see the XDC note
+    // about nextpnr ignoring it).
+    (* ASYNC_REG = "TRUE" *) reg rst_n_sync1_h = 1'b0;
+    reg rst_n_sync2_h = 1'b0;
+
+    always @(posedge clk_h) begin
+        rst_n_sync1_h <= bus_rst_n;
+        rst_n_sync2_h <= rst_n_sync1_h;
+    end
+
     always @(posedge clk_h) begin
         get_block_pulse_h  <= 1'b0;
         get_target_pulse_h <= 1'b0;
@@ -1048,7 +1182,15 @@ module odocrypt_gpio_wrapper_mux4 #(
         commit_arm_h       <= 1'b0;
         commit_pulse_h     <= commit_arm_h;
 
-        if (req_pulse_h) begin
+        // Held at zero for the whole of reset, so the first dispatch after
+        // release starts from word 0 whatever was in flight when it asserted.
+        // Deliberately NOT gating req_pulse_h: the toggle synchroniser is
+        // three deep and self-correcting, and a request that arrives during
+        // reset has nothing valid to act on anyway.
+        if (!rst_n_sync2_h) begin
+            header_word_cnt_h <= 5'h0;
+            target_word_cnt_h <= 3'h0;
+        end else if (req_pulse_h) begin
             data_from_host_h <= req_data_bus;
             case (req_op_bus)
                 OP_HEADER_WORD: begin
@@ -1226,12 +1368,18 @@ module odocrypt_gpio_wrapper_mux4 #(
 
     found_path #(
         .NUM_MINERS   (NUM_MINERS),
+        .ALLOW_LOSSY_MULTI_MINER(1),   // EXPERIMENT -- never on a mining build
         .SETTLE_CYCLES(SETTLE_CYCLES_P),
         .FIFO_AW      (3)
     ) found_path_inst (
         .clk          (clk_h),
         .commit       (commit_pulse_h),
-        .soft_reset   (found_soft_reset_h),
+        // OR'd with the synchronised bus reset. `busy` in found_path is
+        // cleared only by soft_reset or by the host's ack, so a reset while a
+        // nonce was outstanding used to be a coin flip: if no ack edge
+        // happened to be produced, busy latched and the found path never
+        // reported another nonce for the life of the configuration.
+        .soft_reset   (found_soft_reset_h | ~rst_n_sync2_h),
         .found_in     (found_arr),
         .nonce_in_flat(nonce_flat_h),
         .ack_toggle   (nonce_ack_toggle_bus),
@@ -1263,7 +1411,52 @@ module odocrypt_gpio_wrapper_mux4 #(
     (* ASYNC_REG = "TRUE" *) reg [3:0] fifocnt_sync1_bus;
     reg [3:0] fifocnt_sync2_bus;
 
-    wire nonce_new_pulse_bus = nonce_sync2_bus ^ nonce_sync3_bus;
+    // ---------------------------------------------------------------
+    // Reset visibility.
+    //
+    // bus_rst_n now reaches found_path (VERSION 0x0209), which discards queued
+    // finds and clears `lost` -- correct for a host-issued OP_SOFT_RESET, which
+    // the host knows about, and silent for a spontaneous reset from SW2 or an
+    // MMCM blip, which it does not. Count the events in ADDR_FIFO_STAT's spare
+    // nibble so an unexplained gap in the find stream has evidence attached.
+    //
+    // NOT cleared by reset, on purpose: a counter a reset clears cannot count
+    // resets. Saturating at 15 for the same reason `lost` saturates -- a
+    // counter that wraps reads as "nothing happened" once per wrap.
+    reg [3:0] rst_events_bus = 4'h0;
+    reg       rst_seen_bus   = 1'b0;
+
+    always @(posedge bus_clk) begin
+        if (!bus_rst_n) begin
+            rst_seen_bus <= 1'b1;
+        end else if (rst_seen_bus) begin
+            rst_seen_bus <= 1'b0;
+            if (rst_events_bus != 4'hF)
+                rst_events_bus <= rst_events_bus + 1'b1;
+        end
+    end
+
+    // Edge detection is held off for three bus_clk cycles after reset release.
+    //
+    // found_path deliberately does NOT reset nonce_toggle (found_path.v:298),
+    // while the chain below IS reset to zero. If nonce_toggle_h were 1 at
+    // release the chain would refill 0 -> 1 -> 1 and this XOR would fire on a
+    // transition that never happened, handing the host nonce_latch -- which
+    // soft_reset has just cleared to zero -- as a valid find. Same mistake the
+    // req_toggle_bus note at the top of this file exists to prevent, in the
+    // other direction.
+    //
+    // Nothing is lost by waiting: a real find stays in found_path's latch
+    // behind `busy` until the host acks it.
+    reg [1:0] nonce_warm_bus = 2'd0;
+
+    always @(posedge bus_clk) begin
+        if (!bus_rst_n)                 nonce_warm_bus <= 2'd0;
+        else if (nonce_warm_bus != 2'd3) nonce_warm_bus <= nonce_warm_bus + 1'b1;
+    end
+
+    wire nonce_new_pulse_bus = (nonce_sync2_bus ^ nonce_sync3_bus)
+                               & (nonce_warm_bus == 2'd3);
 
     // Synchronous reset deliberately -- see the sync-vs-async note above
     // wr_sync/rd_sync's always block; same reasoning applies here.
@@ -1306,7 +1499,7 @@ module odocrypt_gpio_wrapper_mux4 #(
                 // Tell clk_h the latch is free.
                 //
                 // GATED ON nonce_valid_reg, and that is load-bearing.
-                // nonce_valid_clear_pulse is NOT a one-cycle pulse despite the
+                // nonce_valid_clear_pulse IS a one-cycle pulse as of 0x0201. It was not, and the
                 // name: S_READ persists until the CM4 releases RD_N, and the
                 // ADDR_NONCE_HI case re-asserts it on every cycle in between --
                 // hundreds of bus_clk cycles over a bit-banged GPIO bus. It was

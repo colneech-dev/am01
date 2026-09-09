@@ -77,6 +77,16 @@ derive('odocrypt_gpio_wrapper.v', 'odocrypt_gpio_wrapper_mux4.v', [
      '            miner_pipelined #(',
      '        for (gi = 0; gi < NUM_MINERS; gi = gi + 1) begin : g_miner\n'
      '            miner_pipelined_mux4 #(', 'miner module'),
+    # found_path refuses NUM_MINERS > 2 by default, because with four cores a
+    # cycle where three strobe together discards the third nonce. This build
+    # exists to produce a clk_2x WNS figure -- muxed hashrate is exactly
+    # clk_2x / 2 -- and a lost nonce does not move a timing number, so the
+    # experiment opts in explicitly. It goes HERE rather than in the generated
+    # file, which the last attempt proved: a hand edit there is silently
+    # removed the next time this runs.
+    ('        .SETTLE_CYCLES(SETTLE_CYCLES_P),',
+     '        .ALLOW_LOSSY_MULTI_MINER(1),   // EXPERIMENT -- never on a mining build\n'
+     '        .SETTLE_CYCLES(SETTLE_CYCLES_P),', 'found_path opt-in'),
 
     ('            ) miner_inst (\n'
      '                .clk   (clk_h),',
@@ -88,6 +98,7 @@ derive('odocrypt_gpio_wrapper.v', 'odocrypt_gpio_wrapper_mux4.v', [
     ('module odocrypt_gpio_wrapper_mux4', 'renamed module'),
     ('NUM_MINERS = 4', 'four instances'),
     ('miner_pipelined_mux4', 'muxed miner'),
+    ('ALLOW_LOSSY_MULTI_MINER', 'found_path experiment opt-in'),
 ])
 
 # The phase register, next to the miner bank.

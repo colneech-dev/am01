@@ -113,11 +113,19 @@ module miner_pipelined_mux4(clk, clk2x, phase, header, target, nonce, found);
         found <= 1'b0;
         if (has_res)
         begin
-            if (res)
-            begin
-                nonce <= nonce_out;
-                found <= 1'b1;
-            end
+            // SAME FIX AS miner_pipelined.v, 2026-09-08. `nonce` shares
+            // nonce_out's clock enable instead of sitting inside `if (res)`,
+            // where its enable was (has_res & res) -- a LUT2 -- against
+            // nonce_out's has_res alone. A missed setup window on the combined
+            // term let nonce_out increment while `nonce` loaded a cycle later,
+            // capturing the ALREADY-INCREMENTED value: a nonce reported
+            // exactly one too high. Measured at ~36% of finds at 225MHz.
+            //
+            // This file is hand-maintained rather than generated, so the fix
+            // did not arrive here on its own. Anything changed in
+            // miner_pipelined.v has to be mirrored by hand.
+            nonce     <= nonce_out;
+            found     <= res;
             nonce_out <= nonce_out + 1;
         end
     end

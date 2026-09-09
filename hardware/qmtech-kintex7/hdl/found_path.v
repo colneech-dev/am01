@@ -27,6 +27,8 @@
 
 module found_path #(
     parameter integer NUM_MINERS    = 2,
+    // EXPERIMENT ONLY -- see the guard below. Defaults to refusing.
+    parameter integer ALLOW_LOSSY_MULTI_MINER = 0,
     parameter integer SETTLE_CYCLES = 4096,
     parameter integer FIFO_AW       = 3     // 8-deep
 ) (
@@ -129,8 +131,22 @@ module found_path #(
     // module that does not exist is the portable way to stop a build with a
     // name that says why -- $fatal in an initial block would fire only in
     // simulation, not synthesis.
+    // ALLOW_LOSSY_MULTI_MINER is an EXPERIMENT ESCAPE HATCH and defaults to
+    // refusing. Only hdl/mux4 sets it, and only because what that build exists
+    // to produce is a clk_2x WNS number, not shares: per
+    // hdl/odocrypt/IMPLEMENTATION-REVIEW.md the muxed hashrate is exactly
+    // clk_2x / 2, so one timing figure decides whether the transform is worth
+    // anything at all. A discarded third nonce does not move that figure, and
+    // the bitstream is not going near a pool.
+    //
+    // DO NOT SET THIS ON ANYTHING ANYONE MIGHT MINE ON. The loss is real: with
+    // four cores in lockstep, a cycle where three strobe together discards the
+    // third nonce. It is counted in `lost` rather than dropped silently, so it
+    // is at least visible -- but at a 1-in-256 target that is a real share
+    // thrown away, and the fix is to widen the scan and the stash above, not
+    // to set this.
     generate
-        if (NUM_MINERS > 2) begin : g_too_many_miners
+        if (NUM_MINERS > 2 && !ALLOW_LOSSY_MULTI_MINER) begin : g_too_many_miners
             FOUND_PATH_SUPPORTS_AT_MOST_2_MINERS_SEE_COMMENT bad();
         end
     endgenerate
