@@ -157,5 +157,77 @@ body += ('// EXTRACTED from hdl/odocrypt/miner.v by make_mux4_variants.py.\n'
          '// muxed core has seven. Nothing here is modified.\n\n')
 body += '\n'.join(src[head_end:end + 1]) + '\n'
 wr(os.path.join(OUT, 'cmp_256.v'), body)
+
+# ---------------------------------------------------------------------
+# miner_mux4.v -- the clk2x/phase-carrying miner.
+#
+# WAS HAND-MAINTAINED, and it cost exactly what hand-maintaining a copy costs:
+# the nonce-capture fix landed in miner_pipelined.v on 2026-09-08 and this file
+# still had the racy version a day later, with a mux4 build already running
+# from it. Generated now, for the same reason the wrapper and top are.
+#
+# Two sources, because the two modules live in different files: odo_keccak is
+# in miner.v and miner_pipelined is in miner_pipelined.v.
+ODOCRYPT = os.path.normpath(os.path.join(HDL, os.pardir, os.pardir, os.pardir,
+                                         'hdl', 'odocrypt'))
+
+
+def _extract(path, name):
+    """The text of `module <name> ... endmodule`, or die."""
+    src = io.open(path, encoding='utf-8').read().replace('\r\n', '\n')
+    i = src.find('module ' + name)
+    if i < 0:
+        raise SystemExit('miner_mux4: no module %s in %s' % (name, path))
+    j = src.find('endmodule', i)
+    if j < 0:
+        raise SystemExit('miner_mux4: unterminated module %s' % name)
+    return src[i:j + len('endmodule')]
+
+
+kec = _extract(os.path.join(ODOCRYPT, 'miner.v'), 'odo_keccak')
+mnr = _extract(os.path.join(ODOCRYPT, 'miner_pipelined.v'), 'miner_pipelined')
+
+# odo_keccak -> odo_keccak_mux4: two extra inputs, threaded into the cipher.
+kec = kec.replace('module odo_keccak(clk, in, read, target, out, write);',
+                  'module odo_keccak_mux4(clk, clk2x, phase, in, read, target,'
+                  ' out, write);\n\tinput clk2x;\n\tinput phase;', 1)
+kec = kec.replace('encrypt_4encrypt crypt(clk, in, read, midstate, midread);',
+                  'encrypt_4encrypt crypt(clk, clk2x, phase, in, read,'
+                  ' midstate, midread);', 1)
+
+# miner_pipelined -> miner_pipelined_mux4: same two, threaded into the worker.
+mnr = mnr.replace('module miner_pipelined(clk, header, target, nonce, found);',
+                  'module miner_pipelined_mux4(clk, clk2x, phase, header,'
+                  ' target, nonce, found);', 1)
+mnr = mnr.replace('    input clk;',
+                  '    input clk;\n    input clk2x;\n    input phase;', 1)
+mnr = mnr.replace('odo_keccak worker(clk, {nonce_in, header}, advance, target,'
+                  ' res, has_res);',
+                  'odo_keccak_mux4 worker(clk, clk2x, phase,'
+                  ' {nonce_in, header}, advance,\n'
+                  '                           target, res, has_res);', 1)
+
+body = (BANNER % 'odocrypt/miner_pipelined.v + odocrypt/miner.v' +
+        '//\n'
+        '// The clk2x/phase-carrying variants for the 4-instance shared-BRAM\n'
+        '// experiment. Both modules are the shipping ones with two extra input\n'
+        '// ports threaded through to encrypt_4encrypt -- nothing else differs,\n'
+        '// which is why this is generated rather than copied.\n'
+        '//\n'
+        '// THROUGHPUT guard, carried over from the hand-written file it\n'
+        '// replaced. Without it the `THROUGHPUT references below depend on\n'
+        '// some other file having defined it first -- a silent dependency on\n'
+        '// compile order. Found by diffing this output against that file.\n'
+        '`ifndef THROUGHPUT\n`define THROUGHPUT 4\n`endif\n'
+        '\n' + kec + '\n\n' + mnr + '\n')
+
+for want in ('`define THROUGHPUT',
+             'odo_keccak_mux4', 'miner_pipelined_mux4', 'clk2x', 'phase',
+             'nonce     <= nonce_out;'):
+    if want not in body:
+        raise SystemExit('miner_mux4: generated file lacks %r' % want)
+
+wr(os.path.join(OUT, 'miner_mux4.v'), body)
+print('wrote mux4/miner_mux4.v (%d lines)' % body.count('\n'))
 print('  wrote mux4/cmp_256.v (%d lines)' % body.count('\n'))
 print('done')
