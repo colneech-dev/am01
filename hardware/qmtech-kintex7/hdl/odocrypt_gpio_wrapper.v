@@ -328,7 +328,24 @@ module odocrypt_gpio_wrapper #(
      * REPORTS 0203 -- it was built before this was bumped. Nothing
      * depends on telling them apart: UART_STAT is identical in all
      * three, and 0x1C simply reads 0 on a bitstream that lacks it. */
-    localparam [15:0] VERSION = 16'h020A;
+    // 0x020B: THE CONSTRAINTS CHANGED, WHICH MAKES A DIFFERENT BITSTREAM.
+    //
+    // The rule above is written about the register map, and taken literally an
+    // XDC change does not touch it. But the PURPOSE of this register is to
+    // answer "which bitstream is on this board?", and after the CDC constraint
+    // change it could not: the pre- and post-CDC builds of 2026-09-09 both
+    // report 0x020A and are told apart only by md5. That is the failure the
+    // note below records being paid for on 2026-09-05, repeated four days
+    // later.
+    //
+    // So the rule is wider than it read: bump for anything that produces a
+    // bitstream someone might need to distinguish -- routing and constraints
+    // included, not just registers.
+    //
+    // The flashed CDC build still reports 0x020A. It was built before this
+    // bump and is identified by md5 b6f62c2d435d17c979983be03f89312d; 0x020B
+    // first exists in the epoch rebuild.
+    localparam [15:0] VERSION = 16'h020B;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;
