@@ -102,9 +102,61 @@ create_clock -period 20.000 -name sys_clk_50m [get_ports sys_clk_50m]
 # in nextpnr's xilinx backend, so it has no effect on openXC7 placement. The
 # synchroniser stages can land arbitrarily far apart, degrading MTBF. If that
 # matters, constrain them with explicit BEL/LOC attributes instead.
-set_clock_groups -asynchronous \
-    -group [get_clocks sys_clk_50m] \
-    -group [get_clocks -of_objects [get_pins clk_gen_hash_inst/mmcm_inst/CLKOUT1]]
+# ---------------------------------------------------------------------
+# CDC constraints. REPLACED set_clock_groups -asynchronous, 2026-09-09.
+#
+# That was a two-way FALSE PATH between the domains. It removed all analysis
+# from the synchroniser chains it was written for AND from the multi-bit DATA
+# buses crossing beside them -- the block header and target going into clk_h,
+# and the found nonce coming back. Confirmed in the routed reports: the Inter
+# Clock Table was EMPTY and TIMING-47 fired twice. Vivado bounded nothing, and
+# the router had no reason to keep those buses short because nothing was
+# looking at them.
+#
+# The comment above claiming every crossing "already goes through a real
+# two-flop/toggle synchronizer" is FALSE for those two buses. They are captured
+# ON a synchronised strobe, not synchronised themselves. That claim is why this
+# went unexamined.
+#
+# A false path beats a max_delay in Vivado's exception priority, so the two
+# cannot be layered -- keeping the clock group and adding set_max_delay would
+# have done nothing at all. The exclusion has to be narrowed instead.
+#
+# SELECTED BY ATTRIBUTE, NOT BY NAME. Every synchroniser first stage in
+# odocrypt_gpio_wrapper.v already carries ASYNC_REG, so this is exactly the set
+# of intended synchroniser inputs and it stays correct as they are added or
+# removed. A hand-written list would be one more thing to keep right.
+set_false_path -to [get_cells -hier -filter {ASYNC_REG == "TRUE"}]
+
+# The two data buses are NOT ASYNC_REG -- that is what makes the selection
+# above safe -- so they fall through to real bounds here.
+#
+# -datapath_only excludes clock skew and jitter, which is correct for a
+# handshake-gated crossing: what matters is the data arriving before the strobe.
+#
+# Header/target into clk_h: the strobe is caught by a 3-stage synchroniser, so
+# the data has at least 2 clk_h periods (10ns at 200MHz). Bounded at one
+# period for margin.
+set_max_delay -datapath_only 5.0 \
+    -from [get_cells -hier -regexp {.*(req_data_bus|req_op_bus)_reg.*}] \
+    -to   [get_cells -hier -regexp {.*data_from_host_h_reg.*}]
+set_bus_skew 5.0 \
+    -from [get_cells -hier -regexp {.*(req_data_bus|req_op_bus)_reg.*}] \
+    -to   [get_cells -hier -regexp {.*data_from_host_h_reg.*}]
+
+# Nonce back out: found_path holds the latch behind `busy` until the host acks,
+# which is milliseconds. One bus_clk period is already absurdly generous.
+set_max_delay -datapath_only 20.0 \
+    -from [get_cells -hier -regexp {.*golden_nonce_latch_h_reg.*}] \
+    -to   [get_cells -hier -regexp {.*golden_nonce_reg_reg.*}]
+set_bus_skew 20.0 \
+    -from [get_cells -hier -regexp {.*golden_nonce_latch_h_reg.*}] \
+    -to   [get_cells -hier -regexp {.*golden_nonce_reg_reg.*}]
+
+# IF THIS BUILD FAILS TIMING, it will be on a crossing that is neither a
+# synchroniser input nor one of the two buses above -- a real unsynchronised
+# crossing nobody knew about. That is worth finding, and the failure names it.
+# Do NOT answer such a failure by restoring the clock group.
 
 # ---------------------------------------------------------------------
 # Pull-ups on the CM4 handshake strobes.
