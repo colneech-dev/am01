@@ -71,110 +71,25 @@ module odo_keccak(clk, in, read, target, out, write);
 	cmp_256 compare(clk, pow_hash, has_hash, target, out, write);
 endmodule
 
-module miner(clk, header, target, start_hash, res, nonce);
-	// NONCE_BASE lets several miner instances share one work item by
-	// each sweeping a different slice of the 32-bit nonce space. Default
-	// 0 reproduces the original single-instance behaviour exactly, so
-	// existing instantiations (atomminer_odocrypt.v) are unaffected.
-	parameter [31:0] NONCE_BASE = 32'h0;
-
-	input clk;
-	input [607:0] header;
-	input [255:0] target;
-	input start_hash;
-	output wire res;
-	output reg [31:0] nonce;
-
-	reg [31:0] nonce_in = NONCE_BASE;
-	reg [31:0] nonce_out = NONCE_BASE;
-
-	reg [6:0] counter;
-	reg advance;
-	initial counter = `THROUGHPUT-1;
-	initial advance = 0;
-
-	wire has_res;
-	reg [5:0] cou_deltanonce = 6'b0; 
-	reg nonce_out_go = 1'b0; 
-
-	odo_keccak worker(clk, {nonce_in, header}, advance, target, res, has_res);
-	
-	always @(posedge clk)
-	begin
-		if (~start_hash)  
-		begin
-			counter <= 0;
-			advance <= 1'b0;
-		end
-		else if (counter == `THROUGHPUT-1 & start_hash)
-		begin
-			counter <= 0;
-			advance <= 1;
-		end
-		else
-		begin
-			counter <= counter + 1;
-			advance <= 0;
-		end
-		if (~start_hash)
-			nonce_in <= NONCE_BASE;
-		else if (advance & start_hash)
-			nonce_in <= nonce_in + 1;
-		if (~start_hash)
-			nonce_out <= NONCE_BASE;
-		// nonce_out counts EVERY result, gate or no gate.
-		//
-		// It used to increment only under nonce_out_go, so every result
-		// emerging before the 204-cycle warm-up went uncounted and this
-		// counter permanently lost sync with the result stream. The nonce
-		// reported for a solution was then wrong by however many results
-		// had been skipped -- measured on hardware 2026-08-30 as +16 on one
-		// run and -112 on another, i.e. not a fixed offset but a function of
-		// where in the drain the gate happened to open.
-		//
-		// odo-miner-cyclonev's working core (odo_miner_core.v) has no gate on
-		// the counter at all: nonce_in and nonce_out free-run from reset, so
-		// the Nth result pairs with the Nth input by construction. That is the
-		// invariant, and gating the counter is what broke it.
-		//
-		// The warm-up still suppresses REPORTING, which is all it was ever
-		// for: stale old-header results must not be published as solutions.
-		else if (has_res & start_hash)
-		begin
-			if (res & nonce_out_go) nonce <= nonce_out;
-			nonce_out <= nonce_out + 1;
-		end
-	end
-
-always @ (posedge clk)
-	if (~start_hash)   cou_deltanonce <= 6'b0;                                                                                
-	else if (advance)  cou_deltanonce <= cou_deltanonce + 1'b1;
-
-always @ (posedge clk)
-	if (~start_hash) nonce_out_go <= 1'b0;
-	else if ( cou_deltanonce == 6'h33)  nonce_out_go <= 1'b1;             
-
-endmodule
-
-module miner_top(osc_clk, header, target, start_hash, ticket2moon, nonce);
-	// See miner's NONCE_BASE -- defaulted, so existing users are unchanged.
-	parameter [31:0] NONCE_BASE = 32'h0;
-
-	input osc_clk;
-	input [607:0] header;
-	input [255:0] target;
-	input start_hash;
-
-	output ticket2moon;
-	output [31:0] nonce;
-
-	wire miner_clk;
-	wire res;
-	assign miner_clk = osc_clk;
-
-	miner #(.NONCE_BASE(NONCE_BASE)) miner (miner_clk, header, target, start_hash, res, nonce);
-	
-	assign ticket2moon = res;
-	
-endmodule
-	
+// ---------------------------------------------------------------------
+// `miner` and `miner_top` WERE HERE. REMOVED 2026-09-09.
+//
+// They were the AtomMiner core that VERSION 0x0200 replaced with
+// miner_pipelined, and nothing had instantiated either of them since. The
+// replacement's own header records why they went:
+//
+//     "three separate faults were found and fixed in miner.v (arming
+//      wraparound 0x0106, too-short settle window 0x0107, nonce_out gated on
+//      nonce_out_go 0x0108) plus a fourth in the wrapper ... 16/16 results
+//      reported the WRONG NONCE (cipher correct, nonce_out wrong, by an
+//      inconsistent offset each time)"
+//
+// So this file was carrying a core KNOWN to mislabel nonces -- compiled into
+// every build, one instantiation away from being used by mistake -- during the
+// two days spent chasing a nonce-mislabelling fault in the core that replaced
+// it. Removed rather than commented out: git has it, and the point is that it
+// should not be reachable.
+//
+// cmp_256 and odo_keccak above are the parts actually used, by
+// miner_pipelined.v and by tools/make_mux4_variants.py, and are untouched.
+// The upstream provenance recorded in NOTICE is unaffected.

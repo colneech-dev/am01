@@ -34,6 +34,45 @@ Renaming a top-level Verilog module means updating `vivado/build*.tcl`'s
 `set_property top`, and the openXC7 scripts' `TOP=`. Miss one and the build
 fails loudly, which is the good kind of coupling.
 
+### Tier 1b — `hdl/odocrypt/miner.v` no longer contains a `miner`
+
+Decide this here rather than in passing. On 2026-09-09 the two dead modules in
+that file were removed:
+
+```
+cmp_256      instantiated in 3 files   kept -- odo_keccak uses it
+odo_keccak   instantiated in 4 files   kept -- miner_pipelined uses it, and
+                                              tools/make_mux4_variants.py
+                                              extracts it from this file
+miner        instantiated in 0 files   removed
+miner_top    instantiated in 0 files   removed
+```
+
+`miner` was the AtomMiner core that VERSION 0x0200 replaced, and it is worth
+knowing why it went: `miner_pipelined.v`'s header records four faults traced to
+one root cause, and a hardware run where **16/16 results reported the wrong
+nonce**. The file had been carrying a core known to mislabel nonces, compiled
+into every build, one instantiation away from being used by mistake.
+
+So the file is load-bearing and must NOT be deleted — but it is now named for
+the one thing it does not contain.
+
+**Two options, and this is a judgement call, not an obvious win:**
+
+- **Leave it.** The name is the trail back to upstream provenance recorded in
+  `hdl/odocrypt/NOTICE` — it arrived from MentalCollatz/DigiByte-Core's
+  `odo-miner` as `miner.v`. GPL does not require the filename, but the
+  traceability is worth something, and upstream has been dead since 2019 so
+  nothing will ever merge against it again.
+- **Rename to `odo_keccak.v`.** Accurate to the contents. Touches
+  `vivado/build.tcl`, `vivado/build_mux4.tcl`,
+  `tools/make_mux4_variants.py` (which reads it by name), the openXC7 build
+  scripts, and `NOTICE`.
+
+Either way, the block comment left at the deletion point explains what was
+there and why, so someone opening the file and looking for `miner` finds the
+answer in the file rather than in `git log`.
+
 ### Tier 2 — needs a rebuild and a reflash
 
 Anything the FPGA or the cross-compiled binaries carry. Rename, rebuild,
