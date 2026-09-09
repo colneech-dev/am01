@@ -83,6 +83,29 @@ if {[file exists $bit_file]} {
     # bitstream nobody should flash.
     catch {file copy -force $impl_timing_rpt \
                [file join $art_dir [format "timing_%.2fMHz_%s.rpt" $hash_mhz $stamp]]}
+    # DO NOT ARCHIVE A BITSTREAM THAT MISSES TIMING.
+    #
+    # This ran report_timing_summary and then never read the answer: the CDC
+    # constraint build of 2026-09-09 came out at WNS -4.752ns with 33 failing
+    # endpoints, was archived, and printed BUILD_COMPLETE. Same shape as
+    # run_all_sims.sh printing ALL PASSED unconditionally and
+    # run_sched_equiv.sh returning 0 whatever it found -- a check nothing
+    # consumes is not a check.
+    #
+    # Note the asymmetry this rests on: a POSITIVE WNS does NOT mean a
+    # bitstream is fit to mine -- measured here repeatedly -- so timing met is
+    # necessary and not sufficient. A bitstream that does not even meet timing
+    # has no business sitting in artifacts/ under a name that says nothing
+    # about it. The .bit stays in the run directory for inspection.
+    set wns [get_property STATS.WNS [get_runs impl_1]]
+    set whs [get_property STATS.WHS [get_runs impl_1]]
+    if {$wns < 0 || $whs < 0} {
+        puts "TIMING FAILED: WNS $wns  WHS $whs -- NOT archiving."
+        puts "  the .bit is in the run directory if you want to look at it."
+        puts "  read $impl_timing_rpt; the Inter Clock Table names the paths."
+        exit 1
+    }
+    puts "timing met: WNS $wns  WHS $whs"
     puts "ARCHIVED: $art"
 }
 

@@ -134,23 +134,36 @@ set_false_path -to [get_cells -hier -filter {ASYNC_REG == "TRUE"}]
 # -datapath_only excludes clock skew and jitter, which is correct for a
 # handshake-gated crossing: what matters is the data arriving before the strobe.
 #
-# Header/target into clk_h: the strobe is caught by a 3-stage synchroniser, so
-# the data has at least 2 clk_h periods (10ns at 200MHz). Bounded at one
-# period for margin.
+# Header/target into clk_h. Constrained TO THE CLOCK, not to a named register:
+# req_op_bus does not only feed data_from_host_h, it also drives the case
+# statement raising get_target_pulse_h, get_block_pulse_h and commit_arm_h. The
+# first attempt named only data_from_host_h and left those timed normally --
+# req_op_bus_reg[0] -> get_target_pulse_h_reg failed at -4.752ns. Scoping to
+# the destination clock covers every endpoint in the domain whatever it is
+# called, which is the whole point.
+#
+# The strobe crosses a 3-stage synchroniser, so the data has at least 2 clk_h
+# periods (10ns at 200MHz). One period is bounded, for margin.
 set_max_delay -datapath_only 5.0 \
     -from [get_cells -hier -regexp {.*(req_data_bus|req_op_bus)_reg.*}] \
-    -to   [get_cells -hier -regexp {.*data_from_host_h_reg.*}]
+    -to   [get_clocks -of_objects [get_pins clk_gen_hash_inst/mmcm_inst/CLKOUT1]]
 set_bus_skew 5.0 \
-    -from [get_cells -hier -regexp {.*(req_data_bus|req_op_bus)_reg.*}] \
+    -from [get_cells -hier -regexp {.*req_data_bus_reg.*}] \
     -to   [get_cells -hier -regexp {.*data_from_host_h_reg.*}]
 
-# Nonce back out: found_path holds the latch behind `busy` until the host acks,
-# which is milliseconds. One bus_clk period is already absurdly generous.
+# Nonce back out. The source is nonce_latch INSIDE found_path --
+# golden_nonce_latch_h is the wire carrying it out, not a register, and naming
+# that produced "No valid object(s) found" plus 32 unconstrained endpoints that
+# then failed at -1.070ns. Their data path delay is 0.556ns; they fail only
+# because they are being timed as ordinary cross-clock paths.
+#
+# found_path holds the latch behind `busy` until the host acks, which is
+# milliseconds, so one bus_clk period is already absurdly generous.
 set_max_delay -datapath_only 20.0 \
-    -from [get_cells -hier -regexp {.*golden_nonce_latch_h_reg.*}] \
-    -to   [get_cells -hier -regexp {.*golden_nonce_reg_reg.*}]
+    -from [get_cells -hier -regexp {.*nonce_latch_reg.*}] \
+    -to   [get_clocks sys_clk_50m]
 set_bus_skew 20.0 \
-    -from [get_cells -hier -regexp {.*golden_nonce_latch_h_reg.*}] \
+    -from [get_cells -hier -regexp {.*nonce_latch_reg.*}] \
     -to   [get_cells -hier -regexp {.*golden_nonce_reg_reg.*}]
 
 # IF THIS BUILD FAILS TIMING, it will be on a crossing that is neither a
