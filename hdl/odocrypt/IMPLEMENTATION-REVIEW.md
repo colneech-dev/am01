@@ -113,6 +113,85 @@ somewhat above 200 MHz is plausible, and far above it is not. Expect
 `vivado/build_mux4.tcl` is the right and only place to measure this —
 nextpnr cannot time BRAM-adjacent paths at all.
 
+## 4b. The mux, MEASURED — 2026-09-10
+
+Section 4 said one number decides it and predicted +15–40%. Built, and it is
++31%. The build took **9 hours 23 minutes**, routed from 269,877 failed nets to
+zero, and then missed timing on both clocks:
+
+```
+MUX4 RESULT -- worst slack per clock:
+  clkout0_unbuf (clk_2x)  target 2.500 ns  WNS -1.323  -> needs 3.823 ns (261.6 MHz)
+  clkout1_unbuf (clk_h)   target 5.000 ns  WNS -0.679  -> needs 5.679 ns (176.1 MHz)
+```
+
+Applying `hashrate = clk_2x / 2`:
+
+    muxed  261.6 / 2 = 131 MH/s
+    stock              100 MH/s        +31%
+
+Resources came in almost exactly as section 4 predicted: **80.51% LUT** against
+82.2%, **94.38% RAMB18** against 94.4%. The scaling model was right.
+
+**Recommendation: do not ship it, and the +31% is not the reason.** The cost
+attached to that gain is what decides it:
+
+* Both clocks miss. Closing −1.323 ns on a design already at 94% BRAM and 80%
+  LUT is not tuning, it is a research project — and section 3 explains why:
+  routing is 70–91% of the critical path and adding registers does not shorten
+  wires. There is no logic depth left to trade.
+* `found_path` discards a **third simultaneous find**. It refuses NUM_MINERS > 2
+  for that reason, and this build only elaborated because
+  `ALLOW_LOSSY_MULTI_MINER` was set — an experiment flag that must never be set
+  on a mining bitstream. Shipping means widening the collector's scan and stash
+  first, with tests.
+* 9½ hours per build makes iterating on it expensive in a way two-instance
+  builds are not.
+
+The experiment did its job: it turned "should we do this?" into 261.6 MHz.
+
+---
+
+## 4c. What 1680 is made of, and why none of it is reclaimable
+
+    1680 = 20 × 84
+         = (10 tables × 4 reads ÷ 2 ports per RAMB18) × 84 rounds
+
+`ApplySboxes` reads each `sbox2[i]` four times per word per round, at bit
+offsets 6, 22, 38 and 54. A true dual-port RAMB18 serves two reads per cycle,
+so each table is instantiated twice.
+
+Every term is fixed by something outside our control. **10 tables, 4 reads and
+84 rounds are OdoCrypt. 2 ports is the RAMB18.** Checked and closed:
+
+| idea | why not |
+|---|---|
+| RAMB36 instead | same two ports; a RAMB36 is two RAMB18s, so the ratio is identical |
+| SDP mode for width | 36 bits wide but a **single** read port — strictly worse |
+| two tables per block | 20 bits will not fit 18, and the constraint is ports anyway |
+| distributed ROM | ~160 LUT per read port → 10 × 4 × 160 × 21 ≈ **134,000 LUT per miner** against 203,800. One miner where BRAM gives two |
+
+So the constant is not an artefact of our implementation that a cleverer one
+would shrink. It is the algorithm meeting the device.
+
+**Which reframes the Blackminer comparison.** A Blackminer F1 Mini is quoted at
+260 MH/s and reviewed at **195–200 MH/s** real-world, on what is reported to be
+an XC7K325T — apparently 2× this design on the same part.
+
+    2 × 100 MH/s = 200 MH/s
+
+The standard F1 is documented as carrying **two FPGA hashing boards**. If the
+Mini likewise carries two devices, we are at **parity per chip** and there is no
+factor of two hiding in the S-box implementation — which is what the law above
+predicts, and what the table of closed doors independently supports.
+
+NOT CONFIRMED: the chip count could not be established from public sources.
+Recorded as a hypothesis with its arithmetic, because the alternative — that a
+different S-box scheme beats the law by 2× — is worth someone checking rather
+than assuming either way.
+
+---
+
 ## 5. Epoch renewal on the board
 
 **Do not do it by making the cipher runtime-configurable.** The reason is the
