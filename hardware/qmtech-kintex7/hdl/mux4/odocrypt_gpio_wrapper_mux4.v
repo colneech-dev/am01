@@ -61,7 +61,7 @@ module odocrypt_gpio_wrapper_mux4 #(
     // fills the budget at 94% and 3 does not fit. Set to 1 to get the
     // original single-core behaviour back. See ../README.md
     // "Expected hashrate" for the derivation.
-    parameter integer NUM_MINERS = 4,
+    parameter integer NUM_MINERS = 3,
 
     // Cycles of found-reporting suppression after each job commit.
     // SIMULATION OVERRIDE ONLY -- see the SETTLE_CYCLES comment further down
