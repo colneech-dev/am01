@@ -171,8 +171,35 @@ Every term is fixed by something outside our control. **10 tables, 4 reads and
 | two tables per block | 20 bits will not fit 18, and the constraint is ports anyway |
 | distributed ROM | ~160 LUT per read port → 10 × 4 × 160 × 21 ≈ **134,000 LUT per miner** against 203,800. One miner where BRAM gives two |
 
-So the constant is not an artefact of our implementation that a cleverer one
-would shrink. It is the algorithm meeting the device.
+### The mux halves it — and that is the whole point of the mux
+
+The one term above that is NOT immutable is the ports. Time-multiplexing on
+`clk_2x` gives **four effective reads per `clk_h`** instead of two, so each
+table needs one block instead of two:
+
+    stock  BRAM = miners × 20 × 84/T   ->  hashrate = BRAM × clk_h / 1680
+    muxed  BRAM = miners × 10 × 84/T   ->  hashrate = BRAM × clk_h /  840
+
+Check: 840 × 200 / 840 = 200 MH/s, which is `clk_h` — the same statement as
+section 4's `clk_2x / 2`, arrived at from the other direction.
+
+**That is why the mux is the only bandwidth lever anyone has found.** It is
+also why it buys nothing for free: halving the constant costs a doubled clock
+on the S-box path, and section 4b measures what that clock actually closes at
+(261.6 MHz, not 400). The constant halves; the clock that pays for it does not
+reach twice. Net +31%.
+
+So the honest statement is narrower than "1680 is fixed":
+
+* 10 tables, 4 reads, 84 rounds — **fixed by OdoCrypt**
+* 2 ports per RAMB18 — **fixed by the device, unless you spend clock to
+  multiplex**, which is the mux, which is measured
+* the constant is not an artefact of our implementation that a cleverer
+  *layout* or a different memory primitive would shrink
+
+The four closed doors in the table above are all attempts to reduce it WITHOUT
+spending clock. Every one fails. The mux succeeds at it, and then hands the
+bill to the clock.
 
 **Which reframes the Blackminer comparison.** A Blackminer F1 Mini is quoted at
 260 MH/s and reviewed at **195–200 MH/s** real-world, on what is reported to be
