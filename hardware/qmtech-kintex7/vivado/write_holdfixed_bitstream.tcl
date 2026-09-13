@@ -19,10 +19,29 @@ open_checkpoint [file join $impl_dir am01_qmtech_top_mux4_holdfixed.dcp]
 # Re-assert rather than trust the filename: a bitstream written from a
 # checkpoint that does not meet timing is exactly the artifact this project
 # has been burned by before.
-set wns [get_property SLACK [lindex [get_timing_paths -delay_type max -max_paths 1 -quiet] 0]]
-set whs [get_property SLACK [lindex [get_timing_paths -delay_type min -max_paths 1 -quiet] 0]]
-puts [format "BITGEN: WNS %.3f  WHS %.3f" $wns $whs]
-if {$wns < 0 || $whs < 0} {
+# WNS and WHS are the worst SETUP and HOLD paths, and with no -from/-to
+# filter those really are design-wide -- a failing endpoint elsewhere cannot
+# be worse than the worst one. But pulse width, min period and max skew are
+# NOT timing paths, so get_timing_paths cannot see them at all: a design can
+# pass both checks below with failing pulse-width endpoints. Check the run's
+# own properties, which cover all three.
+set wns [get_property STATS.WNS [get_runs impl_1]]
+set whs [get_property STATS.WHS [get_runs impl_1]]
+set wpws [get_property STATS.WPWS [get_runs impl_1]]
+if {$wns eq "" || $whs eq ""} {
+    # Opened from a standalone checkpoint, so the run properties are absent.
+    # Fall back to guarded path queries, and say so rather than pretending
+    # pulse width was checked.
+    set sp [get_timing_paths -delay_type max -max_paths 1 -quiet]
+    set hp [get_timing_paths -delay_type min -max_paths 1 -quiet]
+    set wns [expr {[llength $sp] ? [get_property SLACK [lindex $sp 0]] : 0.0}]
+    set whs [expr {[llength $hp] ? [get_property SLACK [lindex $hp 0]] : 0.0}]
+    set wpws "n/a"
+    puts "BITGEN: standalone checkpoint -- pulse width NOT checked here;"
+    puts "        read the summary report before flashing."
+}
+puts [format "BITGEN: WNS %s  WHS %s  WPWS %s" $wns $whs $wpws]
+if {$wns < 0 || $whs < 0 || ($wpws ne "n/a" && $wpws < 0)} {
     puts "BITGEN: REFUSING -- checkpoint does not meet timing."
     exit 1
 }

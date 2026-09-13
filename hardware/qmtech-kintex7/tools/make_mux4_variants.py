@@ -174,12 +174,12 @@ derive('am01_qmtech_top.v', 'am01_qmtech_top_mux4.v', [
     # closes timing and then mislabels ~36% of finds.
     ('    clk_gen_hash clk_gen_hash_inst (',
      '    clk_gen_hash #(\n'
-     '        .CLKFBOUT_MULT  (16),   // VCO 800MHz\n'
-     '        .CLKOUT_DIVIDE_2X(3)    // clk_2x 266.67, clk_h 133.33\n'
+     '        .CLKFBOUT_MULT  (18),   // VCO 900MHz\n'
+     '        .CLKOUT_DIVIDE_2X(3)    // clk_2x 300.00, clk_h 150.00\n'
      '    ) clk_gen_hash_inst (', 'MMCM retune for the muxed build'),
 ], [
     ('module am01_qmtech_top_mux4', 'renamed top'),
-    ('CLKFBOUT_MULT  (16)', 'the MMCM retune'),
+    ('CLKFBOUT_MULT  (18)', 'the MMCM retune'),
     ('.clk_2x    (clk_2x),', 'clk_2x connected'),
 ])
 

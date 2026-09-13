@@ -146,6 +146,12 @@ foreach line [split [report_utilization -return_string] "\n"] {
 report_timing_summary -file [file join $script_dir mux4_synth_timing.rpt]
 puts "----------------------------------------------------------------------"
 
+# LET THE ROUTER FIX HOLD. Without this the router bails out of hold fixing on
+# this design -- see pre_route_hold.tcl and IMPLEMENTATION-REVIEW.md 4i. Four
+# builds were misdiagnosed because of it. A pre-route hook is required rather
+# than a set_param here: launch_runs spawns its own process.
+set_property STEPS.ROUTE_DESIGN.TCL.PRE [file join $script_dir pre_route_hold.tcl] [get_runs impl_1]
+
 launch_runs impl_1 -to_step write_bitstream -jobs 8
 wait_on_run impl_1
 if {[get_property PROGRESS [get_runs impl_1]] != "100%"} {

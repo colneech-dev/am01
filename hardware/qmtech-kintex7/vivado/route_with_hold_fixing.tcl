@@ -61,13 +61,24 @@ puts "----------------------------------------------------------------------"
 puts "HOLDFIX2: routing with hold fixing enabled"
 route_design
 
-set wns [get_property SLACK [lindex [get_timing_paths -delay_type max -max_paths 1 -quiet] 0]]
-set whs [get_property SLACK [lindex [get_timing_paths -delay_type min -max_paths 1 -quiet] 0]]
+# PERSIST FIRST. Routing took eight hours; a reporting call must never be
+# able to throw it away. An unguarded get_property on an empty path list
+# errors out and aborts batch mode -- build_mux4.tcl records that exact
+# failure killing a loop on 2026-09-05 -- so the checkpoint and the report
+# are written before anything is queried.
+write_checkpoint -force [file join $impl_dir am01_qmtech_top_mux4_holdfixed.dcp]
+report_timing_summary -file [file join $script_dir mux4_holdfixing_timing.rpt]
+puts "HOLDFIX2: checkpoint and report written -- the route is safe from here"
+
+# Guarded, for the same reason.
+set wns 0.0
+set whs 0.0
+set sp [get_timing_paths -delay_type max -max_paths 1 -quiet]
+set hp [get_timing_paths -delay_type min -max_paths 1 -quiet]
+if {[llength $sp] > 0} { set wns [get_property SLACK [lindex $sp 0]] }
+if {[llength $hp] > 0} { set whs [get_property SLACK [lindex $hp 0]] }
 puts "----------------------------------------------------------------------"
 puts [format "HOLDFIX2 RESULT   WNS %8.3f ns   WHS %8.3f ns" $wns $whs]
-
-report_timing_summary -file [file join $script_dir mux4_holdfixing_timing.rpt]
-write_checkpoint -force [file join $impl_dir am01_qmtech_top_mux4_holdfixed.dcp]
 
 if {$whs >= 0} {
     puts "HOLDFIX2: HOLD IS CLEAN. The violations were the router declining to"
