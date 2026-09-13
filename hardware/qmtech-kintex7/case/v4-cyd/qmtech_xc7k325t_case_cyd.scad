@@ -563,6 +563,46 @@ snap_bead_mm   = 0.35;  // radial interference
 snap_bead_h    = 1.2;   // bead height
 snap_lead_in   = 0.6;   // chamfer under the bead, for assembly
 
+// FIT-CHECK 2026-09-12: the lid is too hard to clip on, and this has to be
+// fixed on the TRAY -- lids are already printed, so lid_fit_clearance and
+// snap_bead_mm are both off limits (snap_bead_mm sizes the lid's bead as well
+// as the tray's groove).
+//
+// WHERE THE FORCE COMES FROM. Per side:
+//
+//     tray inner wall face      wall_thickness            = 2.40mm from outer
+//     lid skirt outer face      + lid_fit_clearance       = 2.80mm
+//     lid bead outer face       - snap_bead_mm            = 2.05mm
+//     interference              2.40 - 2.05               = 0.35mm
+//
+// 0.35mm per side around the whole perimeter, and the bead has to hold that
+// deflection for the full lid_skirt_depth - snap_lead_in = 2.4mm of travel
+// before it reaches the groove.
+//
+// This recesses the tray's inner wall ABOVE the groove, so the bead meets
+// less material on the way in:
+//
+//     interference = snap_bead_mm - lid_entry_relief = 0.35 - 0.15 = 0.20mm
+//
+// BE CLEAR ABOUT THE TRADE, because there is no free version of this: the
+// same lip that resists insertion is what resists lift-off. Cutting the
+// interference from 0.35 to 0.20 cuts the clip force by roughly the same
+// proportion it cuts retention. It is NOT a lead-in chamfer that gives
+// something for nothing.
+//
+// 0.15 is deliberately less than half the bead. If the lid now lifts off too
+// easily, lower this; if it is still stiff, raise it -- but past ~0.25 the
+// bead has almost nothing to catch on and the lid is friction-fit.
+//
+// Only the tray changes. A lid printed before today still fits, and fits
+// more easily, which is the point.
+lid_entry_relief = 0.15;  // tray-side recess above the snap groove
+// A relief at or past the bead leaves nothing for it to catch on: the lid
+// would drop in and lift straight back out. Catch that here rather than on a
+// printed part.
+assert(lid_entry_relief >= 0 && lid_entry_relief < snap_bead_mm,
+       "lid_entry_relief must be >=0 and less than snap_bead_mm, or the lid has no retention at all");
+
 
 // ---- Wall cutouts: THREE walls carry real connectors (see design note
 // 0 -- v4 wrongly put everything on one wall). All positions read off
@@ -648,7 +688,15 @@ connector_positions_mm = [
     //    board-local 75.5 -> 77.6. board_y() maps board-local to case Y as
     //    origin_y + (board_width - t) with origin_y = 12.6, so 25.0 needs
     //    t = 90 - (25.0 - 12.6) = 77.6.
-    ["MINI_USB_J14", 77.6, 11, 8, 2.5],
+    // FIT-CHECK 2026-09-12, printed case: the window is too tall. Body
+    // height 8 -> 6, which is 2mm off the TOP because the 5th field anchors
+    // the bottom: the window runs from 2.5mm BELOW the board's top surface
+    // upward, so lowering field 4 shortens it downward from the top edge and
+    // leaves the bottom lip exactly where it is. That bottom drop is load
+    // bearing -- it clears the plug's overmould, which reaches below the
+    // board line on a 2mm PCB -- so it is deliberately untouched.
+    //     opening = 12 x 8.5 (was 12 x 10.5) with cutout_margin 0.5
+    ["MINI_USB_J14", 77.6, 11, 6, 2.5],
 ];
 
 // BOTTOM wall (y=board_width, board_length=160mm long): mini-USB (J14,
@@ -1583,6 +1631,30 @@ module standoffs() {
     }
 }
 
+// Relief in the tray's inner wall ABOVE the snap groove, so the lid's bead
+// meets lid_entry_relief less material on its way down to the groove. Runs
+// from the top of the groove to the top of the tray -- the groove itself is
+// left at full snap_bead_mm depth so the bead still seats into a detent
+// rather than just stopping.
+module lid_entry_relief_cut() {
+    z0 = tray_height - lid_skirt_depth + snap_lead_in + snap_bead_h;
+    h  = tray_height - z0 + fuse_eps;
+    if (lid_entry_relief > 0)
+        translate([0, 0, z0])
+            difference() {
+                linear_extrude(height = h)
+                    translate([wall_thickness - lid_entry_relief,
+                               wall_thickness - lid_entry_relief])
+                        square([outer_length - 2*(wall_thickness - lid_entry_relief),
+                                outer_width  - 2*(wall_thickness - lid_entry_relief)]);
+                translate([0, 0, -1])
+                    linear_extrude(height = h + 2)
+                        translate([wall_thickness, wall_thickness])
+                            square([outer_length - 2*wall_thickness,
+                                    outer_width  - 2*wall_thickness]);
+            }
+}
+
 // Groove in the inner wall face for the lid's snap bead.
 module snap_groove() {
     z0 = tray_height - lid_skirt_depth + snap_lead_in;
@@ -1839,6 +1911,7 @@ module base_tray() {
                 }
                 union() {
                     snap_groove();
+                    lid_entry_relief_cut();
                     left_edge_cutouts();
                     bottom_edge_cutouts();
                     top_edge_cutouts();
