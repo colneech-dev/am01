@@ -65,7 +65,8 @@ echo "=========================================="
 echo " Running All Verilog Testbenches (iverilog)"
 echo "=========================================="
 
-run tb_found_path    tb_found_path.v ../hdl/found_path.v
+run tb_found_path       tb_found_path.v ../hdl/found_path.v
+run tb_found_path_multi tb_found_path_multi.v ../hdl/found_path.v
 run tb_uart_bridge   tb_uart_bridge.v ../hdl/uart_bridge.v
 run tb_bus_write     tb_bus_write.v stub_wrapper_deps.v ../hdl/odocrypt_gpio_wrapper.v ../hdl/uart_bridge.v ../hdl/found_path.v
 run tb_uart_tx_pin   tb_uart_tx_pin.v stub_wrapper_deps.v ../hdl/odocrypt_gpio_wrapper.v ../hdl/uart_bridge.v ../hdl/found_path.v

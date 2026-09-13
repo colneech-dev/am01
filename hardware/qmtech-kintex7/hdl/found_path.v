@@ -27,7 +27,13 @@
 
 module found_path #(
     parameter integer NUM_MINERS    = 2,
+    // Cycles between successive results from ONE core. The collector's
+    // correctness depends on it -- see the stash-depth proof below -- so it is
+    // a parameter rather than an assumption. Must match the cipher core's
+    // THROUGHPUT; odo_gen emits 4.
+    parameter integer THROUGHPUT    = 4,
     // EXPERIMENT ONLY -- see the guard below. Defaults to refusing.
+    // NOTE: since the collector was widened this should never need setting.
     parameter integer ALLOW_LOSSY_MULTI_MINER = 0,
     parameter integer SETTLE_CYCLES = 4096,
     parameter integer FIFO_AW       = 3     // 8-deep
@@ -109,61 +115,62 @@ module found_path #(
     // ---------------------------------------------------------------
     // Find collection.
     //
-    // Both cores run off the same clock and the same THROUGHPUT counter, so
-    // they can strobe on the same cycle. This scans for the first TWO and
-    // stashes one overflow, so it absorbs at most two simultaneous finds per
-    // cycle plus a held third.
+    // All cores run off the same clock and the same THROUGHPUT counter, so
+    // they can strobe on the same cycle. This scans ALL of them and holds the
+    // overflow in a stash NUM_MINERS-1 deep, so a cycle in which every core
+    // finds at once loses nothing.
     //
-    // THAT IS A HARD LIMIT ON NUM_MINERS, and it used to be justified by "the
-    // BRAM budget does not allow" more than two. hdl/mux4 instantiates this
-    // with NUM_MINERS=4, which breaks the premise: with four cores in
-    // lockstep, a cycle where three strobe together runs lost_inc = hits - 2
-    // and discards the third nonce. It is COUNTED in `lost` rather than
-    // dropped silently, so it is at least visible -- but the module is being
-    // used outside the regime it documents, and at a 1-in-256 target that is
-    // a real share thrown away.
+    // It used to scan for the first TWO and stash ONE, which made NUM_MINERS>2
+    // lossy: with four cores, a cycle where three strobed together discarded
+    // the third. Counted in `lost`, so visible, but at a 1-in-256 target that
+    // is a real share thrown away.
     //
-    // The generate below fails elaboration rather than letting a 4-instance
-    // build look correct. Raising the limit means widening this scan and the
-    // stash, not relaxing the check.
+    // WHY NUM_MINERS-1 IS PROVABLY THE RIGHT DEPTH. Only one nonce can enter
+    // the FIFO per cycle, so N simultaneous finds need N-1 held over. The
+    // stash drains at one per cycle, i.e. in N-1 cycles. A core cannot
+    // produce a second result for THROUGHPUT cycles, so the next batch cannot
+    // arrive before then, and the stash is empty in time iff
+    //
+    //     NUM_MINERS - 1 <= THROUGHPUT - 1    i.e.   NUM_MINERS <= THROUGHPUT
+    //
+    // At NUM_MINERS=4, THROUGHPUT=4 that holds EXACTLY -- the stash empties on
+    // the same cycle the next batch could arrive. The guard below checks that
+    // inequality rather than a hardcoded 2, because the 2 was only ever a
+    // proxy for it.
     // ---------------------------------------------------------------
     // Elaboration-time guard for the limit described above. Instantiating a
     // module that does not exist is the portable way to stop a build with a
     // name that says why -- $fatal in an initial block would fire only in
     // simulation, not synthesis.
-    // ALLOW_LOSSY_MULTI_MINER is an EXPERIMENT ESCAPE HATCH and defaults to
-    // refusing. Only hdl/mux4 sets it, and only because what that build exists
-    // to produce is a clk_2x WNS number, not shares: per
-    // hdl/odocrypt/IMPLEMENTATION-REVIEW.md the muxed hashrate is exactly
-    // clk_2x / 2, so one timing figure decides whether the transform is worth
-    // anything at all. A discarded third nonce does not move that figure, and
-    // the bitstream is not going near a pool.
-    //
-    // DO NOT SET THIS ON ANYTHING ANYONE MIGHT MINE ON. The loss is real: with
-    // four cores in lockstep, a cycle where three strobe together discards the
-    // third nonce. It is counted in `lost` rather than dropped silently, so it
-    // is at least visible -- but at a 1-in-256 target that is a real share
-    // thrown away, and the fix is to widen the scan and the stash above, not
-    // to set this.
+    // ALLOW_LOSSY_MULTI_MINER remains an EXPERIMENT ESCAPE HATCH, and since
+    // the collector was widened there is no longer a reason to set it. It is
+    // kept only so that a deliberate over-subscription (NUM_MINERS >
+    // THROUGHPUT) can still be built to measure something, and it is still
+    // lossy when it is: past that ratio the stash cannot drain between
+    // batches. DO NOT SET IT ON ANYTHING ANYONE MIGHT MINE ON.
     generate
-        if (NUM_MINERS > 2 && !ALLOW_LOSSY_MULTI_MINER) begin : g_too_many_miners
-            FOUND_PATH_SUPPORTS_AT_MOST_2_MINERS_SEE_COMMENT bad();
+        if (NUM_MINERS > THROUGHPUT && !ALLOW_LOSSY_MULTI_MINER)
+        begin : g_too_many_miners
+            FOUND_PATH_NUM_MINERS_EXCEEDS_THROUGHPUT_SEE_COMMENT bad();
         end
     endgenerate
 
+    // Every core is scanned, not just the first two. hit[] is packed: hit[0]
+    // is the lowest-numbered core that found this cycle, and `hits` counts
+    // them.
+    localparam integer STASH_DEPTH = (NUM_MINERS > 1) ? (NUM_MINERS - 1) : 1;
+
     integer    fpi;
-    reg [2:0]  hits;
-    reg [31:0] hit_first, hit_second;
+    reg [3:0]  hits;
+    reg [31:0] hit [0:NUM_MINERS-1];
 
     always @* begin
-        hits       = 3'd0;
-        hit_first  = 32'h0;
-        hit_second = 32'h0;
+        hits = 4'd0;
+        for (fpi = 0; fpi < NUM_MINERS; fpi = fpi + 1) hit[fpi] = 32'h0;
         for (fpi = 0; fpi < NUM_MINERS; fpi = fpi + 1) begin
             if (found_in[fpi] & report_ok) begin
-                if (hits == 3'd0)      hit_first  = nonce_in_flat[32*fpi +: 32];
-                else if (hits == 3'd1) hit_second = nonce_in_flat[32*fpi +: 32];
-                hits = hits + 3'd1;
+                hit[hits] = nonce_in_flat[32*fpi +: 32];
+                hits      = hits + 4'd1;
             end
         end
     end
@@ -171,9 +178,9 @@ module found_path #(
     // ---------------------------------------------------------------
     // FIFO + one-entry stash.
     //
-    // The stash exists only to absorb the second of two simultaneous finds:
-    // one entry is provably enough, because a core cannot produce another
-    // result for THROUGHPUT cycles and the stash drains on the very next one.
+    // The stash absorbs everything that cannot enter the FIFO this cycle.
+    // NUM_MINERS-1 entries is provably enough -- see the proof above the
+    // collector. It drains one per cycle, oldest first.
     // ---------------------------------------------------------------
     reg [31:0]       fifo_mem [0:FIFO_DEPTH-1];
     reg [FIFO_AW:0]  wr_ptr = 0;
@@ -183,49 +190,58 @@ module found_path #(
     wire             empty  = (wr_ptr == rd_ptr);
 
     reg [7:0]  lost  = 8'h0;
-    reg        pend_valid = 1'b0;
-    reg [31:0] pend_nonce = 32'h0;
+    reg [31:0] stash [0:STASH_DEPTH-1];
+    reg [3:0]  stash_n = 4'd0;
 
     assign fifo_count = count;
     assign lost_count = lost;
 
     reg        push_en;
     reg [31:0] push_dat;
-    reg        stash_nxt_valid;
-    reg [31:0] stash_nxt_dat;
-    reg [2:0]  lost_inc;
+    reg [31:0] stash_nxt [0:STASH_DEPTH-1];
+    reg [3:0]  stash_nxt_n;
+    reg [3:0]  first_new;
+    reg [3:0]  lost_inc;
+    integer    k;
 
     always @* begin
-        push_en         = 1'b0;
-        push_dat        = 32'h0;
-        stash_nxt_valid = pend_valid;
-        stash_nxt_dat   = pend_nonce;
-        lost_inc        = 3'd0;
+        push_en     = 1'b0;
+        push_dat    = 32'h0;
+        lost_inc    = 4'd0;
+        first_new   = 4'd0;
+        stash_nxt_n = stash_n;
+        for (k = 0; k < STASH_DEPTH; k = k + 1) stash_nxt[k] = stash[k];
 
-        if (pend_valid && !full) begin
-            // The stash is older than anything arriving this cycle, so it goes
-            // in first. The slot it frees can take one of this cycle's finds
-            // in the same cycle.
-            push_en         = 1'b1;
-            push_dat        = pend_nonce;
-            stash_nxt_valid = 1'b0;
-            if (hits != 3'd0) begin
-                stash_nxt_valid = 1'b1;
-                stash_nxt_dat   = hit_first;
-                lost_inc        = hits - 3'd1;
+        if (!full) begin
+            if (stash_n != 4'd0) begin
+                // The stash is older than anything arriving this cycle, so it
+                // goes in first and everything new queues behind it.
+                push_en  = 1'b1;
+                push_dat = stash[0];
+                for (k = 0; k < STASH_DEPTH - 1; k = k + 1)
+                    stash_nxt[k] = stash[k+1];
+                stash_nxt_n = stash_n - 4'd1;
+            end else if (hits != 4'd0) begin
+                // Nothing held over: this cycle's first find goes straight in
+                // and only the rest need stashing.
+                push_en   = 1'b1;
+                push_dat  = hit[0];
+                first_new = 4'd1;
             end
-        end else if (!pend_valid && (hits != 3'd0) && !full) begin
-            push_en  = 1'b1;
-            push_dat = hit_first;
-            if (hits > 3'd1) begin
-                stash_nxt_valid = 1'b1;
-                stash_nxt_dat   = hit_second;
-                lost_inc        = hits - 3'd2;
+        end
+        // Everything this cycle that did not go straight into the FIFO queues
+        // in the stash. Only what will not fit is lost -- which, per the proof
+        // above, cannot happen while NUM_MINERS <= THROUGHPUT and the FIFO has
+        // room.
+        for (k = 0; k < NUM_MINERS; k = k + 1) begin
+            if (k >= first_new && k < hits) begin
+                if (stash_nxt_n < STASH_DEPTH[3:0]) begin
+                    stash_nxt[stash_nxt_n] = hit[k];
+                    stash_nxt_n            = stash_nxt_n + 4'd1;
+                end else begin
+                    lost_inc = lost_inc + 4'd1;
+                end
             end
-        end else begin
-            // Full, or full with the stash still occupied: nothing arriving
-            // this cycle can be taken.
-            lost_inc = hits;
         end
     end
 
@@ -242,7 +258,7 @@ module found_path #(
             // the single most useful number for spotting that finds are being
             // dropped on the floor.
             wr_ptr     <= 0;
-            pend_valid <= 1'b0;
+            stash_n    <= 4'd0;
             lost       <= 8'h0;
         end else if (commit) begin
             // FLUSH ON COMMIT. Anything queued was found against the PREVIOUS
@@ -260,17 +276,17 @@ module found_path #(
             // driver -- both see this same commit edge, so the two pointers
             // land back at 0 together and the FIFO reads empty.
             wr_ptr     <= 0;
-            pend_valid <= 1'b0;
+            stash_n    <= 4'd0;
         end else begin
             if (push_en) begin
                 fifo_mem[wr_ptr[FIFO_AW-1:0]] <= push_dat;
                 wr_ptr <= wr_ptr + 1'b1;
             end
-            pend_valid <= stash_nxt_valid;
-            pend_nonce <= stash_nxt_dat;
+            stash_n <= stash_nxt_n;
+            for (k = 0; k < STASH_DEPTH; k = k + 1) stash[k] <= stash_nxt[k];
         end
 
-        if (lost_inc != 3'd0 && !commit && !soft_reset) begin
+        if (lost_inc != 4'd0 && !commit && !soft_reset) begin
             // Saturating. A loss counter that wraps reads as "no losses" once
             // every 256 of them, which is worse than not having one.
             if ({1'b0, lost} + {6'd0, lost_inc} >= 9'd255) lost <= 8'hFF;

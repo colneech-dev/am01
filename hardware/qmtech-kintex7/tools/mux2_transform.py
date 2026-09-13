@@ -91,7 +91,7 @@ def main(src_path, dst_path):
     # result landing in the slot whose address produced it.
     chain = ["        a_q1     <= mem[a_addr];",
              "        b_q1     <= mem[b_addr];",
-             "        phase_q1 <= phase;"]
+             "        phase_q1 <= phase_a[0];"]
     for i in range(2, K + 1):
         chain.append(f"        a_q{i}     <= a_q{i - 1};")
         chain.append(f"        b_q{i}     <= b_q{i - 1};")
@@ -107,6 +107,10 @@ def main(src_path, dst_path):
 module encrypt_4sbox_large{idx}_mux2(clk2x, phase,
                                      s0_a_in, s0_b_in, s0_a_out, s0_b_out,
                                      s1_a_in, s1_b_in, s1_a_out, s1_b_out);
+    // `phase` is unused unless MUX_PHASE_FROM_PORT is defined. The port
+    // and the plumbing down through apply_sboxes/full_round/encrypt_loop
+    // are kept so that revert is a -D and not a regeneration. Vivado trims
+    // the dead global net in the default build.
     input clk2x, phase;
     input [9:0] s0_a_in, s0_b_in, s1_a_in, s1_b_in;
     output reg [9:0] s0_a_out, s0_b_out, s1_a_out, s1_b_out;
@@ -114,8 +118,58 @@ module encrypt_4sbox_large{idx}_mux2(clk2x, phase,
     (* ram_style = "block" *)
     reg [9:0] mem[0:1023];
 
-    wire [9:0] a_addr = phase ? s1_a_in : s0_a_in;
-    wire [9:0] b_addr = phase ? s1_b_in : s0_b_in;
+    // LOCAL interleave phase, generated here rather than broadcast to all
+    // 840 muxed boxes from one register in the wrapper. That broadcast cost
+    // 1.326ns of a 2.766ns clk_2x critical path in pure routing -- more than
+    // half the path, spent distributing one bit -- and that was AFTER Vivado
+    // replicated the source register fourteen times, each replica still
+    // driving 202 loads. The actual muxing is one LUT3 at 0.322ns.
+    //
+    // Safe for two independent reasons:
+    //
+    //  1. These cannot drift. INIT=0, clocked by clk2x, no enable and no
+    //     reset: two such flops start identical and flip on identical edges.
+    //  2. Even if they did, it would not matter. Each box owns its own
+    //     `mem` -- boxes never share a table with each other -- and nothing
+    //     outside a box consumes phase, so a box out of step with its
+    //     neighbours is exactly the +pinv=1 case that ../sim/
+    //     run_encrypt_equiv.sh already measures as benign.
+    //
+    // Replicated BY HAND because DONT_TOUCH stops Vivado both from merging
+    // these back into one net (equivalent-register removal would happily
+    // undo the whole change) and from replicating them itself.
+`ifdef MUX_PHASE_FROM_PORT
+    // Revert: drive the address muxes from the broadcast phase again.
+    wire [9:0] phase_a = phase ? 10'h3ff : 10'h000;
+    wire [9:0] phase_b = phase ? 10'h3ff : 10'h000;
+`else
+    // ONE FLOP PER ADDRESS BIT. Twenty per box, not two.
+    //
+    // Per-port flops measured clk_2x 305.53 MHz, and left the phase net at
+    // 1.344ns on a fanout of ELEVEN -- the flop placed eleven rows from the
+    // LUT3 reading it, on a device at 94% BRAM and 81% LUT. At fanout 1 each
+    // flop can pack into the same slice as its LUT, which is the only way to
+    // stop the placer separating them.
+    (* DONT_TOUCH = "TRUE" *) reg [9:0] phase_a = 10'h000;
+    (* DONT_TOUCH = "TRUE" *) reg [9:0] phase_b = 10'h000;
+    always @(posedge clk2x) begin
+`ifdef MUX_PHASE_STUCK
+        // NEGATIVE CONTROL -- slot 1 is never serviced. MUST break the
+        // equivalence check; if it does not, the check proves nothing.
+        phase_a <= 10'h000;
+        phase_b <= 10'h000;
+`else
+        phase_a <= ~phase_a;
+        phase_b <= ~phase_b;
+`endif
+    end
+`endif
+
+    // Bitwise, not a ternary, so the ten selects are ten distinct nets by
+    // construction rather than by the synthesiser's choice. Same LUT3 per
+    // bit either way.
+    wire [9:0] a_addr = (s1_a_in & phase_a) | (s0_a_in & ~phase_a);
+    wire [9:0] b_addr = (s1_b_in & phase_b) | (s0_b_in & ~phase_b);
 
     reg [9:0] {decl_q};
     reg {decl_p};

@@ -56,11 +56,22 @@
 // muxing below. The BRAM itself has margin (458 MHz rated); the muxes are
 // the thing to watch.
 //
-// PHASE CONVENTION
-// ----------------
-// `phase` is asserted for the clk2x cycle that aligns with clk_h low, and
-// is generated once per design (not per S-box) so every muxed S-box
-// interleaves identically -- see sbox_mux_phase_gen at the bottom.
+// PHASE CONVENTION -- SUPERSEDED IN THE BUILT DESIGN
+// -------------------------------------------------
+// `phase` is asserted for the clk2x cycle that aligns with clk_h low. This
+// prototype takes it as an input, generated once per design by
+// sbox_mux_phase_gen at the bottom, and tb_sbox_mux2.v drives it that way.
+//
+// THE SHIPPING PATH DOES NOT. tools/mux2_transform.py emits its own ten
+// muxed tables (vivado/build_mux4.tcl notes this file is not referenced),
+// and those generate the phase INSIDE each box. Broadcasting it cost 1.326ns
+// of a 2.766ns clk_2x critical path in pure routing -- see
+// ../../../hdl/odocrypt/IMPLEMENTATION-REVIEW.md section 4e.
+//
+// The "must be one phase per design" rule below does not hold either way:
+// each box owns its own table and nothing outside a box reads phase, so
+// boxes never need to agree with each other. ../sim/run_encrypt_equiv.sh
+// measures an inverted phase as a benign relabelling.
 //
 // STATUS: prototype, MEASURED, and the result is a partial win with a
 // hard architectural ceiling. Read this before building on it.

@@ -95,16 +95,18 @@ derive('odocrypt_gpio_wrapper.v', 'odocrypt_gpio_wrapper_mux4.v', [
      '            miner_pipelined #(',
      '        for (gi = 0; gi < NUM_MINERS; gi = gi + 1) begin : g_miner\n'
      '            miner_pipelined_mux4 #(', 'miner module'),
-    # found_path refuses NUM_MINERS > 2 by default, because with four cores a
-    # cycle where three strobe together discards the third nonce. This build
-    # exists to produce a clk_2x WNS figure -- muxed hashrate is exactly
-    # clk_2x / 2 -- and a lost nonce does not move a timing number, so the
-    # experiment opts in explicitly. It goes HERE rather than in the generated
-    # file, which the last attempt proved: a hand edit there is silently
-    # removed the next time this runs.
-    ('        .SETTLE_CYCLES(SETTLE_CYCLES_P),',
-     '        .ALLOW_LOSSY_MULTI_MINER(1),   // EXPERIMENT -- never on a mining build\n'
-     '        .SETTLE_CYCLES(SETTLE_CYCLES_P),', 'found_path opt-in'),
+    # NO LONGER NEEDED. found_path used to refuse NUM_MINERS > 2 because its
+    # collector scanned the first two finds and stashed one overflow, so with
+    # four cores a cycle where three strobed together discarded the third
+    # nonce. On 2026-09-12 the collector was widened to a full NUM_MINERS-1
+    # stash, and the guard now checks NUM_MINERS <= THROUGHPUT -- which 4 and
+    # 4 satisfy -- so a four-instance build keeps every simultaneous find and
+    # needs no escape hatch.
+    #
+    # Do NOT reinstate this to silence an elaboration error. That error means
+    # the stash cannot drain between batches, and the finds it is warning
+    # about are real shares. sim/tb_found_path_multi.v's T4 control measures
+    # exactly that loss.
 
     ('            ) miner_inst (\n'
      '                .clk   (clk_h),',
@@ -116,7 +118,6 @@ derive('odocrypt_gpio_wrapper.v', 'odocrypt_gpio_wrapper_mux4.v', [
     ('module odocrypt_gpio_wrapper_mux4', 'renamed module'),
     ('NUM_MINERS = %d' % MUX_MINERS, 'the requested instance count'),
     ('miner_pipelined_mux4', 'muxed miner'),
-    ('ALLOW_LOSSY_MULTI_MINER', 'found_path experiment opt-in'),
 ])
 
 # The phase register, next to the miner bank.
@@ -126,11 +127,20 @@ anchor = '    wire [NUM_MINERS-1:0] found_arr;'
 if s.count(anchor) != 1:
     raise SystemExit('phase-gen anchor matched %d times' % s.count(anchor))
 s = s.replace(anchor,
-              "    // ONE phase for the whole design, not one per S-box. Every muxed\n"
-              "    // S-box has to interleave identically: two that were out of step\n"
-              "    // would drive the same table in the same clk2x window and read\n"
-              "    // each other's addresses. Toggling on clk_2x makes it high for\n"
-              "    // exactly the half of each clk_h period that serves slot 1.\n"
+              "    // FALLBACK phase. Each muxed S-box generates its own now -- see\n"
+              "    // tools/mux2_transform.py -- because broadcasting this one bit to\n"
+              "    // 840 boxes cost 1.326ns of a 2.766ns clk_2x critical path in pure\n"
+              "    // routing, more than half the path, and that was after Vivado had\n"
+              "    // already replicated the register fourteen times.\n"
+              "    //\n"
+              "    // This register survives only so that defining MUX_PHASE_FROM_PORT\n"
+              "    // reverts to the broadcast design without regenerating anything.\n"
+              "    // Vivado trims it otherwise: the port it drives is unread.\n"
+              "    //\n"
+              "    // The boxes do NOT need to agree with each other. Each owns its own\n"
+              "    // table and nothing outside a box reads phase, so a box out of step\n"
+              "    // is just that box inverted -- the case sim/run_encrypt_equiv.sh\n"
+              "    // measures as benign. They agree anyway, by construction.\n"
               "    reg sbox_mux_phase = 1'b0;\n"
               "    always @(posedge clk_2x)\n"
               "        sbox_mux_phase <= ~sbox_mux_phase;\n"
@@ -146,8 +156,30 @@ derive('am01_qmtech_top.v', 'am01_qmtech_top_mux4.v', [
      '    odocrypt_gpio_wrapper_mux4 odocrypt_gpio_wrapper_inst (\n'
      '        .bus_clk   (bus_clk),\n'
      '        .clk_2x    (clk_2x),', 'wrapper instantiation'),
+
+    # Clock the experiment at what it CLOSES at, not at the shipping design's
+    # 400 MHz clk_2x. The per-bit phase build measured clk_2x 323.10 MHz; at
+    # MULT 24 the fabric would be driven 24% past that, which does not give a
+    # slower miner, it gives wrong digests -- which is why no mux4 bitstream
+    # has been flashable regardless of its hold violations.
+    #
+    #   MULT 16 / DIVIDE_2X 3 -> VCO 800 (inside the -1 grade's 600-1200)
+    #                            clk_2x 266.67 MHz, clk_h 133.33 MHz
+    #                            = 133.3 MH/s, +33% on shipping
+    #
+    # Vivado derives clkout0_unbuf/clkout1_unbuf from the MMCM, so the timing
+    # TARGETS follow this automatically -- there is no XDC period to update.
+    #
+    # SHIPPING KEEPS MULT 24 / 200 MHz. That is validated hardware; 225 MHz
+    # closes timing and then mislabels ~36% of finds.
+    ('    clk_gen_hash clk_gen_hash_inst (',
+     '    clk_gen_hash #(\n'
+     '        .CLKFBOUT_MULT  (16),   // VCO 800MHz\n'
+     '        .CLKOUT_DIVIDE_2X(3)    // clk_2x 266.67, clk_h 133.33\n'
+     '    ) clk_gen_hash_inst (', 'MMCM retune for the muxed build'),
 ], [
     ('module am01_qmtech_top_mux4', 'renamed top'),
+    ('CLKFBOUT_MULT  (16)', 'the MMCM retune'),
     ('.clk_2x    (clk_2x),', 'clk_2x connected'),
 ])
 

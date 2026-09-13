@@ -219,6 +219,465 @@ than assuming either way.
 
 ---
 
+## 4d. Three instances, and what the timing report actually said
+
+Section 4b measured four. Three was built to get a second point on the curve,
+because one number is not a curve:
+
+| | clk_2x | clk_h | BRAM | overlaps after place | hashrate |
+|---|---|---|---|---|---|
+| stock, 2 inst | — | 200.0 | 840 (94.4%) | — | 100.0 MH/s |
+| mux, 3 inst | 286.45 | 176.40 | 630 (70.8%) | 7,814 | 107.4 MH/s |
+| mux, 4 inst | 261.57 | 176.09 | 840 (94.4%) | 80,651 | 130.8 MH/s |
+
+**Four instances win, and the reason is the surprise.** Section 4b predicted
+three might beat four if congestion relief bought more than 33% on the clock.
+It bought 9.5% on `clk_2x` — and **`clk_h` did not move at all**, 176.40
+against 176.09, despite an order of magnitude fewer overlaps.
+
+`clk_h` being flat across a 33% change in device occupancy is the direct
+confirmation of section 3: the 640-bit permutation sets `clk_h`, not
+congestion, so emptying the device does not speed it up. Only `clk_2x`
+responded, and only slightly.
+
+---
+
+## 4e. The clk_2x critical path is not the S-box — it is the phase
+
+Having two builds made it worth reading the timing report rather than just
+the WNS number. The mux3 worst path on `clk_2x`:
+
+```
+Slack (VIOLATED) : -0.991ns
+  Source:      odocrypt_gpio_wrapper_inst/sbox_mux_phase_reg_replica_14/C
+  Destination: .../round12/sboxes/sbox20inst_sbox23inst_mux/a_q1_reg/ADDRARDADDR[6]
+  Requirement:      2.500ns
+  Data Path Delay:  2.766ns  (logic 0.322ns 11.6%  route 2.444ns 88.4%)
+  Logic Levels:     1  (LUT3=1)
+
+  sbox_mux_phase_repN_14_alias   fo=202   1.326ns
+  a_addr[2]                      fo=1     1.118ns
+```
+
+**Over half the critical path is distributing the phase-select bit** — and
+that is after Vivado has already replicated the source register fourteen
+times, each replica still driving 202 loads. The actual muxing is one LUT3 at
+0.322 ns. The design was not S-box limited on `clk_2x`; it was limited by
+broadcasting a one-bit signal that every site can generate for itself.
+
+### The fix, and why the objection to it does not hold
+
+The wrapper's comment insisted on one global phase: *"two that were out of
+step would drive the same table in the same clk2x window and read each
+other's addresses."* That conflates **must be in step** with **must be the
+same net**, and on inspection neither half survives:
+
+* A toggle flop with `INIT=0`, clocked by `clk_2x`, with no enable and no
+  reset **cannot** drift from another one. They start identical at
+  configuration and flip on identical edges. Lockstep is a property of the
+  construction, not of the wire.
+* Lockstep is not even required. Each muxed box instantiates its **own**
+  `mem` — no two boxes share a table — and nothing outside a box reads
+  `phase`. A box out of step with its neighbours is simply that box with an
+  inverted phase, which `sim/run_encrypt_equiv.sh`'s `+pinv=1` run already
+  **measures** as a benign relabelling.
+
+So `tools/mux2_transform.py` now emits the phase inside each box: two
+hand-replicated `DONT_TOUCH` flops, one for each address mux, at fanout ~11
+instead of 202. Cost is ~1,680 flops of 407,600, or **0.4%**.
+
+`DONT_TOUCH` is load-bearing, not decoration. Without it these are 840
+sequential elements with identical behaviour, and Vivado's
+equivalent-register removal is entitled to merge them straight back into the
+one net the change exists to delete. It is applied by hand to both copies
+because the same attribute also stops the tool replicating them itself.
+
+### What this is worth, stated as a prediction
+
+Removing 1.326 ns of pure route leaves ~1.44 ns of data path. Where the next
+critical path lands is **unknown** — it may be somewhere else entirely and
+cap the clock well below the arithmetic below. But the ceiling being chased:
+
+    hashrate = BRAM × f_bram / 1680        (section 4c: /840 when muxed)
+
+    840 BRAM at the RAMB18 -1 limit (~388 MHz)  ->  194 MH/s
+
+Against the 130.8 MH/s that four muxed instances measure today, and 100 MH/s
+shipping. **If it reached the BRAM limit that is the factor of two that
+sections 3, 4c and 6 could not find anywhere else** — and unlike every
+closed door in those sections, it costs no extra bandwidth, no extra
+latency and no extra block RAM. Landing halfway is still +25% on top of the
++31%.
+
+### MEASURED, 2026-09-11 — +16.8% on clk_2x
+
+Built (12h46m, against 9h23m for the broadcast version) and proved equivalent
+first: 439 defined cycles bit-identical, with the negative control failing all
+439.
+
+```
+                      clk_2x        clk_h cap     hashrate
+shipping, 2 inst         —          200.0 MHz     100.0 MH/s
+mux4, broadcast       261.57 MHz    176.09        130.8 MH/s
+mux4, LOCAL phase     305.53 MHz    175.53        152.8 MH/s
+```
+
+`clk_2x` is what binds — the MMCM derives `clk_h = clk_2x / 2`, and 152.77 is
+well under the 175.53 that `clk_h`'s own paths would allow. So the muxed
+hashrate is `clk_2x / 2`, as section 4b had it.
+
+**+16.8% over the broadcast phase, +52.8% over the shipping bitstream.** Cost
+was 1,680 flops: LUTs went 80.51% → 81.37%, block RAM unchanged at 94.38%.
+
+The congestion price was real but paid in build time rather than in the
+result: peak overlaps rose 80,651 → 103,039 and one global routing iteration
+took 2h50m. It converged.
+
+### The path moved — but only by one hop
+
+The new `clk_2x` critical path, at 2.462 ns of a 2.500 ns budget:
+
+```
+Source:      .../round17/sboxes/sbox20inst_sbox23inst_mux/phase_b_reg/C
+Destination: .../round17/sboxes/sbox20inst_sbox23inst_mux/a_q1_reg/ADDRBWRADDR[12]
+Logic Levels: 1  (LUT3=1)
+
+  phase_b_reg/Q  FDRE            0.269ns   SLICE_X24Y99
+  net phase_b    fo=11, routed   1.344ns   <-- still the phase
+  LUT3                           0.053ns   SLICE_X23Y110
+  net b_addr[8]  fo=1,  routed   0.796ns
+  RAMB18                                   RAMB18_X1Y47
+```
+
+Same source and destination *inside one box* now — no cross-chip broadcast
+left. But **the phase net is still 1.344 ns at fanout 11**, because the placer
+put the flop at `Y99` and the LUT3 that reads it at `Y110`, eleven rows away.
+At 94% block RAM and 81% LUT there may simply be no slice free beside the
+BRAM.
+
+So this is no longer a fanout problem, it is a **placement** one, and the
+obvious next step is to remove the placer's freedom to get it wrong:
+replicate the phase flop **per address bit** rather than per port. Each of the
+ten LUT3s per port then has its own fanout-1 flop that can pack into the same
+slice. Cost rises to ~16,800 flops (4.1% of registers), still cheap.
+
+Rough arithmetic: if that net fell to ~0.1 ns the path would be ~1.22 ns
+against a 2.5 ns budget — at which point something else entirely becomes
+critical, and the RAMB18's own ~388 MHz is the backstop (194 MH/s). NOT a
+prediction: two builds have now moved the critical path without either
+landing where the previous one's arithmetic suggested.
+
+### Still not shippable, for the reason section 4b gave
+
+`WHS` is **negative on both clocks** (-0.379, -0.412) — as it was on the
+broadcast mux4 (-0.393) and mux3 (-0.338). Hold violations do not go away by
+slowing the clock. That, plus `found_path` discarding a third simultaneous
+find unless `ALLOW_LOSSY_MULTI_MINER` is set, is what stands between this
+number and a bitstream worth flashing.
+
+### Testing it required repairing the test first
+
+`run_encrypt_equiv.sh` drove its negative control through the `phase` **port**
+(`+pstuck=1`). A box that generates its own phase ignores that port, so the
+run that MUST FAIL would have started passing — quietly turning the control
+into a rubber stamp and making the positive run's PASS worthless. The
+configurations are compile-time now, one binary each:
+
+```
+(no define)             local phase, as shipped     -- must PASS
+-DMUX_PHASE_STUCK       local phase held at 0       -- must FAIL
+-DMUX_PHASE_FROM_PORT   broadcast phase, +pinv=1    -- expected to pass
+```
+
+The third also keeps the revert honest: the broadcast design is one `-D`
+away, not a regeneration, and the run proves it still builds a working core.
+
+---
+
+## 4f. Where the remaining speed is — reviewed 2026-09-11
+
+### First, a correction: the ceiling is 175.5 MH/s, not 194
+
+Section 4e said the mux was chasing ~194 MH/s, from the RAMB18's ~388 MHz
+rating. That is the ceiling on `clk_2x` alone. It is **not** the first limit
+the design meets, because the muxed hashrate is:
+
+    hashrate = clk_h = min( clk_2x / 2 , whatever clk_h's OWN paths close at )
+
+and the second term is measured at **175.53 MHz** (`clkout1_unbuf`, WNS
+-0.697 against a 5.000 ns target). So:
+
+```
+clk_2x    | clk_2x / 2 | clk_h paths | hashrate
+261.57    |   130.8    |   176.09    |  130.8     mux4, broadcast phase
+305.53    |   152.8    |   175.53    |  152.8     mux4, local phase  <- today
+351.06    |   175.5    |   175.53    |  175.5     the crossover
+400.00    |   200.0    |   175.53    |  175.5     clk_h now binds
+388 (BRAM)|   194.0    |   175.53    |  175.5     and still binds
+```
+
+**Above `clk_2x` = 351 MHz, further `clk_2x` work buys nothing.** The honest
+ceiling for this architecture on this part is **175.5 MH/s (+75% on shipping)**,
+and the last 15% of it needs `clk_h` work, not more phase tuning.
+
+Worth knowing now rather than after another 12-hour build.
+
+### Lever 1 — finish the clk_2x job (152.8 -> 175.5, +15%)
+
+Needs `clk_2x` 351. Today 305.53, so a further +15% on a path that is 86–88%
+routing. Two things to spend:
+
+* **Per-address-bit phase replication.** Building 2026-09-11. Targets the
+  1.344 ns fanout-11 phase net directly; see 4e.
+* **Register the muxed address — and pay for it with a stage already there.**
+  The remaining path after the phase net is
+  `LUT3 -> b_addr[8] (0.796 ns) -> RAMB18`. Putting a register between the
+  mux LUT and the block RAM splits that path in two. It normally costs a
+  cycle, which would break the latency match that section 4e's generator is
+  careful to preserve — but the muxed box ALREADY carries a shift register
+  (`a_q1..a_q3`) whose only job is padding latency to the stock core's
+  2 clk_h. Move one stage from after the BRAM to before it and the total is
+  unchanged at four clk2x stages. Cost is 20 flops per box, the same order as
+  the phase replication, and no latency change at all.
+
+  NOT YET TRIED. The phase chain feeding the output demux has to be realigned
+  by the same one stage or the demux selects the wrong slot — which is the
+  class of bug that produced permanently-X output on 2026-09-04.
+
+### Lever 2 — clk_h, which is the actual ceiling
+
+`clk_h`'s worst path is not the permutation this time:
+
+```
+Source:      .../round16/sboxes/sbox56inst_sbox59inst_mux/s0_a_out_reg[0]/C
+Destination: .../crypter/state_reg[17][38]/D
+Data Path Delay: 2.701ns  (logic 0.375ns 13.9%  route 2.326ns 86.1%)
+Logic Levels: 2  (LUT2=1 LUT6=1)
+```
+
+The source is a muxed box's **output register, which is clocked on `clk_2x`**,
+and the destination is the state register on `clk_h`. So the binding `clk_h`
+path is a `clk_2x` -> `clk_h` handoff created by the mux itself, not by
+OdoCrypt. 2.701 ns of data against a 5.000 ns period, and it still misses —
+the launch edge is a `clk_2x` edge, so the path does not get the full `clk_h`
+period.
+
+That suggests the demux output registers want to be on `clk_h`, or to be
+followed by a `clk_h` re-register, so the permutation sees a full period.
+Both change latency and both need the equivalence gate. UNMEASURED, and it is
+the only idea here that attacks the 175.5 ceiling rather than the gap to it.
+
+Note this is a mux-specific path. Section 3's finding that `clk_h` is
+wire-limited by the 640-bit permutation still stands for the STOCK design,
+and mux3-vs-mux4 confirmed it (176.40 vs 176.09 across a 33% change in
+occupancy). What is new is that in the MUXED design something else got there
+first.
+
+### Lever 3 — the 50 spare block RAMs
+
+840 of 890 are used, 420 tiles of 445. The remaining 50 RAMB18 would be
++6% if they could be filled, but a fifth miner needs 210. Dead end at this
+granularity; noted so it is not re-examined.
+
+### Lever 4 — silicon
+
+An XC7K325T in a **-2** speed grade is roughly 10–15% faster on the same
+netlist, and unlike everything above it needs no RTL, no equivalence run and
+no 12-hour build. It costs money and a board swap. Mentioned because at some
+point it is cheaper than engineering time.
+
+### What is NOT a lever, restated
+
+`THROUGHPUT` and unrolling cancel out of the law (section 2). More instances
+do not raise `clk_h` (mux3 vs mux4). Reducing the 1680 constant needs the
+mux, which is already taken (4c). Configurable epochs cost 78% (section 5).
+
+### And the two things that gate ANY of this reaching the board
+
+1. **Hold violations.** -0.048 ns and -0.132 ns, flop-to-flop on one clock,
+   so caused by skew and NOT fixed by slowing the clock. Every muxed build
+   has them; no shipping build does.
+2. **`found_path` drops a third simultaneous find** unless
+   `ALLOW_LOSSY_MULTI_MINER` is set, which is an experiment flag.
+
+A faster number that cannot be flashed is worth less than 15% on one that
+can. If the per-bit build lands well, these two are the next work, not
+another clock experiment.
+
+---
+
+## 4g. The hold violations, diagnosed — 2026-09-12
+
+Chased before spending another 15-hour build, on the grounds that if they are
+unfixable then every clock experiment above is moot. They are diagnosable, and
+the answer reframes the whole mux effort.
+
+### They are almost entirely on the clk_h <-> clk_2x boundary
+
+```
+Intra Clock Table
+  clkout0_unbuf (clk_2x)   WNS -0.447   hold failing:     7 of 119,379
+  clkout1_unbuf (clk_h)    WNS -0.194   hold failing:    12 of 129,278
+
+Inter Clock Table
+  clkout1 -> clkout0       WNS -0.595   hold failing: 5,937 of  16,800
+  clkout0 -> clkout1       WNS -0.480   hold failing: 6,608 of  53,676
+```
+
+**12,545 of the 12,564 failing hold endpoints are crossings between the two
+clocks.** Intra-clock hold is 19 endpoints and essentially clean.
+
+The same is true of setup. The design's reported WNS of -0.595 is an
+INTER-clock number; the intra-`clk_2x` path I have been optimising for two
+builds is -0.447. The phase work was real and the frequency gains are real,
+but the binding constraint was never the S-box address path.
+
+### The mechanism: two BUFGs with different insertion delays
+
+A representative failing hold path, clk_2x launching into clk_h:
+
+```
+Data Path Delay:     0.193ns
+Clock Path Skew:     0.331ns (DCD - SCD - CPR)
+  Destination Clock Delay (DCD):  4.956ns   BUFGCTRL_X0Y0  bufg_clk_h
+  Source Clock Delay      (SCD):  4.084ns   BUFGCTRL_X0Y1  bufg_clk_2x
+  Clock Pessimism Removal (CPR):  0.542ns
+```
+
+The data takes 0.193 ns. The clock edge it races takes 0.331 ns longer to
+arrive at the destination than at the source. Data wins the race, which is
+exactly what a hold violation is. `clk_h` and `clk_2x` leave the same MMCM
+and then travel through **two different BUFGs** on two different global
+networks, one of them carrying 55,538 loads.
+
+### Why a phase shift will not rescue it
+
+The obvious cheap fix is `CLKOUT1_PHASE` — shift `clk_h` to cancel the
+offset. It does not work, and the table above says why: **both directions
+fail hold.** `clkout1 -> clkout0` and `clkout0 -> clkout1` are each losing
+the race, which a single global offset cannot both fix. Insertion delay
+varies by die location across a 55,538-load network, so the skew is
+position-dependent in sign, not a constant.
+
+Nor is it congestion alone. mux3 sat at 70.8% block RAM with room to spare and
+still reported -0.338.
+
+### The structural fix: one clock and a clock enable
+
+Delete the second clock domain. Run everything on `clk_2x`, and give the
+former `clk_h` registers a clock enable that is high every other cycle.
+Then:
+
+* all 70,476 crossings become ordinary same-clock paths, and the BUFG skew
+  that causes the hold failures no longer exists on them;
+* the permutation logic still gets two `clk_2x` periods, declared as
+  `set_multicycle_path 2 -setup` / `1 -hold` rather than implied by a second
+  clock;
+* `bufg_clk_h` disappears entirely.
+
+Arithmetic for the prize, if the inter-clock paths go away and the intra-clock
+ones stay where they are: WNS becomes -0.447, achievable period 2.947 ns,
+`clk_2x` **339.3 MHz -> 169.6 MH/s**, and the hold failures that stop it being
+flashed go with it.
+
+NOT a small change. Every former `clk_h` register needs the enable, the
+enable itself is a high-fanout net with the same distribution problem the
+phase had (though a multicycle path gives it far more slack), and the
+transform, the wrapper and the XDC all move together. It is, though, the
+first idea in this whole line of work that attacks the thing the reports have
+been pointing at all along.
+
+### What this says about 4e and 4f
+
+The per-port and per-bit phase work stands: `clk_2x` went 261.57 -> 305.53 ->
+323.10 and those are real, measured, equivalence-proved improvements. But
+section 4f's lever ordering was wrong. It ranked "finish the clk_2x job"
+first on the strength of a critical path that turns out to be the SECOND
+worst thing in the design. The clock-enable rewrite outranks both remaining
+levers there, because it is the only one that also removes the reason none of
+this can be flashed.
+
+---
+
+## 4h. CLOCK_DELAY_GROUP + MMCM retune, MEASURED — 2026-09-13
+
+Built with the phase per address bit, `CLOCK_DELAY_GROUP` on the two hash
+clock nets, and the MMCM finally set to what the design closes at
+(MULT 19 / DIVIDE_2X 3 -> clk_2x 316.67, clk_h 158.33).
+
+### Setup: solved
+
+```
+                     WNS(ns)   failing endpoints
+intra clkout0        +0.151         0 of 119,341     (was -0.447, 2,098)
+intra clkout1        +0.054         0 of 129,444     (was -0.194,     5)
+clkout1 -> clkout0   -0.052        10 of  16,800     (was -0.595, 16,049)
+clkout0 -> clkout1   +0.065         0 of  53,676     (was -0.480, 30,160)
+```
+
+**47,128 failing setup endpoints became 10**, and the worst is -0.052 ns —
+one rung down the MMCM ladder (MULT 18.5, clk_2x 308.33) closes it outright.
+Most of that is the honest clock target rather than the constraint; the
+previous builds were being asked for 400 MHz while closing at 305-323.
+
+### Hold: NOT solved, and the constraint is exhausted
+
+```
+                     WHS(ns)   failing endpoints
+clkout1 -> clkout0   -0.357        4,451 of 16,800   (was -0.356, 5,937)
+clkout0 -> clkout1   -0.398        3,343 of 53,676   (was -0.413, 6,608)
+intra (both)         -0.089/-0.068    13             (was 19)
+```
+
+Failing endpoints fell 38% (12,564 -> 7,807), but **the worst slack did not
+move**, and the worst path says exactly why:
+
+```
+Source:      .../round11/sboxes/sbox20inst_sbox23inst_mux/s1_b_out_reg[2]/C
+Destination: .../crypter/state_reg[12][308]/D
+Data Path Delay:  0.197ns
+Clock Path Skew:  0.332ns    <-- was 0.331ns before CLOCK_DELAY_GROUP
+```
+
+0.332 against 0.331. The constraint balanced enough paths to retire a third
+of the failures and it halved the clock networks' absolute insertion delay
+(DCD 4.956 -> 4.995 on this path but ~2.5 ns on many others), yet the
+worst-case skew between the two BUFG networks is untouched.
+
+**So rung 2 is dead.** The ladder, for the record:
+
+| rung | cost | result |
+|---|---|---|
+| post-route hold fix | 1h | -0.413 -> -0.413, not one picosecond |
+| CLOCK_DELAY_GROUP | 1 property + 15h | 38% fewer endpoints, worst slack unmoved |
+| clock-enable rewrite | ~30h, high risk | untried, and now the only candidate |
+
+Both cheap rungs are spent, and neither was wasted: they cost about 16 hours
+of machine time between them to rule out two explanations that would each
+have made the rewrite unnecessary. The rewrite was never going to be started
+on the strength of a guess.
+
+### What this leaves
+
+Everything except hold is now in place for a flashable four-instance
+bitstream: the RTL is equivalence-proved (4e), `found_path` keeps every
+simultaneous find since 2026-09-12, `ALLOW_LOSSY_MULTI_MINER` is gone, and
+setup is one MMCM rung from clean at **158.3 MH/s, +58%**.
+
+The single remaining blocker is 7,807 hold endpoints, 7,794 of them on
+clk_h <-> clk_2x crossings, caused by 0.332 ns of skew between two BUFG
+networks that no constraint has been able to close. Section 4g's conclusion
+stands and is now the only route: delete the second clock domain, run
+everything on `clk_2x`, and gate the former `clk_h` registers with a clock
+enable.
+
+Its unsolved problem, stated so it is not discovered halfway: the CE net has
+a quarter of a million loads, and the local-generation trick that fixed the
+phase (4e) does NOT transfer, because a CE flop toggles every cycle and so
+gets no multicycle relief. That needs an answer before the rewrite starts.
+
+---
+
 ## 5. Epoch renewal on the board
 
 **Do not do it by making the cipher runtime-configurable.** The reason is the

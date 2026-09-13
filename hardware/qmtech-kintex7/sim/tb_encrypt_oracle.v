@@ -40,8 +40,8 @@
 
 module tb_encrypt_oracle;
 
-    // ---- vector, from the software oracle at epoch 1788480000 -------------
-    // Regenerate with:  tools/gen_encrypt_vector 1788480000
+    // ---- vector, from the software oracle at epoch 1789344000 -------------
+    // Regenerate with:  tools/gen_encrypt_vector 1789344000
     //
     // MUST be regenerated every epoch, i.e. every 10 days. A vector from the
     // wrong epoch fails for a reason that has nothing to do with correctness,
@@ -50,7 +50,7 @@ module tb_encrypt_oracle;
     // nothing could be read from it either way. The generator it names did not
     // exist in the tree until 2026-09-07, so it could not be refreshed.
     localparam [639:0] VEC_IN  = 640'h00000000b16a45338345e0bfeaf7c2a05a432f210e50525619f8ea60e031a5b81235dd2e7e1ebb795f0ef696012ab25cccfc28e42cfc30cacd56cf5b2e32522f8513b1c66d0c322fdfe388ca6969f7a5;
-    localparam [639:0] VEC_OUT = 640'h99ed4e7cd8812ba809339c66d852e544bfb147935110bb833f6e458f1ee5dc92a1f3b9091c692da0d56246dfebaa46858b97df8884a492c21aed83274e279fb30e5d394d1696d7c4d0bf581f4453af46;
+    localparam [639:0] VEC_OUT = 640'h6ab1e480da98673a0ca76e472ee5ff9fb6bb46431bb865bc70ad5e812f84e3013973efc6c97ef00d4d8b90fe1ef135b35070f3578b50f52248e20665b0cd0b7c7665a6b1775a3ee286264b1d53e2256d;
 
     reg clk = 1'b0;
     always #5 clk = ~clk;          // 100 MHz, arbitrary -- this is functional

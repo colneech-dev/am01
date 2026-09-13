@@ -88,7 +88,10 @@ module am01_qmtech_top_mux4 (
     // builds share one clocking source and the 2:1 phase alignment is a
     // property of the MMCM, not of whoever wires it up.
     wire clk_h, clk_2x, clk_h_locked;
-    clk_gen_hash clk_gen_hash_inst (
+    clk_gen_hash #(
+        .CLKFBOUT_MULT  (16),   // VCO 800MHz
+        .CLKOUT_DIVIDE_2X(3)    // clk_2x 266.67, clk_h 133.33
+    ) clk_gen_hash_inst (
         .clk_in      (sys_clk_ibuf),
         .rst         (1'b0),
         .clk_h       (clk_h),

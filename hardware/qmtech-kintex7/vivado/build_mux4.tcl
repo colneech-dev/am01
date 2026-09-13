@@ -107,8 +107,18 @@ add_files -norecurse [list \
 
 # The same pinout: the experiment changes what is inside the part, not what
 # leaves it. Port names are identical, so every get_ports still resolves.
-add_files -fileset constrs_1 -norecurse \
-    [file join $this_xdc qmtech_xc7k325t_pinout.xdc]
+#
+# mux4_clocks.xdc is READ ONLY HERE. It groups the clk_h and clk_2x BUFG
+# networks so the router matches their insertion delay, which is the direct
+# answer to the hold violations in IMPLEMENTATION-REVIEW.md 4g. It cannot go
+# in the shared pinout file: the 2-instance build has no clk_2x BUFG for
+# synthesis to find, and XDC has no `if` to guard with -- an attempt to do so
+# on 2026-09-12 was silently discarded and cost a 15-hour build that tested
+# nothing. Constraints for one build belong in a file for that build.
+add_files -fileset constrs_1 -norecurse [list \
+    [file join $this_xdc qmtech_xc7k325t_pinout.xdc] \
+    [file join $this_xdc mux4_clocks.xdc] \
+]
 
 set_property top am01_qmtech_top_mux4 [current_fileset]
 update_compile_order -fileset sources_1
