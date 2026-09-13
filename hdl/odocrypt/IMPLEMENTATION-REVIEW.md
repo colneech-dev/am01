@@ -508,6 +508,12 @@ another clock experiment.
 
 ## 4g. The hold violations, diagnosed — 2026-09-12
 
+> **WRONG. SUPERSEDED BY 4i.** This section concluded the hold violations were
+> structural — 0.332 ns of skew between two BUFG networks — and that only a
+> single-clock rewrite could fix them. They were the ROUTER DECLINING TO FIX
+> HOLD, and one parameter cleared all of them. Kept because the reasoning is
+> instructive about how to be confidently wrong with real measurements.
+
 Chased before spending another 15-hour build, on the grounds that if they are
 unfixable then every clock experiment above is moot. They are diagnosable, and
 the answer reframes the whole mux effort.
@@ -601,6 +607,11 @@ this can be flashed.
 
 ## 4h. CLOCK_DELAY_GROUP + MMCM retune, MEASURED — 2026-09-13
 
+> **ITS HOLD CONCLUSION IS WRONG. SUPERSEDED BY 4i.** The setup results here
+> stand. The hold verdict — "the constraint is exhausted, rung 2 is dead" —
+> tested a term that was never the problem, and the ladder it presents omits
+> the rung that actually worked.
+
 Built with the phase per address bit, `CLOCK_DELAY_GROUP` on the two hash
 clock nets, and the MMCM finally set to what the design closes at
 (MULT 19 / DIVIDE_2X 3 -> clk_2x 316.67, clk_h 158.33).
@@ -675,6 +686,115 @@ Its unsolved problem, stated so it is not discovered halfway: the CE net has
 a quarter of a million loads, and the local-generation trick that fixed the
 phase (4e) does NOT transfer, because a CE flop toggles every cycle and so
 gets no multicycle relief. That needs an answer before the rewrite starts.
+
+---
+
+## 4i. It was the router all along — 2026-09-13
+
+**The four-instance muxed design meets timing.** Zero failing endpoints:
+
+```
+WNS  +0.080 ns    0 failing of 252,722
+WHS  +0.035 ns    0 failing of 252,655
+WPWS +1.095 ns    0 failing
+
+clk_2x 266.667 MHz   clk_h 133.333 MHz   (MULT 16 / DIVIDE_2X 3)
+hashrate = clk_h = 133.3 MH/s, +33% on shipping
+```
+
+What changed was one parameter:
+
+```tcl
+set_param route.enableHoldExpnBailout 0
+```
+
+### What 4g and 4h got wrong
+
+The 7,807 failing hold endpoints were not two clock domains, not BUFG skew,
+and not structural. **The router was declining to fix them.** Every muxed
+build since mux3 contains this, and none of them were read:
+
+```
+WARNING: [Route 35-514] Design has a large number of hold violators. This is
+likely a design or constraint issue. Router is turning off hold fixing.
+Resolution: ... set_param route.enableHoldExpnBailout 0. This can incur
+potentially very long router run time.
+```
+
+With the bailout off it converged, over 7h47m of routing:
+
+```
+WHS=-0.452 | THS=-17218.122
+WHS=-0.413 | THS=-8613.958
+WHS=-0.001 | THS=-0.001
+WHS=+0.034 | THS=0.000
+```
+
+"Potentially very long router run time" is exactly the cost, and it is why
+every earlier build took the quick exit.
+
+### The control that should have been noticed
+
+The SHIPPING build enters routing with **worse** total hold violation and
+comes out clean, because its violator count never trips the heuristic:
+
+```
+shipping   WHS -0.246  THS -1512.039   ->  WHS +0.026  THS 0.000
+muxed      WHS -0.442  THS -16742.733  ->  bailout
+```
+
+Section 4f read that same contrast — "every muxed build has them; no shipping
+build does" — as support for a clocking hypothesis. It was evidence for a
+switchable heuristic, and the switch was named in the log.
+
+### Two experiments that measured nothing, and were reported as decisive
+
+* **`try_hold_fix.tcl`.** Its own log: `-tns_cleanup is called on fully routed
+  design. This will optimize the tns and all other options are ignored.`
+  `-directive Explore` was discarded, the iterations report `WHS=N/A`, and it
+  reverted to its input routing. "−0.413 → −0.413" was one netlist measured
+  twice.
+* **`CLOCK_DELAY_GROUP`.** Aimed at BUFG insertion delay, but the deficit
+  decomposes as `0.197 (data) − 0.332 (skew) − 0.201 (uncertainty) − 0.061`,
+  and the 0.201 is MMCM CLKOUT-to-CLKOUT phase error and jitter, which no
+  routing constraint touches. Intra-clock paths on a single net already showed
+  0.263 of the 0.332. Roughly 0.05 ns was ever addressable — and three
+  variables changed in that build at once.
+
+### What binds now, measured on a build that meets timing
+
+```
+intra clkout0 (clk_2x)  +0.234
+intra clkout1 (clk_h)   +0.586
+clkout1 -> clkout0      +0.080   <- tightest: the S-box address path
+clkout0 -> clkout1      +0.202
+```
+
+`clk_h`'s own logic has 0.586 ns spare, so **section 4f's "clk_h caps at
+175–182 MHz" was not merely derived from inter-clock slack, it named the wrong
+path**. The limit is the `clk_h`→`clk_2x` address path, which gets half a
+`clk_h` period — exactly what 4f's untried "register the muxed address" lever
+targets, and that lever is free in latency because the box carries a padding
+stage to donate.
+
+Headroom at this placement is +0.080 ns, i.e. 272.5 MHz → 136.2 MH/s. To go
+meaningfully faster needs a build PLACED for a higher target with hold fixing
+on from the start, and the tradeoff nobody has measured is that hold fixing
+spends setup slack.
+
+### The consequence for the rewrite
+
+**`claude/mux4-single-clock-ce` is unnecessary and is abandoned.** Its commits
+stay for the record; the `K` correction in them is a real finding about the
+transform either way.
+
+### Still not validated on hardware
+
+Everything above is static timing. This board has only ever been PROVEN to
+hash correctly at `clk_h` 200 MHz on the stock core, and this clocks block RAMs
+at 266 MHz. `clk_gen_hash.v` records a build that closed at +0.335 ns and
+produced **zero valid shares**. `tools/validate-bitstream.sh` after the epoch
+rollover is the experiment; this section is not a result until it passes.
 
 ---
 
