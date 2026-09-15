@@ -191,3 +191,101 @@ What caught them was not more building. It was reading the tool's own warnings
 — `[Route 35-514]` sat in four build logs naming its own override — and having
 someone independent attack the conclusions. **Both reviews should have been
 run before the third build, not after the fourth.**
+
+---
+
+## 7. 2026-09-14/15 — the hardware attempts, and what they measured
+
+**Nothing. Six flash writes, three of them mux4, and not one is evidence about
+the 4-instance design.** Recorded here because the failure mode is subtle and
+the temptation to read the logs at face value is strong.
+
+### The three "mux4 fails when configured from flash" runs
+
+15:07, 16:45 and 17:28 on 2026-09-15, all with the same fingerprint: VERSION
+read times out, the daemon announces `FPGA v0.0`, epoch reads 0, every share is
+withheld, and the die sits at 27 °C. That was read as a configuration-integrity
+problem and chased through CONFIGRATE 33 and 6, `COMPRESS TRUE` and `FALSE`,
+two separate builds, and a `--verify` readback. All five controls passed, which
+should have been the clue.
+
+The cause is in the host. `miner_io_pipe_init()` read VERSION **once**, with a
+100 ms timeout, and on failure latched `g_version = 0` for the life of the
+process. v0.0 is not a degraded mode:
+
+| what v0.0 selects | consequence |
+|---|---|
+| `major < 2` | halt-on-find core, re-arm after every find |
+| `ver < 0x00010008` | discard the first find of every job |
+| seed 0 vs job epoch | "bitstream stale", refuse to submit |
+
+So the daemon drove a protocol the loaded bitstream does not implement and
+declined to submit the results. The cold die is the cores sitting halted, not a
+dead fabric — and the XADC answering 27.3 °C in the same second the VERSION
+read timed out proves the bus was alive throughout.
+
+The daemon started **3 s** after each flash write. A PROGRAM_B reload leaves
+the fabric in Hi-Z for 0.7–3.6 s depending on CONFIGRATE and bus width. Fixed:
+the read now retries for ~10 s and then exits rather than inventing a version,
+so `Restart=on-failure`/`RestartSec=30` retries into a configured fabric.
+
+### The deeper problem: the experiment had no independent variable
+
+Both wrappers reported **VERSION 0x020C**. The 2- and 4-instance designs differ
+in instance count, clocking and S-box structure, and the one runtime way to
+tell them apart said the same thing for both — so "the mux4 was running" was
+always an inference from filenames and mtimes, never an observation.
+
+Re-deriving the two best-instrumented windows from the pool's own share counts:
+
+| window | rate | n | 1σ |
+|---|---|---|---|
+| mux4 over JTAG (SRAM), best two | 101.27, 100.58 MH/s | ≈1393, 1397 | ≈2.7% |
+| shipping 2-instance | 98.69 – 102.27 MH/s | — | — |
+
+**Statistically indistinguishable.** The 4-instance design has never been
+measured faster than the design it replaces. It may well be; the record cannot
+say. The 10h30m "at 100% valid" run often cited for it was a blend — the
+process began on the stock image and was already at 2702 finds before the mux4
+bitstream file existed.
+
+mux4 now reports 0x020D and `sim/check_version_unique.sh` fails the build on a
+collision.
+
+### What this does and does not say about §5
+
+The GSR antiphase hazard on the ~16,800 per-bit `phase` flops is **untouched by
+all of this** — still unfixed, still the best mechanism-level explanation for a
+config-mode-dependent fault, and now simply untested, since the runs that were
+supposed to test it never reached the design. It stays ⬜.
+
+Note that `clk_gen_hash.v` sets `STARTUP_WAIT("FALSE")` and nothing sets
+`BITSTREAM.STARTUP.LCK_CYCLE`, so GSR releases hundreds of microseconds before
+the MMCM locks, and the phase flops free-run on `clk_2x` throughout lock
+acquisition. `STARTUP_WAIT TRUE` + `LCK_CYCLE 6` closes that window and can be
+tried from the routed checkpoint without a rebuild — but the synchronous reset
+§5 specifies is the actual fix, and it costs one net off any critical path.
+
+### The discriminating test, still unrun
+
+Flash mux4, then with the daemon **stopped**:
+
+```sh
+am01-fpga-reload            # reloads from flash; does NOT restart the miner
+sleep 20
+am01_reg 0x00               # expect 0x020D, not 0x020C and not 0x0000
+am01_reg 0x1D               # clk_h ticks — non-zero, and differencable
+openFPGALoader --read-register STAT
+```
+
+`STAT` with `EOS=1 DONE=1 CRC_ERROR=0 ID_ERROR=0` kills the entire
+configuration-integrity family in one command. It costs ~10 minutes of mining
+and is the only thing that separates "the design is wrong" from "the host was
+mis-moded", which is why it must run before any further build.
+
+### The lesson, again
+
+§6 says both reviews should have been run before the third build. They were run
+after the sixth flash — and the first thing they found was that the instrument
+could not distinguish the two things being compared. **Check that an experiment
+can produce a different answer before running it a third time.**
