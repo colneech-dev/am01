@@ -176,7 +176,17 @@ these corrections already applied or required:
 (WNS +0.576, WHS +0.027), 8/8 sims, oracle-checked, waiting at
 `vivado/artifacts/am01_200.00MHz_epoch1789344000_DO-NOT-FLASH-BEFORE-2026-09-14.bit`
 (md5 `050efa48fcb5bcc35e3116ab2e05646b`). Needs the board; none of the above
-does. Then replace `/boot/am01_200_rollback.bit`, still the stale 0x0203.
+does. Then replace `/boot/am01_200_rollback.bit`.
+
+**DONE, and this line was wrong when written.** It called the rollback file
+"still the stale 0x0203"; the board actually held 0x020B (md5
+`050efa48…`, epoch 1789344000), staged 2026-09-13 — the right epoch all
+along. The 0x0203 claim was carried over from an earlier state and repeated
+without checking the board. As of 2026-09-15 19:27 the file is **0x020C**
+(sha256 `1fcbd50c1cef2e1d7f6ec22f553d80126b0d2a1f88e5500a4184cf60025ddb5e`),
+the same image now in SPI flash, upgraded so the recovery path carries the
+clk_h meter rather than losing it. The 0x020B file is kept at
+`/root/am01_200_rollback.prev-020B.bit`.
 
 ---
 
