@@ -214,6 +214,14 @@ module odocrypt_gpio_wrapper #(
      * this costs one of four spares. */
     localparam [4:0] ADDR_UART_RXCNT  = 5'h1C;  // r: rx_count[15:0]
 
+    // r: clk_h tick counter. One tick per 65536 clk_h cycles, so
+    //      clk_h_Hz = (delta ticks / delta seconds) * 65536
+    // Read it TWICE about a second apart and difference the two: it is 16 bits
+    // and wraps after ~32 s at 133 MHz, so a single absolute reading means
+    // nothing. Exists because a week of MMCM retuning was done with no way to
+    // confirm the clock that resulted.
+    localparam [4:0] ADDR_HCLK_TICKS  = 5'h1D;
+
     // v1.1 adds SEED_LO/SEED_HI. The daemon treats a VERSION below this as
     // "seed unreadable" rather than misreading 0 as a real epoch.
     // v1.2 adds TEMP, the XADC supply rails, and autonomous fan control.
@@ -345,7 +353,7 @@ module odocrypt_gpio_wrapper #(
     // The flashed CDC build still reports 0x020A. It was built before this
     // bump and is identified by md5 b6f62c2d435d17c979983be03f89312d; 0x020B
     // first exists in the epoch rebuild.
-    localparam [15:0] VERSION = 16'h020B;
+    localparam [15:0] VERSION = 16'h020C;
 
     // Request opcodes carried across the bus_clk -> clk_h handshake.
     localparam [1:0] OP_HEADER_WORD = 2'b00;
@@ -1020,6 +1028,7 @@ module odocrypt_gpio_wrapper #(
                          * now carries a saturating count of bus resets, so a
                          * spontaneous one leaves evidence. Hosts that mask it
                          * off are unaffected. */
+                        ADDR_HCLK_TICKS: rdata_reg <= hclk_ticks_bus;
                         ADDR_FIFO_STAT: rdata_reg <=
                             {lost_sync2_bus, rst_events_bus, fifocnt_sync2_bus};
                         default: rdata_reg <= 16'h0;
@@ -1329,6 +1338,35 @@ module odocrypt_gpio_wrapper #(
     endgenerate
 
     wire        report_ok_h;
+    // ---------------------------------------------------------------
+    // clk_h frequency meter.
+    //
+    // The division is done in the clk_h domain so the crossing carries ONE
+    // slowly-toggling bit instead of a 32-bit count -- no gray coding, no
+    // tearing, and nothing that depends on a pulse surviving the crossing.
+    // The bus side detects edges of the toggle, so a missed or stretched
+    // sample costs at most one tick rather than desynchronising the count.
+    // ---------------------------------------------------------------
+    reg [15:0] hclk_pre_h    = 16'h0;
+    reg        hclk_tick_h   = 1'b0;
+    always @(posedge clk_h) begin
+        hclk_pre_h <= hclk_pre_h + 16'h1;
+        if (hclk_pre_h == 16'hFFFF)
+            hclk_tick_h <= ~hclk_tick_h;
+    end
+
+    (* ASYNC_REG = "TRUE" *) reg hclk_tick_sync1_bus = 1'b0;
+    (* ASYNC_REG = "TRUE" *) reg hclk_tick_sync2_bus = 1'b0;
+    reg                         hclk_tick_prev_bus   = 1'b0;
+    reg [15:0]                  hclk_ticks_bus       = 16'h0;
+    always @(posedge bus_clk) begin
+        hclk_tick_sync1_bus <= hclk_tick_h;
+        hclk_tick_sync2_bus <= hclk_tick_sync1_bus;
+        hclk_tick_prev_bus  <= hclk_tick_sync2_bus;
+        if (hclk_tick_sync2_bus ^ hclk_tick_prev_bus)
+            hclk_ticks_bus <= hclk_ticks_bus + 16'h1;
+    end
+
     wire [7:0]  lost_count_h;
     wire [3:0]  fifo_count_h;
     wire        nonce_toggle_h;
