@@ -59,15 +59,78 @@ int miner_io_pipe_init(void)
      * decide whether the loaded bitstream still implements the algorithm the
      * chain is using. This used to be hardcoded to 0, which made that check
      * fire on every job and rendered its warning meaningless. */
+    /* RETRY, AND REFUSE TO RUN BLIND. This read used to be a single attempt
+     * with a 100 ms timeout (am01_gpio_bus.c READY_TIMEOUT_US), and on failure
+     * it set g_version = 0 FOR THE LIFE OF THE PROCESS. That is not a degraded
+     * mode, it is a wrong one:
+     *
+     *   v0.0 < 0x00010008  -> "predates the nonce_out fix", so discard the
+     *                         first find of every job
+     *   major 0 < 2        -> halt-on-find core, re-arm after each find
+     *
+     * so the daemon drives a protocol the loaded bitstream does not implement,
+     * decides the bitstream epoch is 0 and therefore stale, declines to submit
+     * anything, and reports a cold die because the cores sit halted. On
+     * 2026-09-15 that sequence ran three times (15:07, 16:45, 17:28) and was
+     * read as "the mux4 design fails when configured from flash". Every one of
+     * those symptoms is downstream of this one unretried read, so the
+     * experiment it was supposed to measure never actually ran.
+     *
+     * Two changes. First, retry for ~10 s: a PROGRAM_B reload leaves the
+     * fabric in Hi-Z for 0.7-3.6 s depending on CONFIGRATE and bus width, and
+     * the unit can be started inside that window -- 3 s elapsed between the
+     * flash write and the daemon start in all three failures. Second, exit
+     * rather than continue with a fabricated version. The unit is
+     * Restart=on-failure with RestartSec=30, so a configuration race
+     * self-heals on the next attempt and a real fault repeats every 30 s in
+     * the journal instead of quietly mining shares that will never be
+     * submitted. A board that cannot read VERSION cannot earn either way; the
+     * only thing the old path bought was silence. */
     uint16_t raw_ver = 0;
-    if (am01_bus_read_version(g_bus, &raw_ver) == 0) {
+    {
+        const int attempts = 20;            /* x 500 ms = ~10 s */
+        int i, ok = 0;
+
+        for (i = 0; i < attempts; i++) {
+            if (am01_bus_read_version(g_bus, &raw_ver) == 0) {
+                ok = 1;
+                if (i > 0)
+                    fprintf(stderr,
+                            "miner_io_pipe_init: VERSION read succeeded on "
+                            "attempt %d (~%.1fs) -- the fabric was still "
+                            "configuring\n", i + 1, i * 0.5);
+                break;
+            }
+            if (i == 0)
+                fprintf(stderr,
+                        "miner_io_pipe_init: VERSION read failed (%s); "
+                        "retrying for %.0fs in case the FPGA is still "
+                        "configuring\n",
+                        strerror(errno), attempts * 0.5);
+            {
+                struct timespec ts = { 0, 500 * 1000 * 1000 };
+                nanosleep(&ts, NULL);
+            }
+        }
+
+        if (!ok) {
+            fprintf(stderr,
+                    "miner_io_pipe_init: FPGA did not answer a VERSION read "
+                    "in %.0fs -- refusing to mine against an unidentified "
+                    "bitstream\n", attempts * 0.5);
+            fprintf(stderr,
+                    "miner_io_pipe_init: if a bitstream was just written to "
+                    "flash, reload the fabric before starting the daemon "
+                    "(am01-fpga-reload); openFPGALoader -f leaves the design "
+                    "in flash, which is not the same as running it\n");
+            am01_bus_close(g_bus);
+            g_bus = NULL;
+            return -1;
+        }
+
         /* Wrapper reports 16-bit BCD-ish (0x0101 = v1.1); the daemon's API is
          * 32-bit major<<16 | minor. */
         g_version = ((uint32_t)(raw_ver >> 8) << 16) | (raw_ver & 0xFF);
-    } else {
-        fprintf(stderr, "miner_io_pipe_init: failed to read VERSION: %s\n",
-                strerror(errno));
-        g_version = 0;
     }
 
     /* RESYNC THE FOUND PATH BEFORE MINING, and report what we are clearing.
@@ -272,4 +335,38 @@ int miner_io_pipe_wait(int timeout_ms)
 const char *miner_io_pipe_backend(void)
 {
     return "gpio";
+}
+
+/* found_path's FIFO depth and saturating lost-find counter, for the periodic
+ * report in miner_pipe_am01.c. The same register is read once at init to warn
+ * about finds a previous run left undrained; this exposes it during the run,
+ * where a design that is dropping finds continuously would otherwise be
+ * invisible -- the finds are missing rather than wrong, so ok% stays at 100%
+ * while the hashrate sits below what the fabric is achieving. */
+int miner_io_pipe_fifo_stat(unsigned *lost, unsigned *depth)
+{
+    uint8_t l = 0, d = 0;
+    if (!g_bus || am01_bus_read_fifo_stat(g_bus, &l, &d) != 0)
+        return -1;
+    if (lost)  *lost  = l;
+    if (depth) *depth = d;
+    return 0;
+}
+
+/* Raw register read for the daemon's periodic telemetry -- currently
+ * ADDR_HCLK_TICKS (0x1D), the clk_h frequency counter. Deliberately not a
+ * general back door: the bus is held exclusively by this process, so anything
+ * that wants a register has to come through here, and read-only is the only
+ * mode offered. NOTE 0x04 (NONCE_HI) must never be read this way -- reading it
+ * CONSUMES a nonce. */
+int miner_io_pipe_read_reg(unsigned addr, unsigned *value)
+{
+    uint16_t v = 0;
+    if (!g_bus || addr == 0x04)
+        return -1;
+    if (am01_bus_read_reg(g_bus, (uint8_t)addr, &v) != 0)
+        return -1;
+    if (value)
+        *value = v;
+    return 0;
 }
