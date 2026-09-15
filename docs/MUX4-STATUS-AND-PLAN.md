@@ -289,3 +289,113 @@ mis-moded", which is why it must run before any further build.
 after the sixth flash — and the first thing they found was that the instrument
 could not distinguish the two things being compared. **Check that an experiment
 can produce a different answer before running it a third time.**
+
+---
+
+## 8. 2026-09-15, evening — the mux4 design has never run
+
+Measured on the board, not inferred. Register 0x1D (the clk_h meter) reached
+hardware for the first time this evening and settled the question in one
+afternoon.
+
+### First, the meter is trustworthy
+
+Conservative 2-instance image, configured **from flash**:
+
+```
+STAT: EOS 0x1  Done 0x1  Release Done 0x1  No CRC error  No ID error
+VERSION 0x020c
+CLK clk_h = 200.01 MHz        WINDOW 60s hashrate = 100.33 MH/s
+```
+
+`hashrate = miners × clk_h / T` = 2 × 200.01 / 4 = **100.01 predicted vs 100.33
+measured, 0.3%**. The governing law is now confirmed on hardware rather than
+assumed, and the meter is calibrated against a known-good design.
+
+It also proves the flash configuration path is sound on this board: `EOS=1`,
+`Done=1`, no CRC or ID error. Every configuration-integrity hypothesis — droop,
+CRC, CONFIGRATE, bus width, compression — is dead for this board and procedure.
+
+### mux4 from flash: DONE never asserts
+
+```
+STAT: EOS 0x0  Done 0x0  Release Done 0x0  No CRC error  No ID error
+```
+
+**Four reloads, four identical results.** The bitstream is intact (no CRC, no ID
+error) but the FPGA never completes its startup sequence, so the I/Os stay
+Hi-Z — which is why VERSION reads 0xffff and every register read times out.
+"No CRC error" here means configuration never *reached* the final CRC, not that
+it passed one.
+
+The determinism matters: **this is not the §5 GSR antiphase hazard.** That
+predicts a per-power-up coin flip. Four out of four identical says a startup
+sequence gated on a condition that never becomes true.
+
+### mux4 in SRAM: the FPGA falls back to the flash image
+
+All three mux4 artifacts (`_133`, `_020C`, `_nocomp`) loaded with
+`openFPGALoader -m`, each reporting success and `Done=1`:
+
+| artifact | VERSION | clk_h |
+|---|---|---|
+| am01_mux4_133.bit | 0x020c | 199.91 MHz |
+| am01_mux4_020C.bit | 0x020c | 199.97 MHz |
+| am01_mux4_nocomp.bit | 0x020c | 199.96 MHz |
+
+`hdl/mux4/am01_qmtech_top_mux4.v:92` hard-codes `CLKFBOUT_MULT(16)` /
+`CLKOUT_DIVIDE_2X(3)` = **clk_h 133.33 MHz**. Every one of them measured 200,
+which is the *conservative* design's clock. `am01_mux4_133.bit` predates the
+0x020C bump and should report 0x020B; it reported 0x020c — the value sitting in
+flash at that moment.
+
+**The negative control that makes this conclusive.** Loading a different
+known-good 2-instance build (`am01_rollover_1789344000.bit`, VERSION 0x020B)
+the same way:
+
+```
+VERSION now: 0x020b        (flash holds 0x020C)
+```
+
+So `-m` genuinely replaces the fabric. It follows that when a mux4 bitstream is
+loaded, configuration fails and **the FPGA falls back to the image in SPI
+flash**, ending at `Done=1` running the conservative design. From flash there is
+no good image to fall back to, so DONE simply stays low forever.
+
+### What this means
+
+**mux4 has never run on this board.** Not at 106 MH/s, not at 100, not at all.
+Every "mux4" measurement in this repo's history — the 10h30m at 100% valid, the
+101.27 and 100.58 MH/s windows, the "all four instances alive" nonce-quadrant
+test — was the conservative 2-instance design answering through a silent
+configuration fallback.
+
+That is why mux4 always measured *identical* to the shipping image rather than
+merely disappointing. §7 showed the record could not distinguish the two; this
+shows there was never anything to distinguish.
+
+### Next, in order
+
+1. **Find why configuration does not complete.** The bitstream is intact and the
+   design met timing, so look at the startup sequence, not the netlist: compare
+   `BITSTREAM.STARTUP.*` defaults actually baked into each .bit, and check
+   whether the mux4 build's MMCM is gating DONE (`STARTUP_WAIT`, `LCK_CYCLE`).
+   `clk_gen_hash.v` sets `STARTUP_WAIT("FALSE")`, which should *not* gate DONE —
+   verify that is what the mux4 bitstream actually contains.
+2. **Nothing about mux4's performance can be claimed until it configures.** Do
+   not rebuild for speed, do not retune the MMCM, and do not quote a mux4
+   hashrate.
+3. The 0x020D VERSION from commit 8cecc70 is not in any built artifact yet. The
+   first mux4 build that configures must be checked with `am01_reg 0x00`
+   returning **0x020d** and `0x1D` measuring **~133 MHz** before any number it
+   produces is recorded.
+
+### The lesson, third time
+
+§6 said read the tool's own warnings. §7 said check the instrument can tell the
+two cases apart. This one is sharper: **`openFPGALoader` reported success and
+`Done=1` for a bitstream that had not been loaded.** The tool was not lying —
+the FPGA really was configured and really was done, just with a different
+design. A success message answers "did the operation complete", never "is the
+thing I wanted now true". Only the clk_h meter could answer the second, and it
+took a week to build.
